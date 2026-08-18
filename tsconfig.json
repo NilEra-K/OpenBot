@@ -1,0 +1,35 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/state"
+    },
+    {
+      "path": "packages/llm"
+    },
+    {
+      "path": "packages/boxes"
+    },
+    {
+      "path": "packages/messaging"
+    },
+    {
+      "path": "packages/runner"
+    },
+    {
+      "path": "packages/transport"
+    },
+    {
+      "path": "packages/coordinator"
+    },
+    {
+      "path": "apps/cli"
+    },
+    {
+      "path": "apps/desktop"
+    }
+  ]
+}

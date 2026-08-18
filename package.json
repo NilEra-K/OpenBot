@@ -1,0 +1,23 @@
+{
+  "name": "openbot",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "跑在你自己电脑上的多 agent 社交控制台——重活进本机沙箱（Box），云依赖降到最低。",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "desktop": "pnpm --filter @openbot/desktop start",
+    "desktop:debug": "pnpm --filter @openbot/desktop start:debug"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

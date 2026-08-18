@@ -1,0 +1,17 @@
+{
+  "name": "@openbot/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Electron 桌面壳——P1.5 壳预览：真窗口 + 托盘常驻，加载视觉母版 prototype.html",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "start:debug": "electron --remote-debugging-port=9333 .",
+    "dist": "echo P3 启用 electron-builder（win nsis + portable）"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0"
+  }
+}

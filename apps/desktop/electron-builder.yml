@@ -1,0 +1,11 @@
+# P3 启用：先只开 win nsis + portable（ARCHITECTURE.md §10/§11）
+appId: com.openbot.desktop
+productName: OpenBot
+directories:
+  output: release
+files:
+  - dist/**
+win:
+  target:
+    - nsis
+    - portable

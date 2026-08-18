@@ -1,0 +1,20 @@
+{
+  "name": "@openbot/runner",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@openbot/core": "workspace:*",
+    "@openbot/state": "workspace:*",
+    "@openbot/messaging": "workspace:*",
+    "@openbot/llm": "workspace:*",
+    "@openbot/boxes": "workspace:*"
+  }
+}

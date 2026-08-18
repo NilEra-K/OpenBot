@@ -1,0 +1,8 @@
+{
+  "name": "@openbot/relay",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "跨用户房间公网 host（P5 占位，Hono + WS）"
+}
