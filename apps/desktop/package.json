@@ -12,7 +12,7 @@
     "dev:renderer": "vite",
     "build:renderer": "vite build",
     "dist": "echo P3 启用 electron-builder（win nsis + portable）",
-    "test:e2e": "pnpm build && pnpm build:renderer && playwright test"
+    "test:e2e": "pnpm -w build && pnpm build:renderer && playwright test"
   },
   "dependencies": {
     "@openbot/coordinator": "workspace:*",

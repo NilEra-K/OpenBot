@@ -23,6 +23,8 @@ export interface LifecycleQueuedPayload {
   kind: string
   /** 是否可 steer（user lane 隐含 true） */
   steer: boolean
+  /** run 在做什么的一句话事实（首条消息截断，发送侧归一；排程视图描述行消费） */
+  summary?: string
 }
 
 export interface LifecycleStartedPayload {

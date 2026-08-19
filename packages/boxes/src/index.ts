@@ -3,6 +3,7 @@
  * 参考：ARCHITECTURE.md §6。
  */
 export * from './types.js'
+export * from './procexec/index.js'
 export * from './registry/index.js'
 export * from './backend-wsl/index.js'
 export * from './backend-docker/index.js'

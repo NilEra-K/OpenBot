@@ -7,6 +7,8 @@
 export const BoxesErrorCodes = {
   BOX_NOT_FOUND: 'BOX_NOT_FOUND',
   BOX_BACKEND_NOT_FOUND: 'BOX_BACKEND_NOT_FOUND',
+  /** Box 内文件写入失败（路径非法/磁盘满等） */
+  BOX_FS_WRITE_FAILED: 'BOX_FS_WRITE_FAILED',
 } as const
 
 export type BoxId = string
@@ -38,6 +40,8 @@ export interface ExecSpec {
   env?: Record<string, string>
   /** 超时 ms——后端必须尊重（zombie 契约：执行必须有界） */
   timeoutMs?: number
+  /** 流式输出回调（可选）：实况逐块上报，聚合结果仍完整返回（流是实况，聚合是事实） */
+  onChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void
 }
 
 export interface ExecResult {

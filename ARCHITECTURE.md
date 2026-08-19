@@ -252,16 +252,16 @@ P5 做 relay 时这就是线上协议，不二次发明。
 
 ### 后端矩阵（诚实版）
 
-| 能力 | WSL2 | Docker | Windows Sandbox | nspawn (Linux·P4) | UTM (macOS·P4) | mock |
-|---|---|---|---|---|---|---|
-| 持久化 | ✓ | 需卷挂载 | ✗ 关闭即焚 | ✓ | ✓ | 假装 ✓ |
-| 快照 | `--export` 整盘打包，GB 级、慢 | 镜像分层 | ✗ | ✓ | ✓ | ✓ |
-| 资源上限 | **全局 .wslconfig，无法按 Box 限制**；所有 Box 共享一个 vmmem | ✓ 严格 | 粗粒度 | ✓ | ✓ | 假装 ✓ |
-| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 强 | 中 | 强 | —— |
-| 无人值守 | ✓ | ✓ | ✗ 无法 headless | ✓ | 部分 | ✓ |
-| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业要付费授权） | **仅 Pro/Enterprise，Home 版没有**（作者本机即 Home） | Linux | macOS | 全平台 |
+| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (Linux·P4) | UTM (macOS·P4) | mock |
+|---|---|---|---|---|---|---|---|
+| 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓ | ✓ | 假装 ✓ |
+| 快照 | `--export` 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓ | ✓ | ✓ |
+| 资源上限 | **全局 .wslconfig，无法按 Box 限制**；所有 Box 共享一个 vmmem | ✓ 严格 | ✓ cgroups v2（rootless 可用） | 粗粒度 | ✓ | ✓ | 假装 ✓ |
+| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 中（rootless 无 daemon） | 强 | 中 | 强 | —— |
+| 无人值守 | ✓ | ✓ | ✓（podman machine） | ✗ 无法 headless | ✓ | 部分 | ✓ |
+| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业要付费授权） | 免费开源；Windows 经 podman machine（**自身占一个 WSL2 发行版**） | **仅 Pro/Enterprise，Home 版没有**（作者本机即 Home） | Linux | macOS | 全平台 |
 
-**结论写死在架构里**：v1 只做 **WSL2 + Docker + mock** 三个后端；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P4 后视需求）；Linux/macOS 后端 P4 进。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
+**结论写死在架构里**：v1 做 **WSL2 + Docker + Podman + mock** 四个后端（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；docker/podman CLI 同构，实现共用 OCI 容器底座）；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P4 后视需求）；Linux/macOS 后端 P4 进。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
 
 ### 接口草图
 
@@ -376,7 +376,7 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | **P0 骨架** | pnpm workspaces + 八包门面（package.json/tsconfig/空导出）+ docs 四篇开篇 | `pnpm i && pnpm typecheck && pnpm test`（空测试）全绿 |
 | **P1 内核走通（无壳）** | core + state + llm(mock) + runner + transport(bus) + boxes(mock) + coordinator(in-proc)，apps/cli | cli 演示 chat → A2A → box exec(mock) 全链路，确定性，CI 绿 |
 | **P2 桌面** | Electron 壳 + 网关(SSE/WS) + Vue renderer 五视图接真数据 + 闸门 UI + caps UI | 原型视觉对齐；Playwright `_electron` E2E 绿 |
-| **P3 真实后端** | backend-wsl + backend-docker + 快照/资源统计/磁盘压力告警 + Windows 打包签名 | 真实 Box 内完成一次「改项目→构建」任务并产出 diff |
+| **P3 真实后端** | backend-wsl + backend-docker + backend-podman（OCI 底座共用）+ 快照/资源统计/磁盘压力告警 + Windows 打包签名 | 真实 Box 内完成一次「改项目→构建」任务并产出 diff |
 | **P4 平台扩展** | Linux（nspawn/原生 docker + deb/AppImage）、macOS（UTM + dmg） | 三平台矩阵如实标注，capabilities 驱动 UI |
 | **P5 relay** | 跨用户房间公网 host、CrossUserRelay 实现 | P2P/Tailscale 优先叙事落地 |
 

@@ -248,4 +248,13 @@ describe('AgentScheduler 取消与错误归类', () => {
     expect(r1.acceptedAt).toBe(0)
     harness.gates[0]?.resolve()
   })
+
+  it('summary 透传进 queued 事件；未带则键不出现（向后兼容读取端）', async () => {
+    const harness = makeHarness(async () => 'ok')
+    harness.scheduler.enqueue({ lane: 'user', kind: 'chat', summary: '帮我检查工作区' })
+    harness.scheduler.enqueue({ lane: 'background', kind: 'task' })
+    const queued = harness.events.filter((e) => e.type === 'v1.lifecycle.queued')
+    expect(queued[0]?.payload).toMatchObject({ runId: 'run-1', summary: '帮我检查工作区' })
+    expect(queued[1]?.payload).not.toHaveProperty('summary')
+  })
 })

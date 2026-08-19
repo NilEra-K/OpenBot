@@ -82,7 +82,20 @@ export class MockBoxBackend implements BoxBackend {
   async exec(boxId: BoxId, spec: ExecSpec): Promise<ExecResult> {
     this.#require(boxId)
     this.calls.push({ boxId, spec, at: this.#now() })
-    return this.#execImpl(boxId, spec)
+    const result = await this.#execImpl(boxId, spec)
+    // 流式语义对称（mock 对称原则）：结果按行拆块回调——真实后端是逐块到达，
+    // 调用方（runner/WS 实况）不感知后端种类
+    if (spec.onChunk) {
+      for (const line of result.stdout.split(/(?<=\n)/)) {
+        if (line) spec.onChunk({ stream: 'stdout', text: line })
+      }
+      if (result.stderr) {
+        for (const line of result.stderr.split(/(?<=\n)/)) {
+          if (line) spec.onChunk({ stream: 'stderr', text: line })
+        }
+      }
+    }
+    return result
   }
 
   async fsRead(boxId: BoxId, path: string): Promise<string | null> {

@@ -65,6 +65,8 @@ export interface RunCard {
   agentId: string
   lane: 'user' | 'agent' | 'background'
   kind: string
+  /** 一句话摘要（queued 事件携带；无摘要的 run 退回显示 runId） */
+  summary?: string
   state: 'queued' | 'running' | 'succeeded' | 'failed' | 'aborted' | 'escaped' | 'reaped'
   attempts: number
   code?: string
@@ -363,9 +365,19 @@ export const useKernelStore = defineStore('kernel', {
           return
         }
         case 'v1.lifecycle.queued': {
-          const { runId, agentId, lane, kind } = event.payload
+          const { runId, agentId, lane, kind, summary } = event.payload
           this.runs = this.runs.filter((r) => r.runId !== runId)
-          this.runs.push({ runId, agentId, lane, kind, state: 'queued', attempts: 0, at: event.at, updatedAt: event.at })
+          this.runs.push({
+            runId,
+            agentId,
+            lane,
+            kind,
+            summary: summary ?? undefined,
+            state: 'queued',
+            attempts: 0,
+            at: event.at,
+            updatedAt: event.at,
+          })
           return
         }
         case 'v1.lifecycle.started': {

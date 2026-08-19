@@ -88,8 +88,11 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await expect(page.locator('.m-text', { hasText: '检查与抓取都完成了' }).first()).toBeVisible({ timeout: 30_000 })
 
     // —— tasks：两个 run 的痕迹（user lane 的 steward + agent lane 的 worker1） ——
+    // run 卡描述行显示首条消息摘要（lifecycle queued 事件携带的领域事实）
     await page.getByRole('button', { name: '排程', exact: true }).click()
     await expect(page.locator('.run')).toHaveCount(2, { timeout: 15_000 })
+    await expect(page.locator('.run-what', { hasText: '帮我检查工作区' })).toBeVisible()
+    await expect(page.locator('.run-what', { hasText: 'A2A steward → worker1' })).toBeVisible()
 
     // —— graph：无向关系边（user↔steward、steward↔worker1 委派、user↔worker1 完成回复） ——
     await page.getByRole('button', { name: '图谱', exact: true }).click()

@@ -21,6 +21,8 @@ export interface RunRequest {
   payload?: unknown
   /** priority：可抢占非 user 活跃 run（user lane 隐含 true） */
   steer?: boolean
+  /** 一句话摘要（领域事实，透传进 queued 事件；调度器不解释） */
+  summary?: string
   /** 覆盖调度器默认策略（只认显式定义的键） */
   policy?: Partial<RunPolicy>
 }
@@ -114,13 +116,16 @@ export class AgentScheduler {
       settled: false,
     }
     this.#lanes[request.lane].push(entry)
-    this.#bus?.emit('v1.lifecycle.queued', {
+    const queuedPayload: import('../events/index.js').LifecycleQueuedPayload = {
       runId,
       agentId: this.agentId,
       lane: request.lane,
       kind: request.kind,
       steer: entry.steer,
-    })
+    }
+    // exactOptionalPropertyTypes：显式 undefined 不进 payload（向后兼容的读取端不认 undefined 键）
+    if (request.summary !== undefined) queuedPayload.summary = request.summary
+    this.#bus?.emit('v1.lifecycle.queued', queuedPayload)
     // 抢占判定：可 steer 来客 vs 非 user 活跃 run（user 活跃 run 永不被抢占）
     const active = this.#active
     if (active && entry.steer && active.run.lane !== 'user') {

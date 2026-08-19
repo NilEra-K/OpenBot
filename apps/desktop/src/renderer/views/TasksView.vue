@@ -94,8 +94,9 @@ const successRate = computed(() => {
             <span class="run-agent">{{ run.agentId }}</span>
             <span class="chip" :class="stateChip(run).cls">{{ stateChip(run).label }}</span>
           </div>
-          <div class="run-what mono">{{ run.runId }}</div>
+          <div class="run-what mono">{{ run.summary ?? run.runId }}</div>
           <div class="run-meta mono">
+            <span v-if="run.summary">{{ run.runId }}</span>
             <span>lane={{ run.lane }}</span>
             <span>{{ run.kind }}</span>
             <span v-if="run.attempts > 1">重试 {{ run.attempts }} 次</span>

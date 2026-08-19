@@ -64,6 +64,24 @@ describe('MockBoxBackend', () => {
     expect(backend.caps().snapshot).toBe(true)
     expect(backend.caps().isolation).toBe('low')
   })
+
+  it('onChunk 流式对称：结果按行拆块回调，聚合不变（真实后端逐块到达的语义镜像）', async () => {
+    const backend = new MockBoxBackend({
+      exec: () => ({ exitCode: 0, stdout: 'line1\nline2\n', stderr: 'warn\n' }),
+    })
+    const box = await backend.create({ image: 'default' })
+    const chunks: Array<{ stream: 'stdout' | 'stderr'; text: string }> = []
+    const result = await backend.exec(box, {
+      command: ['sh', '-c', 'whatever'],
+      onChunk: (c) => chunks.push(c),
+    })
+    expect(chunks).toEqual([
+      { stream: 'stdout', text: 'line1\n' },
+      { stream: 'stdout', text: 'line2\n' },
+      { stream: 'stderr', text: 'warn\n' },
+    ])
+    expect(result).toEqual({ exitCode: 0, stdout: 'line1\nline2\n', stderr: 'warn\n' })
+  })
 })
 
 describe('BoxRegistry', () => {

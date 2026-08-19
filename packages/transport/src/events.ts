@@ -32,6 +32,7 @@ export const EventPayloadSchemas = {
     lane: laneSchema,
     kind: z.string(),
     steer: z.boolean(),
+    summary: z.string().optional(),
   }),
   'v1.lifecycle.started': z.object({
     runId: z.string(),

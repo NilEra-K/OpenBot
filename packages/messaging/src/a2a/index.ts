@@ -18,6 +18,15 @@ export const MessagingErrorCodes = {
   MSG_REDRIVE_FAILED: 'MSG_REDRIVE_FAILED',
 } as const
 
+/** run 摘要截断上限（UTF-16 码元，与 renderer 显示宽度大致对齐） */
+const SUMMARY_LIMIT = 80
+
+/** 首条消息文本 → 一句话摘要（归一空白、截断加省略号——领域事实，进 queued 事件） */
+export function summarizeRun(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= SUMMARY_LIMIT ? flat : `${flat.slice(0, SUMMARY_LIMIT)}…`
+}
+
 /** user lane run 负载（runner 解释执行） */
 export interface UserChatRunPayload {
   messageId: string
@@ -90,6 +99,7 @@ export class A2aService {
       lane: 'user',
       kind: 'chat',
       payload: { messageId, text: input.text } satisfies UserChatRunPayload,
+      summary: summarizeRun(input.text),
     })
     const acceptance: MessageAcceptance = { messageId, runId: ticket.runId, first: true }
     await ledger.commit(`user:${input.nonce}`, acceptance)
@@ -145,6 +155,7 @@ export class A2aService {
       kind: 'a2a',
       steer: priority,
       payload,
+      summary: summarizeRun(`A2A ${input.fromAgentId} → ${input.toAgentId}：${input.text}`),
     })
     this.#watchSteer(input.toAgentId, payload, ticket)
     const acceptance: MessageAcceptance = { messageId, runId: ticket.runId, first: true }
@@ -175,6 +186,7 @@ export class A2aService {
           kind: 'a2a',
           steer: redriven.priority,
           payload: redriven,
+          summary: summarizeRun(`A2A ${payload.fromAgentId} → ${toAgentId}：${payload.text}`),
         })
         this.#watchSteer(toAgentId, redriven, next)
       } catch (err) {
