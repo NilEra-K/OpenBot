@@ -42,9 +42,35 @@
   - main 加 `addAgent` 重启幂等（名册已有则只重建内存态——首次冒烟即抓到 STATE_AGENT_EXISTS）
   - 冒烟验证：内核就绪 + renderer EventSource ESTABLISHED（file:// → 环回网关全链路通）
   - 遗留：renderer 无 tsc 类型检查（vite esbuild 只转译；IDE 可用，CI 不查——记入风险，P2.5/P3 引 vue-tsc）
-- [ ] 8. console 视图：对话流 + 执行卡 + steward 默认路由与空缺态提示 + markdown（markdown-it + DOMPurify）+ 乐观更新带 nonce
-- [ ] 9. boxes / tasks / graph / settings 视图：caps 驱动按钮、三 lane 队列、委派边+消息边、provider 配置（key 密文）
-- [ ] 10. 审批弹窗：approval 事件 → 弹窗 → `v1.approval.resolve` 回写（nonce 幂等不双弹窗）
+- [x] 8. console 视图：对话流 + 执行卡 + steward 默认路由与空缺态提示 + markdown（markdown-it + DOMPurify）+ 乐观更新带 nonce
+  - 两栏布局（roster + streamcol；ctx 面板待 P3 WS 实况——原型 #11 标注位）；流内条目：日期分隔/消息气泡
+    （user 右对齐、agent markdown 渲染）/A2A 中继行（点击跳会话）/Box 执行卡（started/finished 聚合）/审批 gate 卡（流内批准——
+    覆盖 Step 10 的交互面，Step 10 只余弹窗化验证）
+  - 乐观更新：本地占位（~nonce）→ 受理回执升级 messageId → 事件镜像去重；失败标记 + 同 nonce 重试（账本零双发）
+  - 会话历史懒加载：切换会话/连接就绪时拉 transcript（内核重启后的持久真相；与事件流按 messageId 去重幂等）
+  - 实测修复两个真实缺陷：loadHistory 失败后标记未回滚（boot 竞态下永不重试）；**内核 id 重启重复**（msg/run/appr id
+    从零重数 → 历史去重误判。修：assembleKernel 加 bootPrefix（默认随机，CLI/测试注入固定保确定性——CLI 三次运行哈希一致已验证））
+  - CDP 冒烟全过：名册/管家徽标/空缺态提示/输入发送/乐观收敛/历史恢复
+- [x] 9. boxes / tasks / graph / settings 视图：caps 驱动按钮、三 lane 队列、委派边+消息边、provider 配置（key 密文）
+  - tasks：三 lane 队列（user/agent/background，`v1.lifecycle.*` 事件累积；escaped/reaped 状态永远诚实呈现）
+  - boxes：Box 卡 + caps 工具栏 + 快照闭环（coordinator 新增 `v1.boxes.snapshot`，按钮仅 caps.snapshot=true 渲染——
+    caps 驱动的真实演示）；CPU/内存/磁盘仪表与终端接管诚实降级不做（mock 后端无真实信号，P3 接入）；
+    卡内展示近期执行（runId 前缀推断归属 agent）
+  - graph：SVG 图谱（user 居中 + roster 环形均布、贝塞尔弧同原型算法、边宽 ∝ √消息量）；
+    消息边（灰）与 A2A 委派边（accent）视觉区分；侧栏图例/排行/节点与边聚焦详情（Esc/点空白退出）；
+    「进入会话」写 activeAgentId 跳 console；端点已移出名册的历史边不画
+  - settings：provider 档案 CRUD（upsert 留空 key=保留密文、设为主力、删除二段确认）真实命令面全链路；
+    沙箱后端区块呈现 caps 事实；权限策略区块呈现 Manual 闸门现状——不放假开关（内核无对应存储）
+  - store：+providers/defaultProvider 状态与 refreshSettings（boot 复用）；+snapshotBox action；
+    App.vue 侧栏顺序对齐原型（console→tasks→boxes→graph→settings）
+  - CDP 冒烟 21 项全过：三视图渲染/快照闭环/图谱聚焦与跳转/provider 保存设主力/空缺警告联动/冒烟数据清理
+- [x] 10. 审批弹窗：approval 事件 → 弹窗 → `v1.approval.resolve` 回写（nonce 幂等不双弹窗）
+  - `ApprovalModal` 全局层挂 App 壳（流内 gate 卡保留对话流上下文，弹窗管注意力捕获）；队列多审批逐条推进
+  - 「稍后处理」只藏弹窗（ui store 局部态，内核挂起不受影响；流内卡与角标仍可见）；终结后回收稍后标记防缓涨
+  - 决议分流：成功/领域失败（已决议/不存在）本地立即移除（与 SSE resolved 事件幂等双保险）；
+    传输失败（网关不可达）保留条目供重试
+  - CDP 冒烟 12 项全过：出现/内容/nonce 重放不双弹/队列推进/稍后/批准与拒绝回写真实到达网关
+    （未知 nonce → APPROVAL_NOT_FOUND 领域错误收敛）/resolved 事件收敛/ dismissed 回收
 - [ ] 11. Playwright `_electron` E2E：mock llm 脚本驱动 UI 全链路（chat → A2A → box exec + 审批弹窗）
 - [ ] 12. 验收：三命令全绿 + E2E 绿 + 五视图对照原型走查 + 真实 provider 手动冒烟（用户 key）
 

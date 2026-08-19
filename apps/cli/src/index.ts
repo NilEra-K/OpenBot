@@ -27,7 +27,7 @@ export async function main(): Promise<void> {
   console.log('=== OpenBot P1 无壳冒烟：chat → A2A → box exec(mock) ===')
 
   // ---- 装配（确定性：时钟恒 0，内存持久化）----
-  const kernel = assembleKernel({ now: () => 0, systemPrompt: '你是 OpenBot 冒烟 agent' })
+  const kernel = assembleKernel({ now: () => 0, bootPrefix: 'cli', systemPrompt: '你是 OpenBot 冒烟 agent' })
   const client = kernel.transport.createClient()
   client.subscribe(printEvent)
 

@@ -137,7 +137,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
 
   // ---- 命令面扩展（壳装配职责：CLI/E2E 用 Auto 闸门时不需要这些命令） ----
   kernel.transport
-    .register('v1.settings.list', async () => settings.list())
+    .register('v1.settings.list', async () => {
+      // 展示清单（无 key 材料）+ 当前默认（renderer 空缺态判断）
+      const providers = await settings.list()
+      const current = await settings.load()
+      return { providers, defaultProvider: current.defaultProvider ?? null }
+    })
     .register('v1.settings.upsertProvider', async (payload) => {
       const view = await settings.upsert(providerInputSchema.parse(payload))
       await applyProvider() // 同名=default 或无默认时也可能切换，统一重应用
@@ -158,6 +163,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       return { approved: await approvalGate.resolve(nonce, decision) }
     }, resolveSchema)
     .register('v1.approval.pending', async () => approvalGate.pending())
+    // caps 驱动 UI：按钮渲染依据后端能力声明（永不出现「UI 有按钮但后端不支持」）
+    .register('v1.boxes.caps', async () => kernel.backend.caps())
 
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })

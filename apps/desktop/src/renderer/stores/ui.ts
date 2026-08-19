@@ -12,10 +12,19 @@ export const useUiStore = defineStore('ui', {
     activeAgentId: 'steward' as string,
     /** 输入草稿（视图切换不丢） */
     draft: '',
+    /** 审批弹窗「稍后处理」的 nonce（只影响弹窗呈现，不碰内核挂起；流内 gate 卡与角标仍可见） */
+    dismissedApprovals: [] as string[],
   }),
   actions: {
     switchView(view: ViewName) {
       this.currentView = view
+    },
+    dismissApproval(nonce: string) {
+      if (!this.dismissedApprovals.includes(nonce)) this.dismissedApprovals.push(nonce)
+    },
+    /** 审批终结（决议/消失）后清理稍后标记，防数组无限增长 */
+    forgetApprovals(nonces: string[]) {
+      this.dismissedApprovals = this.dismissedApprovals.filter((n) => !nonces.includes(n))
     },
   },
 })

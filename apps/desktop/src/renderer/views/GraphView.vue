@@ -1,10 +1,281 @@
 <script setup lang="ts">
-// GraphView 视图占位（Step 9 迁移 prototype.html 对应布局与 caps 驱动交互）
+/**
+ * 社交图谱视图（prototype.html 迁移）：谁在和谁说话。
+ * 节点 = user + roster（身份色圆盘，steward 带徽标点）；弧线宽度 ∝ 消息量；
+ * user↔agent 消息边（灰）与 agent↔agent 委派边（accent）视觉区分。
+ * P2 无群组/远端节点（rooms 属后续）——数据有什么画什么；点击节点/连线聚焦，点空白/Esc 退出。
+ */
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useKernelStore } from '../stores/kernel'
+import { useUiStore } from '../stores/ui'
+import { agentColor } from '../lib/agent-color'
+
+const kernel = useKernelStore()
+const ui = useUiStore()
+
+const CX = 450
+const CY = 262
+const ORBIT = 192
+
+interface NodeGeom {
+  id: string
+  label: string
+  initial: string
+  x: number
+  y: number
+  r: number
+  isUser: boolean
+}
+
+interface EdgeGeom {
+  key: string
+  from: string
+  to: string
+  count: number
+  d: string
+  width: number
+  kind: 'user' | 'a2a'
+}
+
+/** user 居中、agents 环形均布（原型为手工摆位，Vue 版按真实 roster 计算） */
+const nodes = computed<NodeGeom[]>(() => {
+  const list: NodeGeom[] = [{ id: 'user', label: '你', initial: '你', x: CX, y: CY, r: 26, isUser: true }]
+  const agents = kernel.roster
+  agents.forEach((a, i) => {
+    const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(agents.length, 1)
+    const label = a.name ?? a.agentId
+    list.push({
+      id: a.agentId,
+      label,
+      initial: label.trim().charAt(0) || '?',
+      x: CX + ORBIT * Math.cos(angle),
+      y: CY + ORBIT * Math.sin(angle),
+      r: 24,
+      isUser: false,
+    })
+  })
+  return list
+})
+
+/** 贝塞尔弧（同原型算法：交替拱向两侧避免重叠）；端点已移出名册的历史边不画 */
+const edgeGeoms = computed<EdgeGeom[]>(() => {
+  const pos = new Map(nodes.value.map((n) => [n.id, n]))
+  const out: EdgeGeom[] = []
+  kernel.edges.forEach((e, i) => {
+    const a = pos.get(e.from)
+    const b = pos.get(e.to)
+    if (!a || !b) return
+    const mx = (a.x + b.x) / 2
+    const my = (a.y + b.y) / 2
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy) || 1
+    const off = Math.min(len * 0.1, 30) * (i % 2 ? 1 : -1)
+    out.push({
+      key: `${e.from}->${e.to}`,
+      from: e.from,
+      to: e.to,
+      count: e.count,
+      d: `M${a.x} ${a.y} Q${(mx - (dy / len) * off).toFixed(1)} ${(my + (dx / len) * off).toFixed(1)} ${b.x} ${b.y}`,
+      width: Math.min(1.5 + Math.sqrt(e.count) * 0.9, 6.5),
+      kind: e.from === 'user' || e.to === 'user' ? 'user' : 'a2a',
+    })
+  })
+  return out
+})
+
+/** 节点消息量合计（排行与节点徽标） */
+const nodeMsg = computed<Record<string, number>>(() => {
+  const m: Record<string, number> = {}
+  for (const e of kernel.edges) {
+    m[e.from] = (m[e.from] ?? 0) + e.count
+    m[e.to] = (m[e.to] ?? 0) + e.count
+  }
+  return m
+})
+
+const ranking = computed(() => [...edgeGeoms.value].sort((a, b) => b.count - a.count).slice(0, 5))
+
+const labelOf = (id: string): string => nodes.value.find((n) => n.id === id)?.label ?? id
+const isSteward = (id: string): boolean => kernel.stewardId === id
+
+// ---- 聚焦（点击节点/连线进侧栏详情 + 无关元素退隐；点空白/Esc 退出） ----
+
+type Focus = { type: 'node'; key: string } | { type: 'edge'; key: string } | null
+const focus = ref<Focus>(null)
+
+const keepSet = computed<Set<string> | null>(() => {
+  const f = focus.value
+  if (!f) return null
+  if (f.type === 'node') {
+    const keep = new Set([f.key])
+    for (const e of edgeGeoms.value) {
+      if (e.from === f.key) keep.add(e.to)
+      else if (e.to === f.key) keep.add(e.from)
+    }
+    return keep
+  }
+  const e = edgeGeoms.value.find((x) => x.key === f.key)
+  return e ? new Set([e.from, e.to]) : null
+})
+
+const dimNode = (id: string): boolean => keepSet.value !== null && !keepSet.value.has(id)
+const dimEdge = (e: EdgeGeom): boolean =>
+  keepSet.value !== null && (!keepSet.value.has(e.from) || !keepSet.value.has(e.to))
+
+const focusedEdge = computed(() =>
+  focus.value?.type === 'edge' ? (edgeGeoms.value.find((x) => x.key === focus.value?.key) ?? null) : null,
+)
+
+const clearFocus = (): void => {
+  focus.value = null
+}
+
+const onKey = (e: KeyboardEvent): void => {
+  if (e.key === 'Escape') clearFocus()
+}
+onMounted(() => document.addEventListener('keydown', onKey))
+onUnmounted(() => document.removeEventListener('keydown', onKey))
+
+/** 进入会话（user 节点无会话可进） */
+const goTo = (agentId: string): void => {
+  ui.activeAgentId = agentId
+  ui.switchView('console')
+}
 </script>
 
 <template>
-  <section class="view">
-    <h2 class="view-title">GraphView</h2>
-    <p class="placeholder">视图实现于 Step 9（迁移 prototype.html）</p>
+  <section class="graph-wrap">
+    <div class="graph-canvas" @click="clearFocus">
+      <svg viewBox="0 0 900 524" role="img" aria-label="社交图谱">
+        <defs>
+          <filter id="gshadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-opacity="0.28" />
+          </filter>
+        </defs>
+
+        <g
+          v-for="e in edgeGeoms"
+          :key="e.key"
+          class="gedge-g"
+          :class="{ 'is-dim': dimEdge(e), 'is-hi': focusedEdge?.key === e.key }"
+          role="button"
+          :aria-label="`${labelOf(e.from)} 与 ${labelOf(e.to)} · ${e.count} 条消息 · 点击查看详情`"
+          tabindex="0"
+          @click.stop="focus = { type: 'edge', key: e.key }"
+          @keydown.enter.prevent="focus = { type: 'edge', key: e.key }"
+        >
+          <path class="gedge" :class="e.kind" :d="e.d" :stroke-width="e.width.toFixed(1)"></path>
+          <path class="gedge-hit" :d="e.d"></path>
+        </g>
+
+        <g
+          v-for="n in nodes"
+          :key="n.id"
+          class="gnode"
+          :class="{ 'is-dim': dimNode(n.id), 'is-focus': focus?.type === 'node' && focus.key === n.id }"
+          role="button"
+          :aria-label="`${n.label} · ${nodeMsg[n.id] ?? 0} 条消息 · 点击查看详情`"
+          tabindex="0"
+          @click.stop="focus = focus?.type === 'node' && focus.key === n.id ? null : { type: 'node', key: n.id }"
+          @keydown.enter.prevent="focus = { type: 'node', key: n.id }"
+        >
+          <circle
+            class="gdisc"
+            :cx="n.x"
+            :cy="n.y"
+            :r="n.r"
+            :style="{ fill: n.isUser ? 'var(--ink2)' : agentColor(n.id) }"
+            filter="url(#gshadow)"
+          ></circle>
+          <text class="ginit" :x="n.x" :y="n.y + 4.5">{{ n.initial }}</text>
+          <circle v-if="!n.isUser && isSteward(n.id)" class="gstatus" :cx="n.x + n.r * 0.74" :cy="n.y + n.r * 0.74" r="4.5"></circle>
+          <text class="glabel" :x="n.x" :y="n.y + n.r + 17">{{ n.label }}</text>
+          <text class="gcount" :x="n.x" :y="n.y + n.r + 30">×{{ nodeMsg[n.id] ?? 0 }}</text>
+        </g>
+      </svg>
+
+      <p v-if="edgeGeoms.length === 0" class="graph-empty">还没有消息往来——在控制台发一条消息试试</p>
+    </div>
+
+    <aside class="graph-side">
+      <!-- 图例（默认态） -->
+      <template v-if="!focus">
+        <div class="graph-title">社交图谱</div>
+        <p class="graph-sub">
+          谁在和谁说话：节点是会话对象（身份色圆盘 + 管家徽标点），弧线宽度是消息量。
+          点击节点或连线聚焦详情，点空白处或 Esc 退出；进入会话用详情里的按钮。
+        </p>
+        <div class="side-sec">图例</div>
+        <div class="graph-sum mono">{{ edgeGeoms.length }} 对关系 · {{ kernel.edges.reduce((s, e) => s + e.count, 0) }} 条消息</div>
+        <div class="legend-row"><span class="lg-line user"></span>你 ↔ agent · 消息边</div>
+        <div class="legend-row"><span class="lg-line a2a"></span>agent ↔ agent · 委派边（A2A）</div>
+        <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>徽标点 = 管家</div>
+
+        <div v-if="ranking.length" class="side-sec">对话量排行</div>
+        <div v-for="e in ranking" :key="e.key" class="rank-row">
+          <span class="rank-dots">
+            <span class="lg-dot" :style="{ background: e.from === 'user' ? 'var(--ink2)' : agentColor(e.from) }"></span>
+            <span class="lg-dot" :style="{ background: e.to === 'user' ? 'var(--ink2)' : agentColor(e.to) }"></span>
+          </span>
+          <span class="rank-label">{{ labelOf(e.from) }} ↔ {{ labelOf(e.to) }}</span>
+          <span class="rcnt mono">×{{ e.count }}</span>
+        </div>
+      </template>
+
+      <!-- 边详情 -->
+      <template v-else-if="focusedEdge">
+        <div class="graph-head">
+          <button class="back-btn" title="返回图例" aria-label="返回图例" @click="clearFocus">←</button>
+          <span class="graph-title">关系详情</span>
+        </div>
+        <div class="detail-title">
+          <span :style="{ color: focusedEdge.from === 'user' ? 'var(--ink2)' : agentColor(focusedEdge.from) }">{{ labelOf(focusedEdge.from) }}</span>
+          ↔
+          <span :style="{ color: focusedEdge.to === 'user' ? 'var(--ink2)' : agentColor(focusedEdge.to) }">{{ labelOf(focusedEdge.to) }}</span>
+        </div>
+        <div class="kv"><span class="k">累计消息</span><span class="v mono">×{{ focusedEdge.count }}</span></div>
+        <div class="kv"><span class="k">边类型</span><span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ agent）' : '委派边（A2A）' }}</span></div>
+        <p class="ctx-note">
+          {{ focusedEdge.kind === 'user' ? '本地边：你对 agent 的指挥与回复共同计入。' : '本地边：agent 间的 A2A 派发与回执共同计入（双侧 transcript 镜像）。' }}
+        </p>
+      </template>
+
+      <!-- 节点详情 -->
+      <template v-else>
+        <div class="graph-head">
+          <button class="back-btn" title="返回图例" aria-label="返回图例" @click="clearFocus">←</button>
+          <span class="graph-title">节点详情</span>
+        </div>
+        <div class="detail-title">
+          <span class="lg-dot" :style="{ background: focus.key === 'user' ? 'var(--ink2)' : agentColor(focus.key) }"></span>
+          {{ labelOf(focus.key) }}
+        </div>
+        <div v-if="focus.key === 'user'" class="kv"><span class="k">身份</span><span class="v">本机主人 · 所有对话的起点</span></div>
+        <template v-else>
+          <div class="kv"><span class="k">角色</span><span class="v">{{ isSteward(focus.key) ? '管家（默认路由）' : 'worker' }}</span></div>
+          <div class="kv"><span class="k">消息量</span><span class="v mono">×{{ nodeMsg[focus.key] ?? 0 }}</span></div>
+        </template>
+        <div class="side-sec">主要关系</div>
+        <div
+          v-for="e in edgeGeoms.filter((x) => x.from === focus.key || x.to === focus.key).sort((a, b) => b.count - a.count)"
+          :key="e.key"
+          class="rank-row clickable"
+          @click="focus = { type: 'edge', key: e.key }"
+        >
+          <span class="lg-dot" :style="{ background: (e.from === focus.key ? e.to : e.from) === 'user' ? 'var(--ink2)' : agentColor(e.from === focus.key ? e.to : e.from) }"></span>
+          <span class="rank-label">{{ labelOf(e.from === focus.key ? e.to : e.from) }}</span>
+          <span class="rcnt mono">×{{ e.count }}</span>
+        </div>
+        <p v-if="focus.key !== 'user' && edgeGeoms.every((x) => x.from !== focus.key && x.to !== focus.key)" class="ctx-note">
+          还没有消息往来。
+        </p>
+        <div v-if="focus.key !== 'user'" class="side-actions">
+          <button class="btn btn-secondary btn-sm" @click="goTo(focus.key)">进入会话</button>
+        </div>
+      </template>
+    </aside>
   </section>
 </template>
+
+<style scoped src="./graph.css"></style>

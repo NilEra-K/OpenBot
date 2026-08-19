@@ -12,6 +12,7 @@ import BoxesView from './views/BoxesView.vue'
 import TasksView from './views/TasksView.vue'
 import GraphView from './views/GraphView.vue'
 import SettingsView from './views/SettingsView.vue'
+import ApprovalModal from './components/ApprovalModal.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -23,8 +24,8 @@ const hideToTray = (): void => window.openbot?.window.close()
 
 const views: Array<{ id: ViewName; label: string; component: unknown }> = [
   { id: 'console', label: '控制台', component: ConsoleView },
-  { id: 'boxes', label: 'Box', component: BoxesView },
   { id: 'tasks', label: '排程', component: TasksView },
+  { id: 'boxes', label: 'Box', component: BoxesView },
   { id: 'graph', label: '图谱', component: GraphView },
   { id: 'settings', label: '设置', component: SettingsView },
 ]
@@ -65,6 +66,9 @@ onUnmounted(() => kernel.shutdown())
         <component :is="(views.find((v) => v.id === ui.currentView)?.component as never)" />
       </main>
     </div>
+
+    <!-- 审批弹窗（全局层：挂起审批的注意力捕获；流内 gate 卡保留对话流上下文） -->
+    <ApprovalModal />
   </div>
 </template>
 
@@ -78,11 +82,20 @@ onUnmounted(() => kernel.shutdown())
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.15);
   --ink: #eaeaea;
+  --ink2: #a6a6a6;
+  --ink3: #8a8a8a;
   --muted: rgba(234, 234, 234, 0.55);
   --accent: #eeb154;
   --accent-ink: #2a1e0c;
   --accent-weak: rgba(238, 177, 84, 0.11);
+  --warning: #e3ce5c;
+  --warning-rgb: 227, 206, 92;
+  --warning-weak: rgba(227, 206, 92, 0.1);
   --danger: #ea6a64;
+  --danger-rgb: 234, 106, 100;
+  --success: #73ce95;
+  --mono: 'Cascadia Code', Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
   --radius: 10px;
 }
 

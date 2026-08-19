@@ -15,6 +15,7 @@ import { A2aService } from '@openbot/messaging'
 import { AutoApprovalGate, execTool, gated, hostFetchTool, sendMessageTool, ToolRegistry, TurnRunner } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
+import { randomUUID } from 'node:crypto'
 
 export interface AssembleOptions {
   /** 持久化适配；默认内存（CLI 冒烟/测试），桌面装配用 NodeFs */
@@ -34,6 +35,11 @@ export interface AssembleOptions {
   approvalGateFactory?: (deps: { bus: EventBus; ledger: IdempotencyLedger }) => ApprovalGate
   systemPrompt?: string | ((agentId: string) => string)
   maxToolRounds?: number
+  /**
+   * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
+   * 默认每次启动随机；确定性冒烟（CLI）注入固定值。
+   */
+  bootPrefix?: string
 }
 
 export interface AgentRegistration {
@@ -83,8 +89,10 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
 
   let msgCounter = 0
   let approvalCounter = 0
-  const nextMessageId = (): string => `msg-${++msgCounter}`
-  const nextApprovalId = (): string => `appr-${++approvalCounter}`
+  // 跨重启唯一：同进程单调 + 启动前缀隔离（重启后历史里的 msg-xxx-1 不会与新发的冲突）
+  const bootPrefix = options.bootPrefix ?? randomUUID().slice(0, 8)
+  const nextMessageId = (): string => `msg-${bootPrefix}-${++msgCounter}`
+  const nextApprovalId = (): string => `appr-${bootPrefix}-${++approvalCounter}`
 
   const schedulers = new Map<string, AgentScheduler>()
   const boxes = new Map<string, string>()
@@ -156,6 +164,12 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       transcript.readAll((payload as { agentId: string }).agentId),
     )
     .register('v1.boxes.list', async () => backend.list())
+    // caps.snapshot=true 的后端才提供（UI 按 caps 渲染按钮，永不出现「有按钮但后端不支持」）
+    .register('v1.boxes.snapshot', async (payload) => {
+      const { boxId } = payload as { boxId: string }
+      const snapshotId = await backend.snapshot(boxId)
+      return { boxId, snapshotId }
+    })
     .register('v1.scheduler.stats', async (payload) => {
       const scheduler = schedulers.get((payload as { agentId: string }).agentId)
       if (!scheduler) throw new AgentSchedulerMissingError((payload as { agentId: string }).agentId)
@@ -191,7 +205,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       const scheduler = new AgentScheduler({
         agentId: registration.agentId,
         now,
-        nextRunId: () => `${registration.agentId}-run-${++runCounter}`,
+        nextRunId: () => `${registration.agentId}-run-${bootPrefix}-${++runCounter}`,
         bus,
         execute: (run) => {
           if (!executeRef.current) {

@@ -6,7 +6,7 @@ import type { AssembledKernel } from '../src/index.js'
 import type { KernelEvent } from '@openbot/core'
 
 function makeKernel(): AssembledKernel {
-  return assembleKernel({ now: () => 0, systemPrompt: '你是 OpenBot agent' })
+  return assembleKernel({ now: () => 0, bootPrefix: 't', systemPrompt: '你是 OpenBot agent' })
 }
 
 async function waitIdle(kernel: AssembledKernel): Promise<void> {
@@ -132,6 +132,23 @@ describe('assembleKernel 组织模型命令', () => {
     ).rejects.toMatchObject({ code: 'STATE_AGENT_NOT_FOUND' })
     await expect(client.call('v1.scheduler.stats', { agentId: 'ghost' })).rejects.toMatchObject({
       code: 'STATE_AGENT_NOT_FOUND',
+    })
+  })
+})
+
+describe('assembleKernel Box 命令', () => {
+  it('v1.boxes.snapshot：mock 后端返回快照 id；不存在的 Box 按 code 拒绝', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'a1' })
+    const boxes = await client.call<{ boxId: string }[]>('v1.boxes.list')
+    const snap = await client.call<{ boxId: string; snapshotId: string }>('v1.boxes.snapshot', {
+      boxId: boxes[0]!.boxId,
+    })
+    expect(snap.boxId).toBe(boxes[0]!.boxId)
+    expect(snap.snapshotId).toMatch(/^snap-\d+$/)
+    await expect(client.call('v1.boxes.snapshot', { boxId: 'ghost' })).rejects.toMatchObject({
+      code: 'BOX_NOT_FOUND',
     })
   })
 })
