@@ -23,6 +23,9 @@ importers:
       '@openbot/coordinator':
         specifier: workspace:*
         version: link:../../packages/coordinator
+      '@openbot/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@openbot/transport':
         specifier: workspace:*
         version: link:../../packages/transport

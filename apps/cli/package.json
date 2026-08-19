@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@openbot/coordinator": "workspace:*",
-    "@openbot/transport": "workspace:*"
+    "@openbot/transport": "workspace:*",
+    "@openbot/llm": "workspace:*"
   }
 }
