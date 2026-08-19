@@ -11,7 +11,8 @@
     "start:debug": "electron --remote-debugging-port=9333 .",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
-    "dist": "echo P3 启用 electron-builder（win nsis + portable）"
+    "dist": "echo P3 启用 electron-builder（win nsis + portable）",
+    "test:e2e": "pnpm build && pnpm build:renderer && playwright test"
   },
   "dependencies": {
     "@openbot/coordinator": "workspace:*",
@@ -27,6 +28,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/markdown-it": "^14.2.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "electron": "^43.4.0",

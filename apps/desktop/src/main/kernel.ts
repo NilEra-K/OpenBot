@@ -169,6 +169,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })
 
+  // 装配配置（E2E/演示用）：附加 worker agent——A2A 需要至少两名成员；共享同一
+  // SwitchableChatProvider（主力模型切换对管家与全部 agent 生效，符合设置页语义）。
+  const extraAgents = (process.env.OPENBOT_EXTRA_AGENTS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+  for (const agentId of extraAgents) {
+    await kernel.addAgent({ agentId, llm: provider })
+  }
+
   const gateway = await startGateway({ transport: kernel.transport, bus: kernel.bus })
   const replayed = await approvalGate.replayPending()
   kernel.startWatchdog()

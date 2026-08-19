@@ -71,8 +71,37 @@
     传输失败（网关不可达）保留条目供重试
   - CDP 冒烟 12 项全过：出现/内容/nonce 重放不双弹/队列推进/稍后/批准与拒绝回写真实到达网关
     （未知 nonce → APPROVAL_NOT_FOUND 领域错误收敛）/resolved 事件收敛/ dismissed 回收
-- [ ] 11. Playwright `_electron` E2E：mock llm 脚本驱动 UI 全链路（chat → A2A → box exec + 审批弹窗）
-- [ ] 12. 验收：三命令全绿 + E2E 绿 + 五视图对照原型走查 + 真实 provider 手动冒烟（用户 key）
+- [x] 11. Playwright `_electron` E2E：mock llm 脚本驱动 UI 全链路（chat → A2A → box exec + 审批弹窗）
+  - 基建：`e2e/mock-openai.ts`（按 messages 特征分派脚本——`[A2A from]` 前缀区分 worker 请求，
+    规避 A2A 并行时按序号消费的竞态）；根 `vitest.config.ts` 排除 `apps/desktop/e2e/**`
+    （playwright 的 test() 语义与 vitest 不兼容，vitest 收集即炸——131 内核测试恢复全绿）；
+    playwright workers=1
+  - 场景：`OPENBOT_USER_DATA` 隔离 userData + `OPENBOT_EXTRA_AGENTS` 附加 worker1（两 agent 共享
+    SwitchableChatProvider——mock 端点请求数 ≥5 即两 agent 都走真链路的证据）；
+    settings 表单配 provider → console 发消息 → relay 出现 → **先批准弹窗再点 relay**
+    （approval-scrim 全局遮罩会拦截中栏点击——顺序反了点不到）→ worker1 会话验证回复+exec 卡 →
+    回管家看最终回复 → tasks 2 runs → graph 3 边（无向聚合）→ 五视图截图（`OPENBOT_SHOT_DIR` 控制，默认跳过）
+  - 实测修复 Electron「关窗驻留」与自动化退出冲突：close 事件 preventDefault 拦 quit →
+    `before-quit` 置 quitting 标志，`app.close()` 不再挂起（probe spec 定位，4.3s 收敛）
+- [x] 12. 验收：三命令全绿 + E2E 绿 + 五视图对照原型走查 + 真实 provider 手动冒烟（用户 key）
+  - `pnpm build && pnpm typecheck && pnpm test`（131 绿）+ `test:e2e`（全链路绿）+ 五视图截图对照
+  - **走查方法论**：AI 视觉 diff 报告 + 源码级甄别（AI 色值报告会幻觉——#1E1E1E 等不存在的值；
+    结构性观察逐条回查 prototype.html 源码裁定）
+  - 本轮修正：侧栏改图标 rail（56px 条 / 40×40 r9 / hover bg2 / active accent-weak+accent /
+    角标右上 accent 底 accent-ink 字——对齐原型 .rail/.rail-tab/.rail-badge；导航按钮文字只在
+    aria-label，E2E 定位改 getByRole）；roster 补「成员」头 +「本地 AGENTS」分节 + 头像 26px/r7 +
+    状态角标（runs running 投影 working 点脉冲——真实状态机，非装饰）；run 卡对齐原型
+    （bg2/r10、is-active accent-weak 渐变、is-done 0.72、zombie danger-weak 底、progress 3px/64%）；
+    lane 点语义（user=accent 脉冲 / agent=ink2 / background=半透明，原型同源）；tasks 统计行
+    四指标（今日/平均/成功率/队列中——全部由真实 runs 推导，无数据的指标隐藏不造假）；
+    console 气泡不对称指向圆角 + composer focus 光晕 + `--ink3` #747474；`:root` 补
+    `--accent-rgb`/`--danger-weak` 与原型同源
+  - **已裁定不改的差异**（原型是全功能展望，实现遵循诚实降级）：console ctx 三栏面板（P3 WS 实况
+    信号源）；标题栏搜索框/Ctrl K/评审标注按钮（评审工具是原型专用，搜索未列 P2 计划）；
+    boxes CPU/内存/磁盘仪表（P3）；roster「＋ 新成员」按钮与远端/休眠分节（P2 无对应命令面/事实，
+    不造假日入口）；run 卡描述文本（lifecycle 事件无 run 摘要事实，P3 事件族扩展再补）；
+    进度条动画保留滑动（原型静态 64% 是 mock；真实运行无进度可报，不确定态动画更诚实）
+  - 真实 provider 手动冒烟：移交用户（自有 key，配 base_url 后对话验证）
 
 ## 设计要点（开工前逐条细化，先记已知决策）
 

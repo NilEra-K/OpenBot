@@ -57,13 +57,26 @@ const nodes = computed<NodeGeom[]>(() => {
   return list
 })
 
+/** 无向聚合：双向计数合并为一段关系（原型「谁在和谁说话」语义；store 投影保持有向事实） */
+const undirectedEdges = computed(() => {
+  const map = new Map<string, { a: string; b: string; count: number }>()
+  for (const e of kernel.edges) {
+    const [a, b] = e.from < e.to ? [e.from, e.to] : [e.to, e.from]
+    const key = `${a}|${b}`
+    const cur = map.get(key)
+    if (cur) cur.count += e.count
+    else map.set(key, { a, b, count: e.count })
+  }
+  return [...map.values()]
+})
+
 /** 贝塞尔弧（同原型算法：交替拱向两侧避免重叠）；端点已移出名册的历史边不画 */
 const edgeGeoms = computed<EdgeGeom[]>(() => {
   const pos = new Map(nodes.value.map((n) => [n.id, n]))
   const out: EdgeGeom[] = []
-  kernel.edges.forEach((e, i) => {
-    const a = pos.get(e.from)
-    const b = pos.get(e.to)
+  undirectedEdges.value.forEach((e, i) => {
+    const a = pos.get(e.a)
+    const b = pos.get(e.b)
     if (!a || !b) return
     const mx = (a.x + b.x) / 2
     const my = (a.y + b.y) / 2
@@ -72,13 +85,13 @@ const edgeGeoms = computed<EdgeGeom[]>(() => {
     const len = Math.hypot(dx, dy) || 1
     const off = Math.min(len * 0.1, 30) * (i % 2 ? 1 : -1)
     out.push({
-      key: `${e.from}->${e.to}`,
-      from: e.from,
-      to: e.to,
+      key: `${e.a}->${e.b}`,
+      from: e.a,
+      to: e.b,
       count: e.count,
       d: `M${a.x} ${a.y} Q${(mx - (dy / len) * off).toFixed(1)} ${(my + (dx / len) * off).toFixed(1)} ${b.x} ${b.y}`,
       width: Math.min(1.5 + Math.sqrt(e.count) * 0.9, 6.5),
-      kind: e.from === 'user' || e.to === 'user' ? 'user' : 'a2a',
+      kind: e.a === 'user' || e.b === 'user' ? 'user' : 'a2a',
     })
   })
   return out

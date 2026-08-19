@@ -137,21 +137,25 @@
   word-break: break-word;
   background: var(--bg3);
   border: 1px solid var(--line);
-  border-radius: 10px;
   padding: 7px 13px;
 }
 
-.m.user .m-text {
-  background: var(--accent-weak);
-  border-color: rgba(238, 177, 84, 0.22);
+/* 所有消息统一气泡：同一中性表面，自己与 Agent 只靠左右对齐区分（原型共识点）；
+   靠近头像的一角收小，气泡有指向 */
+.m:not(.user) .m-text {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 4px 12px 12px 12px;
 }
 
-.m.user {
-  text-align: right;
+.m.user .m-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
 .m.user .m-text {
-  text-align: left;
+  border-radius: 12px 4px 12px 12px;
 }
 
 /* markdown 渲染块（agent 回复） */
@@ -382,7 +386,8 @@
 }
 
 .composer-box:focus-within {
-  border-color: rgba(238, 177, 84, 0.45);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
 }
 
 .composer-box.disabled {

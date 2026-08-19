@@ -14,6 +14,13 @@ process.on('uncaughtException', (err) => {
   console.error('[openbot] uncaughtException:', err)
 })
 
+// 装配配置（E2E 用）：隔离 userData 到临时目录——测试数据绝不写进用户真实数据区
+const e2eUserData = process.env.OPENBOT_USER_DATA
+if (e2eUserData) {
+  app.setPath('userData', e2eUserData)
+  console.log('[openbot] E2E userData 隔离：', e2eUserData)
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url)) // apps/desktop/dist/main
 const APP_ROOT = join(HERE, '..', '..') // apps/desktop
 const REPO_ROOT = join(APP_ROOT, '..', '..') // 仓库根
@@ -120,6 +127,11 @@ if (!locked) {
   app.quit()
 } else {
   app.on('second-instance', () => { win?.show(); win?.focus() })
+  // 任何退出路径(托盘菜单/系统关机/playwright close 的 app.quit())先置 quitting——
+  // before-quit 早于窗口 close 触发,否则「关窗驻留」的 preventDefault 会拦掉整个退出流程
+  app.on('before-quit', () => {
+    quitting = true
+  })
   void app.whenReady().then(async () => {
     try {
       console.log('[openbot] whenReady：动态加载内核装配模块')

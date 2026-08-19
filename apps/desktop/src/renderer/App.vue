@@ -22,13 +22,25 @@ const minimize = (): void => window.openbot?.window.minimize()
 const toggleMaximize = (): void => window.openbot?.window.toggleMaximize()
 const hideToTray = (): void => window.openbot?.window.close()
 
-const views: Array<{ id: ViewName; label: string; component: unknown }> = [
-  { id: 'console', label: '控制台', component: ConsoleView },
-  { id: 'tasks', label: '排程', component: TasksView },
-  { id: 'boxes', label: 'Box', component: BoxesView },
-  { id: 'graph', label: '图谱', component: GraphView },
-  { id: 'settings', label: '设置', component: SettingsView },
+const views: Array<{ id: ViewName; label: string; icon: string; component: unknown }> = [
+  { id: 'console', label: '控制台', icon: 'chat', component: ConsoleView },
+  { id: 'tasks', label: '排程', icon: 'lanes', component: TasksView },
+  { id: 'boxes', label: 'Box', icon: 'box', component: BoxesView },
+  { id: 'graph', label: '图谱', icon: 'graph', component: GraphView },
+  { id: 'settings', label: '设置', icon: 'sliders', component: SettingsView },
 ]
+
+/** 图标 path(prototype.html ICONS 同源;viewBox 0 0 24 24 线性图标) */
+const ICONS: Record<string, string> = {
+  chat: '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
+  lanes:
+    '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.3" fill="currentColor" stroke="none"/>',
+  box: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12L4 7.5M12 12v9"/>',
+  graph:
+    '<circle cx="6" cy="7" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="17" cy="17" r="2.4"/><circle cx="7" cy="18" r="2.4"/><path d="M8.3 7.8l7.3-1.2M8.2 9.1l7.2 6.3M8.9 17.2l-.5-7M16.7 15.1l-.7-6.7"/>',
+  sliders:
+    '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>',
+}
 
 onMounted(() => void kernel.boot())
 onUnmounted(() => kernel.shutdown())
@@ -54,9 +66,11 @@ onUnmounted(() => kernel.shutdown())
           :key="view.id"
           class="nav-item"
           :class="{ active: ui.currentView === view.id }"
+          :title="view.label"
+          :aria-label="view.label"
           @click="ui.switchView(view.id)"
         >
-          {{ view.label }}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="ICONS[view.icon]"></svg>
           <span v-if="view.id === 'console' && kernel.pendingApprovals.length" class="badge">{{
             kernel.pendingApprovals.length
           }}</span>
@@ -83,16 +97,18 @@ onUnmounted(() => kernel.shutdown())
   --line-strong: rgba(255, 255, 255, 0.15);
   --ink: #eaeaea;
   --ink2: #a6a6a6;
-  --ink3: #8a8a8a;
+  --ink3: #747474;
   --muted: rgba(234, 234, 234, 0.55);
   --accent: #eeb154;
   --accent-ink: #2a1e0c;
-  --accent-weak: rgba(238, 177, 84, 0.11);
+  --accent-rgb: 238, 177, 84;
+  --accent-weak: rgba(var(--accent-rgb), 0.11);
   --warning: #e3ce5c;
   --warning-rgb: 227, 206, 92;
   --warning-weak: rgba(227, 206, 92, 0.1);
   --danger: #ea6a64;
   --danger-rgb: 234, 106, 100;
+  --danger-weak: rgba(var(--danger-rgb), 0.1);
   --success: #73ce95;
   --mono: 'Cascadia Code', Consolas, ui-monospace, monospace;
   --ease: cubic-bezier(0.25, 1, 0.5, 1);
@@ -185,31 +201,33 @@ body {
 }
 
 .sidebar {
-  width: 168px;
+  width: 56px;
   flex: none;
-  padding: 10px 8px;
-  background: var(--bg1);
+  padding: 10px 0;
+  background: var(--bg0);
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
 }
 
 .nav-item {
   position: relative;
-  padding: 8px 12px;
+  width: 40px;
+  height: 40px;
   border: none;
-  border-radius: 6px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
   background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: left;
+  color: var(--ink3);
   cursor: pointer;
 }
 
 .nav-item:hover {
   background: var(--bg2);
-  color: var(--ink);
+  color: var(--ink2);
 }
 
 .nav-item.active {
@@ -219,18 +237,19 @@ body {
 
 .badge {
   position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--danger);
-  color: #fff;
-  font-size: 11px;
-  line-height: 16px;
-  text-align: center;
+  top: 7px;
+  right: 7px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 9px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  line-height: 1;
 }
 
 .main {

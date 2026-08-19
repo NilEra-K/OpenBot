@@ -45,7 +45,25 @@ const fmtDur = (ms: number): string => {
 const fmtTime = (at: number): string =>
   new Date(at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-const totalToday = computed(() => kernel.runs.length)
+/** 今日 run（本地 0 点起；无数据的指标藏起来——诚实降级，不造 mock 数字） */
+const todayRuns = computed(() => {
+  const dayStart = new Date()
+  dayStart.setHours(0, 0, 0, 0)
+  return kernel.runs.filter((r) => r.at >= dayStart.getTime())
+})
+
+/** 已终结 run（succeeded/failed）才有时长可平均 */
+const avgMs = computed(() => {
+  const done = todayRuns.value.filter((r) => r.state === 'succeeded' || r.state === 'failed')
+  if (done.length === 0) return null
+  return done.reduce((s, r) => s + (r.updatedAt - r.at), 0) / done.length
+})
+
+const successRate = computed(() => {
+  const done = todayRuns.value.filter((r) => r.state === 'succeeded' || r.state === 'failed')
+  if (done.length === 0) return null
+  return Math.round((done.filter((r) => r.state === 'succeeded').length / done.length) * 100)
+})
 </script>
 
 <template>
@@ -54,8 +72,12 @@ const totalToday = computed(() => kernel.runs.length)
       <div class="view-title">排程监控</div>
       <div class="view-sub">每个 agent 一个排他队列：同一时刻只有一个活跃 turn；用户消息永远最先。watchdog 将卡死的 run 逃逸为 zombie，发送永不悬挂。</div>
       <div class="view-toolbar mono">
-        <span>累计 <b>{{ totalToday }}</b> runs</span>
+        <span>今日 <b>{{ todayRuns.length }}</b> runs</span>
         <span aria-hidden="true">·</span>
+        <span v-if="avgMs !== null">平均 <b>{{ fmtDur(avgMs) }}</b></span>
+        <span v-if="avgMs !== null" aria-hidden="true">·</span>
+        <span v-if="successRate !== null">成功率 <b>{{ successRate }}%</b></span>
+        <span v-if="successRate !== null" aria-hidden="true">·</span>
         <span>队列中 <b>{{ kernel.runs.filter((r) => r.state === 'queued').length }}</b></span>
       </div>
     </div>
