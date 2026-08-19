@@ -1,7 +1,8 @@
 /**
- * preload —— 壳预览阶段的唯一特权通道：frameless 窗口控制（最小化/最大化/关闭）。
- * renderer 依旧无特权（sandbox + contextIsolation）；P2 起数据面走 transport 环回网关，
- * 本通道仅保留窗口 chrome 操作（ARCHITECTURE.md §5、§8 解耦纪律）。
+ * preload —— 壳与 renderer 之间的唯一特权通道：
+ * - 窗口 chrome 操作（frameless 三键）
+ * - 网关接入点（port/token 经 ipc 异步拉取，只活在内存链路——不落盘、不进 URL 历史）
+ * renderer 业务面依旧无特权（sandbox + contextIsolation）走环回网关（ARCHITECTURE.md §5、§8）。
  */
 import { contextBridge, ipcRenderer } from 'electron'
 
@@ -11,5 +12,9 @@ contextBridge.exposeInMainWorld('openbot', {
     minimize: () => ipcRenderer.send('openbot:win', 'minimize'),
     toggleMaximize: () => ipcRenderer.send('openbot:win', 'toggleMaximize'),
     close: () => ipcRenderer.send('openbot:win', 'close'),
+  },
+  gateway: {
+    /** 拉取网关接入点（main 装配完成后才有值；装配失败返回 null） */
+    info: () => ipcRenderer.invoke('openbot:gateway') as Promise<{ port: number; token: string } | null>,
   },
 })

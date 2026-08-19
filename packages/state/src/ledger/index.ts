@@ -94,6 +94,18 @@ export class IdempotencyLedger {
     return entry ? { ...entry } : null
   }
 
+  /** 前缀过滤的挂起项（崩溃恢复扫描用；如审批闸门 'approval:' 前缀——重启后重发 requested） */
+  async listPending(prefix?: string): Promise<LedgerEntry[]> {
+    await this.#load()
+    const result: LedgerEntry[] = []
+    for (const entry of this.#entries.values()) {
+      if (entry.status !== 'pending') continue
+      if (prefix !== undefined && !entry.nonce.startsWith(prefix)) continue
+      result.push({ ...entry })
+    }
+    return result
+  }
+
   async #load(): Promise<void> {
     if (this.#loaded) return
     const raw = await this.#fs.read(this.#path)

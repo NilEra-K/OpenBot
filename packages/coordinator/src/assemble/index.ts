@@ -27,6 +27,11 @@ export interface AssembleOptions {
   backend?: BoxBackend
   /** 出 Box 闸门；默认 AutoApprovalGate（CLI 自动批准、账本照记） */
   approvalGate?: ApprovalGate
+  /**
+   * 闸门工厂：需要内核内部构件（bus/ledger）构造闸门时用（桌面 ManualApprovalGate 的
+   * resolve 命令需要持有实例）。与 approvalGate 二选一，同时给出时工厂优先。
+   */
+  approvalGateFactory?: (deps: { bus: EventBus; ledger: IdempotencyLedger }) => ApprovalGate
   systemPrompt?: string | ((agentId: string) => string)
   maxToolRounds?: number
 }
@@ -46,6 +51,10 @@ export interface AssembledKernel {
   readonly transport: InProcessTransport
   readonly agentStore: AgentStore
   readonly transcript: TranscriptStore
+  /** 幂等账本（审批恢复扫描等观察面） */
+  readonly ledger: IdempotencyLedger
+  /** 实际装配的出 Box 闸门（Manual 时壳侧可拿引用注册 resolve 命令） */
+  readonly approvalGate: ApprovalGate
   readonly backend: BoxBackend
   readonly registry: BoxRegistry
   readonly messaging: A2aService
@@ -98,7 +107,9 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   })
 
   const gate =
-    options.approvalGate ?? new AutoApprovalGate({ bus, ledger, now, nextApprovalId })
+    options.approvalGateFactory?.({ bus, ledger }) ??
+    options.approvalGate ??
+    new AutoApprovalGate({ bus, ledger, now, nextApprovalId })
   const tools = new ToolRegistry()
     .register(execTool({ backend, bus }))
     .register(sendMessageTool(messaging))
@@ -162,12 +173,18 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     transport,
     agentStore,
     transcript,
+    ledger,
+    approvalGate: gate,
     backend,
     registry,
     messaging,
     schedulers,
     async addAgent(registration) {
-      await agentStore.register(registration.agentId, registration.name)
+      // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
+      const registered = (await agentStore.list()).some((a) => a.agentId === registration.agentId)
+      if (!registered) {
+        await agentStore.register(registration.agentId, registration.name)
+      }
       llms.set(registration.agentId, registration.llm ?? new MockChatProvider({ steps: [] }))
       const boxId = await backend.create({ image: 'default' })
       boxes.set(registration.agentId, boxId)

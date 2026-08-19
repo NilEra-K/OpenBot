@@ -92,4 +92,16 @@ describe('IdempotencyLedger', () => {
       expect(ke.message).toContain('msg:1')
     }
   })
+
+  it('listPending：前缀过滤 + 只返回挂起项（崩溃恢复扫描入口）', async () => {
+    const { ledger } = makeLedger()
+    await ledger.begin('approval:n1', 'd1')
+    await ledger.begin('approval:n2', 'd2')
+    await ledger.begin('msg:m1', 'd3')
+    await ledger.commit('approval:n2', true)
+    expect(await ledger.listPending('approval:')).toHaveLength(1)
+    expect((await ledger.listPending('approval:'))[0]!.nonce).toBe('approval:n1')
+    expect(await ledger.listPending()).toHaveLength(2) // approval:n1 + msg:m1（无前缀全量）
+    expect(await ledger.listPending('task:')).toEqual([])
+  })
 })

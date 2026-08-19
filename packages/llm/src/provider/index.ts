@@ -8,8 +8,12 @@
 export const LlmErrorCodes = {
   /** 请求开始前 signal 已中止 */
   LLM_ABORTED: 'LLM_ABORTED',
-  /** 真实 provider 网络/HTTP 失败（P1 后接入） */
+  /** 网络/请求层失败（fetch reject、DNS 等） */
   LLM_REQUEST_FAILED: 'LLM_REQUEST_FAILED',
+  /** 请求超时（timeoutMs 或 signal 到期） */
+  LLM_TIMEOUT: 'LLM_TIMEOUT',
+  /** 响应结构非法（缺 choices/消息体） */
+  LLM_RESPONSE_INVALID: 'LLM_RESPONSE_INVALID',
   /** mock 脚本耗尽：显式失败，不许悄悄兜底——确定性测试要的是显式暴露 */
   LLM_MOCK_SCRIPT_EXHAUSTED: 'LLM_MOCK_SCRIPT_EXHAUSTED',
 } as const
@@ -42,10 +46,11 @@ export interface ChatMessage {
   toolCallId?: string
 }
 
-/** 工具描述（P1 简化 schema：名称 + 说明；真实 schema 校验随 provider 接入） */
+/** 工具描述（argsSchema 为 JSON Schema 形状的可选约束，openai-compat 映射为 parameters） */
 export interface ToolSpec {
   name: string
   description: string
+  argsSchema?: unknown
 }
 
 export interface ChatRequest {

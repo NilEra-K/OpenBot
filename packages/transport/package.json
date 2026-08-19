@@ -11,6 +11,11 @@
     }
   },
   "dependencies": {
-    "@openbot/core": "workspace:*"
+    "@openbot/core": "workspace:*",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }

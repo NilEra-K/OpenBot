@@ -4,14 +4,29 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "description": "Electron 桌面壳——P1.5 壳预览：真窗口 + 托盘常驻，加载视觉母版 prototype.html",
+  "description": "Electron 桌面壳——P2：真内核装配 + 环回网关 + Vue renderer（五视图）",
   "main": "dist/main/index.js",
   "scripts": {
     "start": "electron .",
     "start:debug": "electron --remote-debugging-port=9333 .",
+    "dev:renderer": "vite",
+    "build:renderer": "vite build",
     "dist": "echo P3 启用 electron-builder（win nsis + portable）"
   },
+  "dependencies": {
+    "@openbot/coordinator": "workspace:*",
+    "@openbot/core": "workspace:*",
+    "@openbot/llm": "workspace:*",
+    "@openbot/runner": "workspace:*",
+    "@openbot/state": "workspace:*",
+    "@openbot/transport": "workspace:*",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.41",
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
-    "electron": "^43.4.0"
+    "@vitejs/plugin-vue": "^6.0.8",
+    "electron": "^43.4.0",
+    "vite": "^8.2.1"
   }
 }

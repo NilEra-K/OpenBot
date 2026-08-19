@@ -10,6 +10,8 @@ import type { IdempotencyLedger } from '@openbot/state'
 
 export const ApprovalErrorCodes = {
   APPROVAL_DENIED: 'APPROVAL_DENIED',
+  /** resolve 了从未受理过的审批 */
+  APPROVAL_NOT_FOUND: 'APPROVAL_NOT_FOUND',
 } as const
 
 export type ApprovalDecision = 'approved' | 'denied'
@@ -79,6 +81,158 @@ export class StaticApprovalGate implements ApprovalGate {
   async request(): Promise<boolean> {
     return this.#decision
   }
+}
+
+export interface ManualApprovalGateDeps {
+  bus: EventBus
+  ledger: IdempotencyLedger
+}
+
+interface PendingApproval {
+  request: ApprovalRequest
+  settled: Promise<boolean>
+  settle: (approved: boolean) => void
+}
+
+/**
+ * 挂起式闸门（桌面装配用）：request() 挂起至 resolve()（审批弹窗回写）——
+ * 无闸门侧超时，挂死由 run 的 deadlineMs 兜底（审批期间 run 未结束，语义自洽）。
+ * 幂等与崩溃恢复：账本 pending + 重启后再次 request 同 nonce → 重发 requested 事件再挂起；
+ * 已决议的 nonce → 直接回放首次决定，不再弹窗。approvalId 由 nonce 确定性派生（重发同 id）。
+ */
+export class ManualApprovalGate implements ApprovalGate {
+  readonly #deps: ManualApprovalGateDeps
+  readonly #pending = new Map<string, PendingApproval>()
+  /** 排他锁：begin+suspend 与 resolve 串行——防并发同 nonce 双重挂起/先决议后受理 */
+  #lock: Promise<unknown> = Promise.resolve()
+
+  constructor(deps: ManualApprovalGateDeps) {
+    this.#deps = deps
+  }
+
+  async request(request: ApprovalRequest): Promise<boolean> {
+    // 临界区只做 begin + 挂起建立（不等待决议本身——否则 resolve 拿不到锁，死锁）
+    let settled: Promise<boolean> | undefined
+    let replay: boolean | undefined
+    await this.#withLock(async () => {
+      const key = `approval:${request.nonce}`
+      const digest = digestOf({
+        runId: request.runId,
+        agentId: request.agentId,
+        tool: request.tool,
+      })
+      const begin = await this.#deps.ledger.begin(key, digest)
+      if (!begin.first) {
+        // 已决议：回放首次决定（重试不双弹窗、不双执行）
+        if (begin.entry.outcome !== undefined) {
+          replay = begin.entry.outcome === true
+          return
+        }
+        // 并发同 nonce：并到同一等待
+        const existing = this.#pending.get(request.nonce)
+        if (existing) {
+          settled = existing.settled
+          return
+        }
+      }
+      settled = this.#suspend(request)
+    })
+    if (settled !== undefined) return settled
+    if (replay !== undefined) return replay
+    throw new KernelError('APPROVAL_INTERNAL', 'request 临界区未产出结果（不可达）')
+  }
+
+  /** 决议回写（v1.approval.resolve 命令的目标）：账本落定 + 唤醒等待方 + resolved 事件 */
+  async resolve(nonce: string, decision: ApprovalDecision): Promise<boolean> {
+    return this.#withLock(() => this.#resolveLocked(nonce, decision))
+  }
+
+  /** 当前挂起中的审批（UI/测试观察面） */
+  pending(): ApprovalRequest[] {
+    return [...this.#pending.values()].map((p) => p.request)
+  }
+
+  /**
+   * 崩溃恢复：扫账本 'approval:' 前缀的 pending 项，重发 requested 事件让 UI 重新弹窗
+   * （原 run 已死不重建挂起——决议经 resolve 命令照常落账本；digest 恢复事件负载）。
+   * 装配时调用一次；返回重放条数。
+   */
+  async replayPending(): Promise<number> {
+    const entries = await this.#deps.ledger.listPending('approval:')
+    for (const entry of entries) {
+      const nonce = entry.nonce.slice('approval:'.length)
+      if (this.#pending.has(nonce)) continue
+      let info: { runId?: string; agentId?: string; tool?: string } = {}
+      try {
+        info = JSON.parse(entry.digest) as typeof info
+      } catch {
+        // 坏 digest 行如实带 '? '（决议不受影响——账本 nonce 仍是唯一真相）
+      }
+      this.#deps.bus.emit('v1.approval.requested', {
+        approvalId: approvalIdOf(nonce),
+        runId: info.runId ?? '?',
+        agentId: info.agentId ?? '?',
+        tool: info.tool ?? '?',
+        nonce,
+      })
+    }
+    return entries.length
+  }
+
+  async #resolveLocked(nonce: string, decision: ApprovalDecision): Promise<boolean> {
+    const key = `approval:${nonce}`
+    const existing = await this.#deps.ledger.lookup(key)
+    if (!existing) {
+      throw new KernelError(ApprovalErrorCodes.APPROVAL_NOT_FOUND, `未受理过的审批：${nonce}`)
+    }
+    const approved = decision === 'approved'
+    const wasPending = existing.status === 'pending'
+    // commit 幂等：已决议时返回首决并落盘不变——回放语义以账本为唯一真相
+    const committed = await this.#deps.ledger.commit(key, approved)
+    const pending = this.#pending.get(nonce)
+    pending?.settle(committed.outcome === true)
+    if (wasPending) {
+      // 只在首次落定时发事件；重复 resolve 幂等静默（账本已保真）
+      this.#deps.bus.emit('v1.approval.resolved', {
+        approvalId: approvalIdOf(nonce),
+        decision: committed.outcome === true ? 'approved' : 'denied',
+        nonce,
+      })
+    }
+    return committed.outcome === true
+  }
+
+  #suspend(request: ApprovalRequest): Promise<boolean> {
+    let settle!: (approved: boolean) => void
+    const settled = new Promise<boolean>((resolve) => {
+      settle = resolve
+    })
+    this.#pending.set(request.nonce, { request, settled, settle })
+    void settled.then(() => this.#pending.delete(request.nonce))
+    this.#deps.bus.emit('v1.approval.requested', {
+      approvalId: approvalIdOf(request.nonce),
+      runId: request.runId,
+      agentId: request.agentId,
+      tool: request.tool,
+      reason: request.reason,
+      nonce: request.nonce,
+    })
+    return settled
+  }
+
+  async #withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.#lock.then(fn, fn)
+    this.#lock = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+}
+
+/** approvalId 由 nonce 派生：崩溃重发同 id，UI 按 nonce 去重天然成立 */
+function approvalIdOf(nonce: string): string {
+  return `appr-${nonce}`
 }
 
 /** 拒绝时工具侧收到的稳定错误（转成工具回喂文本，模型可见） */

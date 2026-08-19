@@ -5,5 +5,6 @@
 export type { KernelEvent, KernelEventHandler } from '@openbot/core'
 export * from './bus/index.js'
 export * from './gateway/index.js'
+export * from './stream-protocol/index.js'
 export * from './auth/index.js'
 export * from './events.js'

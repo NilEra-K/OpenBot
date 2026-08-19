@@ -28,8 +28,34 @@
 
 1. 只绑 127.0.0.1 随机端口；2. preload 注入 bearer token；3. Host 头校验防 DNS rebinding。
 
-## 待填充（P1）
+## WS /stream 帧协议（v1，P2 定案）
 
-- 命令目录：POST /api/* 的请求 / 响应 schema（zod）
-- 事件 payload schema（zod）与错误 code 枚举
-- WS 二进制帧格式与背压语义
+一个 WS binary message = 一个完整协议帧（WS 自带消息边界）。帧头 14 字节 big-endian：
+
+```
+u8 版本(=1) | u8 帧类型 | u32 流 ID | u32 帧序号 | u32 负载长度 | 负载…
+```
+
+| 帧类型 | 值 | 方向 | 说明 |
+|---|---|---|---|
+| OPEN | 0x01 | 双向 | 打开流；负载 JSON `{ kind: 'frames'\|'file', boxId?, meta? }` |
+| DATA | 0x02 | 双向 | 数据块 ≤ 256KB；序号流内连续 |
+| END | 0x03 | 双向 | 正常结束 |
+| ABORT | 0x04 | 双向 | 异常中止；负载 JSON `{ reason? }` |
+| PAUSE | 0x05 | 接收方→发送方 | 背压：暂停指定流（流 ID=0 表示全流） |
+| RESUME | 0x06 | 接收方→发送方 | 恢复；发送方须补发暂停期间入队的块 |
+| ACK | 0x07 | 接收方→发送方 | 确认；seq 字段=已连续收到的最高帧序号 |
+
+- 流 ID 连接内单调分配不复用（0 保留连接级）；OPEN/DATA/END/ABORT 的 seq 从 0 起流内连续，接收方校验；PAUSE/RESUME/ACK 是带外信号不占序。
+- 协议违规（坏帧/序号跳跃/未知流）→ 接收方断连。P2 只回环自测，真实信号源 P3 接入。
+
+## wire 校验与错误 code
+
+- 命令 payload：注册命令时可带 zod schema（`InProcessTransport.register` 第三参），不过 schema → envelope `TRANSPORT_PAYLOAD_INVALID`。
+- 事件 payload：`@openbot/transport` 的 `EventPayloadSchemas`（14 类型，与 core `KernelEventMap` 编译期双向断言防漂移）。
+- 错误 code 目录：命令领域失败按 KernelError code 原样透传；传输层见 `GatewayErrorCodes`/`TransportErrorCodes`/`StreamErrorCodes`（均在 `@openbot/transport` 导出）。
+
+## 待填充（P3）
+
+- WS /stream 真实信号源接入（Box 实况帧、文件传输路由）
+- v1.task / v1.graph 事件族落地（P2 backlog）
