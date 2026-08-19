@@ -15,6 +15,7 @@
     "test:e2e": "pnpm -w build && pnpm build:renderer && playwright test"
   },
   "dependencies": {
+    "@openbot/boxes": "workspace:*",
     "@openbot/coordinator": "workspace:*",
     "@openbot/core": "workspace:*",
     "@openbot/llm": "workspace:*",

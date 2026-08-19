@@ -27,15 +27,33 @@ function scripted(impl: (spec: ProcSpec) => ProcResult | Promise<ProcResult>): {
 const last = (calls: ProcSpec[]): string[] => calls[calls.length - 1]?.command ?? []
 
 describe('WslBoxBackend（脚本化替身）', () => {
-  it('create：发行版即 Box——import 参数序列确定（name/dir/rootfs/version 2），随后初始化工作目录', async () => {
-    const { run, calls } = scripted(() => OK)
+  it('create：发行版即 Box——先查存在（--list UTF-16LE），不存在则 import + 初始化工作目录', async () => {
+    const { run, calls } = scripted((spec) => {
+      if (spec.command.includes('--list')) return { ...OK, stdout: 'Ubuntu\r\n' } // 无同名 Box
+      return OK
+    })
     const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run })
     const box = await backend.create({ image: 'default' })
     expect(box).toBe('box-1')
-    expect(calls[0]?.command).toEqual([
+    expect(calls[0]?.command).toEqual(['wsl', '--list', '--quiet'])
+    expect(calls[0]?.encoding).toBe('utf16le') // 元命令地雷（platforms.md）
+    expect(calls[1]?.command).toEqual([
       'wsl', '--import', `${WSL_BOX_PREFIX}box-1`, `D:/WSL/${WSL_BOX_PREFIX}box-1`, 'C:/r.tar.gz', '--version', '2',
     ])
-    expect(calls[1]?.command).toEqual(['wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--', 'mkdir', '-p', '/work'])
+    expect(calls[2]?.command).toEqual(['wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--', 'mkdir', '-p', '/work'])
+  })
+
+  it('create 幂等：发行版已存在则跳过 import（桌面重启复用持久 Box）', async () => {
+    const { run, calls } = scripted((spec) => {
+      if (spec.command.includes('--list')) return { ...OK, stdout: `Ubuntu\r\n${WSL_BOX_PREFIX}box-1\r\n` }
+      return OK
+    })
+    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run })
+    const box = await backend.create({ image: 'default' })
+    expect(box).toBe('box-1')
+    expect(calls.some((c) => c.command.includes('--import'))).toBe(false)
+    // 工作目录初始化照跑（mkdir -p 幂等，顺带把 Stopped 的发行版拉起）
+    expect(last(calls)).toEqual(['wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--', 'mkdir', '-p', '/work'])
   })
 
   it('import 失败抛 BOX_CREATE_FAILED（stderr 进 message）', async () => {
@@ -177,5 +195,20 @@ describe('WslBoxBackend（真实 WSL2）', { skip: !REAL || !REAL_ROOTFS }, () =
     expect((await backend.list()).map((b) => b.boxId)).toContain('box-1')
     await backend.teardown(box)
     expect((await backend.list()).map((b) => b.boxId)).not.toContain('box-1')
+  }, 300_000)
+
+  it('create 幂等（桌面重启语义）：新实例对同名发行版跳过 import 直接复用，数据保留', async () => {
+    const first = new WslBoxBackend({ rootfs: REAL_ROOTFS, dir: realDir, now: () => 0 })
+    const box1 = await first.create({ image: 'default' })
+    expect(box1).toBe('box-1')
+    await first.fsWrite(box1, '/work/keep.txt', '跨重启保留的工作区文件')
+
+    // 重启语义：内存 Box 表丢失（新实例、id 从 box-1 重数），同名发行版仍在——
+    // 复用而非 import 冲突（桌面第二次启动的硬需求），Box 内数据原样
+    const second = new WslBoxBackend({ rootfs: REAL_ROOTFS, dir: realDir, now: () => 0 })
+    const box2 = await second.create({ image: 'default' })
+    expect(box2).toBe('box-1')
+    expect(await second.fsRead(box2, '/work/keep.txt')).toBe('跨重启保留的工作区文件')
+    await second.teardown(box2)
   }, 300_000)
 })

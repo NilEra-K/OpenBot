@@ -32,6 +32,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@openbot/boxes':
+        specifier: workspace:*
+        version: link:../../packages/boxes
       '@openbot/coordinator':
         specifier: workspace:*
         version: link:../../packages/coordinator

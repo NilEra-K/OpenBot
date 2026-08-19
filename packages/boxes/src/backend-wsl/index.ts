@@ -93,19 +93,26 @@ export class WslBoxBackend implements BoxBackend {
     const boxId = this.#nextBoxId()
     const name = `${WSL_BOX_PREFIX}${boxId}`
     const boxDir = `${this.#dir}/${name}`
-    const r = await this.#run({
-      command: ['wsl', '--import', name, boxDir, this.#rootfs, '--version', '2'],
-      timeoutMs: 10 * 60_000,
-      encoding: 'utf16le',
-    })
-    if (r.exitCode !== 0) {
-      throw new KernelError(
-        BoxesWslErrorCodes.BOX_CREATE_FAILED,
-        `WSL 发行版导入失败（exit ${r.exitCode}）：${r.stderr.trim()}`,
-      )
+    // 跨重启幂等：发行版已存在则复用（Box 持久化真相，与 list() 同源判定）——
+    // 桌面每次启动都为名册 agent 重建 Box，无条件 --import 会在第二次启动时同名冲突
+    if (!(await this.#listNames()).includes(name)) {
+      // --import 不自建父目录（与 --export 同款地雷；实证 exit 4294967295 且 stderr 空）
+      await mkdir(this.#dir, { recursive: true })
+      const r = await this.#run({
+        command: ['wsl', '--import', name, boxDir, this.#rootfs, '--version', '2'],
+        timeoutMs: 10 * 60_000,
+        encoding: 'utf16le',
+      })
+      if (r.exitCode !== 0) {
+        throw new KernelError(
+          BoxesWslErrorCodes.BOX_CREATE_FAILED,
+          `WSL 发行版导入失败（exit ${r.exitCode}）：${(r.stderr || r.stdout).trim()}`,
+        )
+      }
     }
     this.#boxes.set(boxId, { name, spec, dir: boxDir, createdAt: this.#now() })
-    // 初始化工作目录：裸 rootfs 没有预设目录（真实套件实证）；顺带预热发行版（import 后处于 Stopped）
+    // 初始化工作目录：裸 rootfs 没有预设目录（真实套件实证）；顺带预热发行版（import 后处于 Stopped）；
+    // 已存在的发行版同样安全（mkdir -p 幂等，还把 Stopped 的发行版拉起）
     const init = await this.#run({
       command: ['wsl', '-d', name, '--', 'mkdir', '-p', this.#workdir],
       timeoutMs: 120_000,
@@ -168,7 +175,10 @@ export class WslBoxBackend implements BoxBackend {
       encoding: 'utf16le',
     })
     if (r.exitCode !== 0) {
-      throw new KernelError(BoxesWslErrorCodes.BOX_SNAPSHOT_FAILED, `快照导出失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
+      throw new KernelError(
+        BoxesWslErrorCodes.BOX_SNAPSHOT_FAILED,
+        `快照导出失败（exit ${r.exitCode}）：${(r.stderr || r.stdout).trim()}`,
+      )
     }
     return snapshotId
   }
@@ -184,18 +194,17 @@ export class WslBoxBackend implements BoxBackend {
     const box = this.#require(boxId)
     const r = await this.#run({ command: ['wsl', '--unregister', box.name], timeoutMs: 60_000, encoding: 'utf16le' })
     if (r.exitCode !== 0) {
-      throw new KernelError(BoxesErrorCodes.BOX_NOT_FOUND, `发行版注销失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
+      throw new KernelError(
+        BoxesErrorCodes.BOX_NOT_FOUND,
+        `发行版注销失败（exit ${r.exitCode}）：${(r.stderr || r.stdout).trim()}`,
+      )
     }
     this.#boxes.delete(boxId)
   }
 
   async list(): Promise<BoxInstance[]> {
-    // 跨重启恢复真相：发行版存在即 Box 存在（--list 输出 UTF-16LE，解码在 procexec 层）
-    const r = await this.#run({ command: ['wsl', '--list', '--quiet'], encoding: 'utf16le', timeoutMs: 30_000 })
-    const names = r.stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith(WSL_BOX_PREFIX))
+    // 跨重启恢复真相：发行版存在即 Box 存在（前缀过滤——手工发行的 distro 不碰）
+    const names = (await this.#listNames()).filter((n) => n.startsWith(WSL_BOX_PREFIX))
     return names.map((name) => {
       const boxId = name.slice(WSL_BOX_PREFIX.length)
       const known = this.#boxes.get(boxId)
@@ -206,6 +215,15 @@ export class WslBoxBackend implements BoxBackend {
         createdAt: known?.createdAt ?? 0,
       }
     })
+  }
+
+  /** 全量发行版名（--list --quiet；元命令输出 UTF-16LE，解码在 procexec 层） */
+  async #listNames(): Promise<string[]> {
+    const r = await this.#run({ command: ['wsl', '--list', '--quiet'], encoding: 'utf16le', timeoutMs: 30_000 })
+    return r.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l !== '')
   }
 
   #require(boxId: BoxId): WslBox {

@@ -18,6 +18,9 @@ Linux / macOS 后端 P4 进。接口按 caps 设计，永不按「最强后端�
 ## 已知地雷（实现时对照）
 
 - wsl.exe 输出为 UTF-16LE：解析 --list 须按 wide-char 解码
+- **wsl.exe 不自建目录**：`--import` 与 `--export` 的目标目录必须预先存在，否则 exit 4294967295 且
+  stderr 为空（错误细节可能落在 stdout——错误信息取 stderr||stdout 兜底）；backend-wsl 在 import/export
+  前递归建目录（桌面首启 userData/boxes 不存在，实证）
 - Docker Windows 走命名管道，Linux 走 unix socket——端点差异在 boxes 层抽象（我们走 CLI 子进程方案，CLI 直接屏蔽端点差异）
 - **Podman on Windows 的 machine 本身占一个 WSL2 发行版**：与「发行版即 Box」共享同一 vmmem——资源告警按全局视角算，不按后端各自承诺
 - /mnt/c 9P 慢：项目活在 Box 内或 clone 进去，不跨边界热编辑

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 /**
- * 设置视图（prototype.html 迁移，P2 范围）：
+ * 设置视图（prototype.html 迁移，P2 范围 + P3 Step 5 沙箱选择）：
  * - LLM 推理：provider 档案 CRUD（真实命令面；key 密文经 safeStorage 落盘，跨边界无 key 材料——
  *   编辑时留空即保留原密文）；设为主力对管家与全部 agent 下轮生效。
- * - 沙箱后端：呈现 caps 事实声明。权限策略：呈现 Manual 审批闸门现状——不放假开关（内核无对应存储）。
+ * - 沙箱后端：装配事实（当前后端/降级原因/CLI 探测）+ 偏好选择（写 settings，重启生效——
+ *   后端选择是装配期决策不热切换）。docker/podman 未实现前只读呈现（不放假选项）。
+ * - 权限策略：呈现 Manual 审批闸门现状——不放假开关（内核无对应存储）。
  */
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
-import type { ProviderView } from '../stores/kernel'
+import type { ProviderView, SandboxPref } from '../stores/kernel'
 
 const kernel = useKernelStore()
 
@@ -118,6 +120,66 @@ const capsRows = computed(() => {
     { k: '隔离强度', v: caps.isolation },
   ]
 })
+
+// ---- 沙箱后端偏好（写 settings 重启生效；表单值与 stored 分离——未保存改动有提示） ----
+
+interface PrefOption {
+  value: SandboxPref
+  label: string
+  note: string
+  disabled?: boolean
+}
+
+const PREF_OPTIONS: PrefOption[] = [
+  { value: 'auto', label: '自动', note: '择优可用：WSL2 → Docker → Podman → mock' },
+  { value: 'wsl', label: 'WSL2', note: '每 Box 一个发行版（Windows 主力）' },
+  { value: 'mock', label: '模拟', note: '命令返回模拟输出（测试用）' },
+  { value: 'docker', label: 'Docker', note: '待实现（P3 Step 4）', disabled: true },
+  { value: 'podman', label: 'Podman', note: '待实现（P3 Step 4）', disabled: true },
+]
+
+const BACKEND_LABELS: Record<string, string> = {
+  auto: '自动',
+  mock: '模拟',
+  wsl: 'WSL2',
+  docker: 'Docker',
+  podman: 'Podman',
+}
+
+const sandboxChoice = ref<SandboxPref>('auto')
+const sandboxError = ref<string | null>(null)
+/** stored 变化（boot 加载/set 成功）时同步表单值 */
+watch(
+  () => kernel.sandbox,
+  (s) => {
+    if (s) sandboxChoice.value = s.stored
+  },
+  { immediate: true },
+)
+
+const sandboxDirty = computed(() => kernel.sandbox !== null && sandboxChoice.value !== kernel.sandbox.stored)
+
+const applySandbox = async (): Promise<void> => {
+  if (!kernel.sandbox) return
+  const prev = kernel.sandbox.stored
+  try {
+    await kernel.setSandbox(sandboxChoice.value)
+    sandboxError.value = null
+  } catch (err) {
+    sandboxChoice.value = prev // 写入失败回滚（呈现与 settings 真相一致）
+    sandboxError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** 后端显示名 */
+const backendLabel = (id: string): string => BACKEND_LABELS[id] ?? id
+/** 偏好涉及 WSL 且镜像未就绪时引导放置 */
+const wslRelevant = computed(
+  () =>
+    kernel.sandbox !== null &&
+    (kernel.sandbox.preference === 'wsl' || kernel.sandbox.preference === 'auto') &&
+    !kernel.sandbox.rootfsReady,
+)
 </script>
 
 <template>
@@ -183,11 +245,61 @@ const capsRows = computed(() => {
         </div>
       </div>
 
-      <!-- 沙箱后端（caps 事实） -->
+      <!-- 沙箱后端（装配事实 + 偏好选择；plan-p3 Step 5） -->
       <div class="set-sec">沙箱后端</div>
-      <div class="set-sec-note">当前后端的能力声明（caps）——UI 按钮与工具可用性的共同依据。真实后端（WSL2/Docker）接入属 P3。</div>
-      <div v-for="row in capsRows" :key="row.k" class="kv"><span class="k">{{ row.k }}</span><span class="v mono">{{ row.v }}</span></div>
-      <p v-if="!kernel.caps" class="settings-empty">caps 未加载（网关未连接）</p>
+      <div class="set-sec-note">
+        重活进本机沙箱。装配时按「偏好 × 环境探测」选择后端——改动偏好<b>重启后生效</b>（装配期决策，不热切换）；
+        偏好不可用时如实回退 mock（命令返回模拟输出）并注明原因。
+      </div>
+      <template v-if="kernel.sandbox">
+        <div class="kv">
+          <span class="k">当前后端</span>
+          <span class="v mono">
+            {{ backendLabel(kernel.sandbox.backendId) }}<template v-if="kernel.sandbox.reason">（降级）</template>
+          </span>
+        </div>
+        <p v-if="kernel.sandbox.reason" class="sandbox-warn">⚠ {{ kernel.sandbox.reason }}</p>
+        <p v-if="wslRelevant" class="sandbox-warn">
+          WSL 基础镜像未就绪：请把 Ubuntu rootfs 压缩包（tar.gz）放到
+          <span class="mono">{{ kernel.sandbox.rootfsPath }}</span>，或设环境变量 OPENBOT_WSL_ROOTFS 指向已有文件后重启。
+        </p>
+
+        <div class="sandbox-prefs">
+          <label
+            v-for="opt in PREF_OPTIONS"
+            :key="opt.value"
+            class="sandbox-pref"
+            :class="{ 'is-on': sandboxChoice === opt.value, 'is-disabled': opt.disabled }"
+          >
+            <input
+              type="radio"
+              name="sandbox-pref"
+              class="sandbox-pref-radio"
+              :value="opt.value"
+              v-model="sandboxChoice"
+              :disabled="opt.disabled"
+              @change="applySandbox"
+            />
+            <span class="sandbox-pref-label">{{ opt.label }}</span>
+            <span class="sandbox-pref-note">{{ opt.note }}</span>
+          </label>
+        </div>
+        <p v-if="sandboxDirty" class="set-sec-note">偏好已修改——重启应用后生效（当前会话仍运行在 {{ backendLabel(kernel.sandbox.backendId) }}）。</p>
+        <p v-if="sandboxError" class="form-error">{{ sandboxError }}</p>
+
+        <div class="kv"><span class="k">环境探测</span><span class="v"></span></div>
+        <div v-for="p in kernel.sandbox.probes" :key="p.id" class="sandbox-probe">
+          <span class="chip" :class="p.available ? 'chip-success' : ''">{{ backendLabel(p.id) }} · {{ p.available ? '可用' : '不可用' }}</span>
+          <span v-if="!p.available && p.reason" class="sandbox-probe-reason mono">{{ p.reason }}</span>
+        </div>
+
+        <!-- caps 事实（随所选后端变化） -->
+        <div class="kv"><span class="k">能力声明（caps）</span><span class="v"></span></div>
+        <div v-for="row in capsRows" :key="row.k" class="kv kv-sub">
+          <span class="k">{{ row.k }}</span><span class="v mono">{{ row.v }}</span>
+        </div>
+      </template>
+      <p v-else class="settings-empty">沙箱状态未加载（网关未连接）</p>
 
       <!-- 权限策略（呈现现状，不放假开关） -->
       <div class="set-sec">权限策略</div>
@@ -198,7 +310,7 @@ const capsRows = computed(() => {
 
       <!-- 关于 -->
       <div class="set-sec">关于</div>
-      <div class="kv"><span class="k">版本</span><span class="v mono">P2 开发版（v0.0.3+）</span></div>
+      <div class="kv"><span class="k">版本</span><span class="v mono">P3 开发版（v0.0.6+）</span></div>
       <div class="kv"><span class="k">许可</span><span class="v">Apache-2.0 · 净室自研</span></div>
     </div>
   </section>

@@ -37,7 +37,13 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-'))
   const app = await _electron.launch({
     args: ['.'],
-    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_EXTRA_AGENTS: 'worker1' },
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_EXTRA_AGENTS: 'worker1',
+      // 沙箱固定 mock：E2E 不依赖宿主 WSL/Docker 环境（确定性；rootfs/探测也不参与断言路径）
+      OPENBOT_SANDBOX: 'mock',
+    },
   })
   const page = await app.firstWindow()
   page.on('console', (m) => console.log('[page]', m.type(), m.text()))
@@ -59,6 +65,8 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await expect(page.locator('.cfg-row', { hasText: 'E2E mock' })).toBeVisible()
     await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
     await expect(page.locator('.cfg-row.is-primary', { hasText: 'E2E mock' })).toBeVisible()
+    // 沙箱后端：OPENBOT_SANDBOX=mock env 覆盖 → 装配链路落在 mock（不依赖宿主 WSL/Docker）
+    await expect(page.locator('.kv', { hasText: '当前后端' })).toContainText('模拟')
 
     // —— console：发消息 ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()

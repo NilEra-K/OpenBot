@@ -288,3 +288,91 @@
   color: var(--ink);
   text-align: right;
 }
+
+/* ---- 沙箱后端（plan-p3 Step 5） ---- */
+
+.sandbox-warn {
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-weak);
+  border: 1px solid rgba(238, 177, 84, 0.3);
+  border-radius: 7px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.sandbox-prefs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.sandbox-pref {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--bg1);
+  padding: 8px 10px;
+  min-width: 130px;
+  cursor: pointer;
+}
+
+.sandbox-pref:hover {
+  background: var(--bg2);
+}
+
+.sandbox-pref.is-on {
+  border-color: rgba(238, 177, 84, 0.45);
+  background: linear-gradient(0deg, var(--accent-weak), var(--accent-weak)), var(--bg1);
+}
+
+.sandbox-pref.is-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.sandbox-pref-radio {
+  /* radio 本体收进左上角小标（保留可访问性：不 display:none） */
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sandbox-pref-label {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.sandbox-pref-note {
+  font-size: 10.5px;
+  color: var(--ink3);
+  line-height: 1.5;
+}
+
+.sandbox-probe {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.sandbox-probe-reason {
+  font-size: 10.5px;
+  color: var(--ink3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kv-sub .k {
+  font-size: 11.5px;
+}
+
+.kv-sub .v {
+  font-size: 11.5px;
+}

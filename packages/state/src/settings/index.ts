@@ -25,10 +25,15 @@ export interface StoredProviderProfile {
   timeoutMs?: number
 }
 
+/** 沙箱后端偏好：auto = 按探测可用性择优（wsl > docker > podman > mock），不可用如实回退 */
+export type SandboxPreference = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman'
+
 export interface AppSettings {
   version: 1
   defaultProvider?: string
   providers: StoredProviderProfile[]
+  /** 沙箱后端偏好；缺省 auto（可选字段：旧文件读取端兼容，version 不动） */
+  sandbox?: SandboxPreference
 }
 
 /** 展示形状：给 renderer/命令面，绝无 key 材料 */
@@ -170,19 +175,35 @@ export class SettingsStore {
     await this.#save({ ...settings, defaultProvider: name })
   }
 
+  /** 沙箱后端偏好（缺省 auto） */
+  async getSandbox(): Promise<SandboxPreference> {
+    const settings = await this.load()
+    return settings.sandbox ?? 'auto'
+  }
+
+  async setSandbox(pref: SandboxPreference): Promise<void> {
+    const settings = await this.load()
+    await this.#save({ ...settings, sandbox: pref })
+  }
+
   async #save(settings: AppSettings): Promise<void> {
     this.#cache = structuredClone(settings)
     await this.#fs.write(this.#path, `${JSON.stringify(settings, null, 2)}\n`)
   }
 }
 
-/** 解析容错：缺失/损坏/版本不识 → 默认空设置（设置可重建，不值得为此拒启） */
+/** 解析容错：缺失/损坏/版本不识 → 默认空设置（设置可重建，不值得为此拒启）；可选字段透传（读取端兼容） */
 function parseLoose(raw: string | null): AppSettings {
   if (raw === null) return structuredClone(DEFAULT_SETTINGS)
   try {
     const parsed = JSON.parse(raw) as AppSettings
     if (parsed && parsed.version === 1 && Array.isArray(parsed.providers)) {
-      return { version: 1, providers: parsed.providers, ...(parsed.defaultProvider !== undefined ? { defaultProvider: parsed.defaultProvider } : {}) }
+      return {
+        version: 1,
+        providers: parsed.providers,
+        ...(parsed.defaultProvider !== undefined ? { defaultProvider: parsed.defaultProvider } : {}),
+        ...(parsed.sandbox !== undefined ? { sandbox: parsed.sandbox } : {}),
+      }
     }
   } catch {
     // 落入默认

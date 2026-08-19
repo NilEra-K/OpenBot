@@ -108,6 +108,27 @@ export interface ProviderInput {
   proxyUrl?: string
 }
 
+export type SandboxPref = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman'
+
+/** 沙箱后端探测项（v1.sandbox.status 返回） */
+export interface SandboxProbe {
+  id: SandboxPref
+  available: boolean
+  reason?: string
+}
+
+/** 沙箱装配事实（v1.sandbox.status 返回；呈现用，不含任何控制指令） */
+export interface SandboxStatus {
+  preference: SandboxPref
+  stored: SandboxPref
+  backendId: SandboxPref
+  wanted: SandboxPref
+  reason?: string
+  probes: SandboxProbe[]
+  rootfsPath: string
+  rootfsReady: boolean
+}
+
 /** 模块级客户端（非序列化对象不入 state） */
 let client: GatewayClient | null = null
 let unsubscribe: (() => void) | null = null
@@ -134,6 +155,8 @@ export const useKernelStore = defineStore('kernel', {
     /** provider 档案清单（settings 视图；无 key 材料） */
     providers: [] as ProviderView[],
     defaultProvider: null as string | null,
+    /** 沙箱后端装配事实（settings 视图呈现） */
+    sandbox: null as SandboxStatus | null,
     lastSeq: 0,
   }),
   getters: {
@@ -158,6 +181,7 @@ export const useKernelStore = defineStore('kernel', {
         const boxes = await client.call<Array<{ boxId: string; spec: { image: string }; state: BoxCard['state']; createdAt: number }>>('v1.boxes.list')
         this.boxes = boxes.map((b) => ({ boxId: b.boxId, image: b.spec.image, state: b.state, createdAt: b.createdAt }))
         this.caps = await client.call<NonNullable<typeof this.caps>>('v1.boxes.caps')
+        await this.refreshSandbox()
         this.connected = true
       } catch (err) {
         this.bootError = err instanceof Error ? err.message : String(err)
@@ -244,6 +268,15 @@ export const useKernelStore = defineStore('kernel', {
     async removeProvider(name: string): Promise<void> {
       await this.call('v1.settings.removeProvider', { name })
       await this.refreshSettings()
+    },
+    /** 刷新沙箱后端状态（boot 与 settings 视图进入时调用） */
+    async refreshSandbox(): Promise<void> {
+      this.sandbox = await this.call<SandboxStatus>('v1.sandbox.status')
+    },
+    /** 写沙箱偏好（重启生效；成功后刷新 stored 呈现） */
+    async setSandbox(pref: SandboxPref): Promise<void> {
+      await this.call('v1.sandbox.set', { preference: pref })
+      await this.refreshSandbox()
     },
     /**
      * 会话历史懒加载（切换会话时调用一次）：transcript 是持久真相——内核重启后 SSE 事件流为空，

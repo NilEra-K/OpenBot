@@ -58,7 +58,20 @@
   - 测试两层:替身套件(默认,断言 wsl.exe 参数序列/错误语义/前缀过滤)+ 真实套件
     (`OPENBOT_TEST_WSL=1 OPENBOT_TEST_ROOTFS=...`,18s 全链路:create→exec UTF-8→fs 双向→流式→快照→注销)
 - [ ] 4. OCI 容器后端(底座共用,两薄壳):`backend-docker` + `backend-podman`——容器即 Box:`run -d --cpus --memory` / `exec` / `commit` 快照 / `stats --no-stream --format json`;caps 如实(persistent 需卷挂载、resourceLimits ✓、isolation medium);单测注入脚本化 CLI(mock 同构);真实验证分别依赖 Docker Desktop / podman machine
-- [ ] 5. 后端探测与选择:`probe`(wsl --status / docker --version / podman --version + `podman machine inspect` 验 machine 运行态 → 可用性与 caps)→ 事件下发;settings-store 增沙箱后端偏好;桌面/CLI 同一命令面装配(壳等价);boxes 视图后端选择 UI(不可用如实灰显,标注原因)
+- [x] 5. 后端探测与装配选择(WSL 部分;用户裁定「先基于 WSL 开工」):`boxes/probe`(wsl --status / docker version / podman --version,ProcRunner 注入可测)→ `coordinator/chooseBackend` 装配决策(偏好 × 探测 × 实现白名单,依赖铁律:吃 boxes probe + state 偏好,决策只能在装配根)→ 桌面 main 装配 WslBoxBackend;settings-store 沙箱偏好 + `v1.sandbox.status/set` 命令面;settings 视图后端区块(当前后端/降级警示/rootfs 引导/偏好选择重启生效/探测清单);E2E `OPENBOT_SANDBOX=mock` 确定性隔离
+  - 三级诚实降级:未实现(白名单外)→ CLI 不可用 → WSL rootfs 未就绪,全部回 mock 带 reason;
+    auto 择优链 wsl→docker→podman,全不可用落「无可用真实后端」汇总原因(mock 是地基而非错误)
+  - rootfs 查找:env `OPENBOT_WSL_ROOTFS` > `userData/box-rootfs.tar.gz`;Box 目录 `userData/boxes`;
+    偏好 env `OPENBOT_SANDBOX` 覆盖(枚举外值忽略,zod safeParse)供 E2E/演示
+  - **backend-wsl create 跨重启幂等(实证必要)**:`assembleKernel.addAgent` 每次启动都 create,
+    无条件 `--import` 会在桌面第二次启动同名冲突 → create 先 `--list --quiet` 查存在则复用(与 list() 同源判定);
+    真实套件新增「重启语义」用例:新实例、同名发行版、跳过 import、/work 数据保留(8s 通过)
+  - **真机首启实证又一条 wsl.exe 地雷**:`--import` 不自建父目录(userData/boxes 不存在 → exit
+    4294967295 且 stderr 空)→ import 前递归建目录;元命令错误信息改取 stderr||stdout 兜底
+    (platforms.md 地雷区已补记,与 --export 不自建目录并列)
+  - chooseBackend 纯函数单测 12 用例(显式偏好/auto 链/白名单/缺项探测);docker/podman 在设置页
+    只读呈现探测状态(disabled 选项「待实现 P3 Step 4」)——不放假选项
+  - `packages/boxes` index 增 probe 导出;coordinator index 增 sandbox 导出;desktop package.json 补 boxes 依赖
 - [ ] 6. 资源统计与磁盘压力告警:内核定时 stats 轮询 → WS 实况/事件;磁盘压力判定在内核(进协议的派生量归内核)→ 告警事件 → UI 角标;boxes 仪表接真数据(P2 降级项解锁)
 - [ ] 7. 流式双线:llm `openai-compat` stream:true(SSE 增量解析)+ exec 流式 → WS `/stream` 接 renderer;console 打字机与 ctx 三栏面板(P2 原型 #11 标注位)落地
 - [ ] 8. electron-builder:win nsis + portable(asar、图标、userData 迁移注意);打包产物真内核冒烟;`dist` 脚本替换占位
@@ -99,7 +112,11 @@
 
 - `assembleKernel({ backend })` 注入位不变;新增 probe → 可用后端清单 → 偏好选择(设置页 + settings-store)。
 - CLI 与 desktop 共用 probe/选择命令面(解耦纪律 #7:「只有 desktop 能用」即 bug)。
+  **实测落点(2026-08-19)**:probe/chooseBackend/WslBoxBackend 都在内核包内(CLI 可用);
+  本步只接了桌面装配——CLI 侧显式后端参数后补(Step 4/9 顺带),不构成壳不等价(probe 面未暴露命令)。
 - 后端不可用时**诚实降级回 mock**(明确标注 mock 身份,UI 警示条)——永不静默假装真实。
+- 决策归属:chooseBackend 在 coordinator(吃 boxes 的 BackendProbe + state 的 SandboxPreference——
+  state 不许 import boxes 的依赖铁律决定了决策只能放装配根)。
 
 ### 打包(Step 8)
 

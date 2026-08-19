@@ -1,23 +1,29 @@
 /**
- * 桌面装配（plan-p2 Step 6）：真内核进 Electron main——ARCHITECTURE.md §2 装配例外
- * （main 进程可 import coordinator/llm），renderer 业务面零内核 import（只走网关）。
+ * 桌面装配（plan-p2 Step 6 + plan-p3 Step 5）：真内核进 Electron main——ARCHITECTURE.md §2 装配例外
+ * （main 进程可 import coordinator/llm/boxes），renderer 业务面零内核 import（只走网关）。
  *
  * 职责：
  * - assembleKernel：NodeFs → userData/data、真实时钟、watchdog 定时驱动、ManualApprovalGate
+ * - 沙箱后端装配选择（plan-p3 Step 5）：偏好（settings，env OPENBOT_SANDBOX 覆盖供 E2E）× CLI 探测
+ *   × 实现白名单 → chooseBackend；wsl 时 WslBoxBackend（rootfs 落 userData），否则 mock 诚实降级
  * - 环回网关（随机端口 + 一次性 token，经 ipc → preload → renderer 内存链路，不落盘）
  * - settings 命令面 + provider 热切换（key 密文经 safeStorage；系统加密不可用时 base64 降级并标前缀）
  * - 崩溃恢复：审批账本 pending 项重发 requested 事件（UI 重新弹窗）
  */
 import { app, safeStorage } from 'electron'
 import { z } from 'zod'
-import { assembleKernel } from '@openbot/coordinator'
-import type { AssembledKernel } from '@openbot/coordinator'
+import { stat } from 'node:fs/promises'
+import { assembleKernel, chooseBackend } from '@openbot/coordinator'
+import type { AssembledKernel, ChooseResult } from '@openbot/coordinator'
 import { startGateway } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import { NodeFs, SettingsStore } from '@openbot/state'
+import type { SandboxPreference } from '@openbot/state'
 import { LlmError, OpenAiCompatProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
 import { ManualApprovalGate } from '@openbot/runner'
+import { MockBoxBackend, WslBoxBackend, probeAll, runProcess } from '@openbot/boxes'
+import type { BackendProbe, BoxBackend } from '@openbot/boxes'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
 
@@ -83,6 +89,22 @@ const resolveSchema = z.object({
   nonce: z.string().min(1),
   decision: z.enum(['approved', 'denied']),
 })
+const sandboxPrefSchema = z.enum(['auto', 'mock', 'wsl', 'docker', 'podman'])
+const sandboxSetSchema = z.object({ preference: sandboxPrefSchema })
+/** 沙箱装配事实（status 命令与 UI 呈现的单一来源；main 内存态，重启随装配重算） */
+export interface SandboxStatus {
+  /** 生效偏好（env 覆盖后的值——装配决策用的就是它） */
+  preference: SandboxPreference
+  /** 持久化偏好（settings.json 里的值；与 preference 不等即存在 env 覆盖） */
+  stored: SandboxPreference
+  /** 装配选择结果（backendId/reason） */
+  chosen: ChooseResult
+  /** CLI 探测结果（设置页后端清单） */
+  probes: BackendProbe[]
+  /** WSL 基础镜像查找路径与就绪与否（未就绪时 UI 引导用户放置） */
+  rootfsPath: string
+  rootfsReady: boolean
+}
 
 export interface DesktopKernel {
   readonly kernel: AssembledKernel
@@ -90,21 +112,61 @@ export interface DesktopKernel {
   readonly settings: SettingsStore
   readonly provider: SwitchableChatProvider
   readonly approvalGate: ManualApprovalGate
+  readonly sandbox: SandboxStatus
   dispose(): Promise<void>
+}
+
+/** 文件存在性（rootfs 是 GB 级二进制——FsAdapter.read 会整读成串，main 装配层直接 stat） */
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** 装配桌面内核（app ready 后调用；safeStorage 依赖 ready 状态） */
 export async function assembleDesktop(): Promise<DesktopKernel> {
   // NodeFs 路径约定 posix 风格（Windows 同样接受 '/'）
-  const dataRoot = `${app.getPath('userData')}/data`.replaceAll('\\', '/')
+  const userDataRoot = app.getPath('userData').replaceAll('\\', '/')
+  const dataRoot = `${userDataRoot}/data`
   const fs = new NodeFs()
   const settings = new SettingsStore({ fs, root: dataRoot, encrypt: encryptKey, decrypt: decryptKey })
   const provider = new SwitchableChatProvider()
+
+  // ---- 沙箱后端选择（plan-p3 Step 5）：偏好 × 探测 × 实现白名单 → 诚实降级 ----
+  // env OPENBOT_SANDBOX 覆盖持久化偏好（E2E/演示确定性：mock 隔离真实子系统）；枚举外值忽略
+  const envPref = sandboxPrefSchema.safeParse(process.env.OPENBOT_SANDBOX)
+  const preference = envPref.success ? envPref.data : await settings.getSandbox()
+  // rootfs 查找顺序：env OPENBOT_WSL_ROOTFS > userData/box-rootfs.tar.gz
+  const rootfsPath = process.env.OPENBOT_WSL_ROOTFS ?? `${userDataRoot}/box-rootfs.tar.gz`
+  const rootfsReady = await fileExists(rootfsPath)
+  const probes = await probeAll(runProcess)
+  const chosen = chooseBackend(preference, probes, {
+    wslRootfs: rootfsReady,
+    // docker/podman 属 Step 4（OCI 后端）：CLI 在也不选——诚实降级带原因
+    implemented: ['mock', 'wsl'],
+  })
+  const backend: BoxBackend =
+    chosen.backendId === 'wsl'
+      ? new WslBoxBackend({ rootfs: rootfsPath, dir: `${userDataRoot}/boxes`, now: Date.now })
+      : new MockBoxBackend({ now: Date.now })
+  // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
+  const sandboxStatus: SandboxStatus = {
+    preference,
+    stored: await settings.getSandbox(),
+    chosen,
+    probes,
+    rootfsPath,
+    rootfsReady,
+  }
 
   let approvalGate!: ManualApprovalGate
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
+    backend,
     // 真实时钟：确定性断言只存在于内核测试与 CLI（plan-p2 风险与地雷）
     approvalGateFactory: (deps) => {
       approvalGate = new ManualApprovalGate(deps)
@@ -165,6 +227,22 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     .register('v1.approval.pending', async () => approvalGate.pending())
     // caps 驱动 UI：按钮渲染依据后端能力声明（永不出现「UI 有按钮但后端不支持」）
     .register('v1.boxes.caps', async () => kernel.backend.caps())
+    // 沙箱后端：状态呈现 + 偏好写入（重启生效——后端选择是装配期决策，不热切换）
+    .register('v1.sandbox.status', async () => ({
+      preference: sandboxStatus.preference,
+      stored: await settings.getSandbox(),
+      backendId: sandboxStatus.chosen.backendId,
+      wanted: sandboxStatus.chosen.wanted,
+      ...(sandboxStatus.chosen.reason !== undefined ? { reason: sandboxStatus.chosen.reason } : {}),
+      probes: sandboxStatus.probes,
+      rootfsPath: sandboxStatus.rootfsPath,
+      rootfsReady: sandboxStatus.rootfsReady,
+    }))
+    .register('v1.sandbox.set', async (payload) => {
+      const { preference: pref } = sandboxSetSchema.parse(payload)
+      await settings.setSandbox(pref)
+      return { ok: true, restartRequired: true }
+    }, sandboxSetSchema)
 
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })
@@ -183,7 +261,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const replayed = await approvalGate.replayPending()
   kernel.startWatchdog()
 
-  console.log(`[openbot] 内核就绪：网关 127.0.0.1:${gateway.port}；provider ${provider.configured ? '已配置' : '空缺（settings 配置后生效）'}；恢复审批 ${replayed} 条`)
+  const sandboxNote =
+    chosen.backendId === chosen.wanted || chosen.wanted === 'mock'
+      ? chosen.backendId
+      : `${chosen.backendId}（${chosen.reason ?? '降级'}）`
+  console.log(
+    `[openbot] 内核就绪：网关 127.0.0.1:${gateway.port}；provider ${provider.configured ? '已配置' : '空缺（settings 配置后生效）'}；沙箱 ${sandboxNote}；恢复审批 ${replayed} 条`,
+  )
 
   return {
     kernel,
@@ -191,6 +275,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     settings,
     provider,
     approvalGate,
+    sandbox: sandboxStatus,
     async dispose() {
       kernel.stopWatchdog()
       await gateway.close()
