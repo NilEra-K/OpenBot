@@ -82,6 +82,60 @@ describe('MockBoxBackend', () => {
     ])
     expect(result).toEqual({ exitCode: 0, stdout: 'line1\nline2\n', stderr: 'warn\n' })
   })
+
+  it('openShell 回显假终端：提示符/键入回显/假输出/exit 退出（E2E 全链路的地基）', async () => {
+    const backend = new MockBoxBackend()
+    const box = await backend.create({ image: 'default' })
+    expect(backend.caps().interactive).toBe(true)
+    const shell = await backend.openShell(box)
+    const out: string[] = []
+    shell.onData((t) => out.push(t))
+    const exits: Array<number | null> = []
+    shell.onExit((code) => exits.push(code))
+    const flush = async (): Promise<void> => {
+      for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0))
+    }
+    await flush()
+    // 开场提示（回显式假终端的诚实身份声明）
+    expect(out.join('')).toContain('mock shell')
+    shell.write('ls /work\r')
+    await flush()
+    const text = out.join('')
+    expect(text).toContain('ls /work') // 键入回显（真 PTY 由远端 bash 做，mock 自己做）
+    expect(text).toContain('mock: ls /work') // 「执行」假输出
+    expect(text).toContain('$ ') // 新提示符
+    // exit 命令：正常退出
+    shell.write('exit\r')
+    await flush()
+    expect(exits).toEqual([0])
+    // close 幂等；退出后 write 静默丢弃
+    shell.close()
+    shell.write('anything\r')
+    await flush()
+    expect(exits).toEqual([0])
+  })
+
+  it('openShell 退格擦除（\\u007f → \\b 空格 \\b）与 BOX_NOT_FOUND', async () => {
+    const backend = new MockBoxBackend()
+    const box = await backend.create({ image: 'default' })
+    const shell = await backend.openShell(box)
+    const out: string[] = []
+    shell.onData((t) => out.push(t))
+    const flush = async (): Promise<void> => {
+      for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0))
+    }
+    await flush()
+    out.length = 0
+    shell.write('ab')
+    shell.write('\u007f')
+    shell.write('c\r')
+    await flush()
+    const text = out.join('')
+    expect(text).toContain('ac\r\n') // 退格吃掉 b 后回车
+    expect(text).not.toContain('abc')
+    expect(text).toContain('\b \b') // 擦除序列
+    await expect(backend.openShell('box-9')).rejects.toMatchObject({ code: 'BOX_NOT_FOUND' })
+  })
 })
 
 describe('BoxRegistry', () => {

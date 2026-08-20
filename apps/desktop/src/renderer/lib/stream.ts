@@ -16,9 +16,9 @@ const FRAME_ABORT = 0x04
 
 const HEADER_BYTES = 14
 
-/** OPEN 负载 JSON（hub 侧约定：kind:'frames' 的 run 实况流） */
+/** OPEN 负载 JSON（hub 侧约定：kind:'frames' 的 run 实况流；kind:'pty' 的交互会话流） */
 export interface RunStreamOpenMeta {
-  kind: 'frames'
+  kind: 'frames' | 'pty'
   meta?: {
     agentId: string
     runId: string
@@ -29,6 +29,8 @@ export interface RunStreamOpenMeta {
     boxId?: string
     /** llm 流：轮次序号 */
     round?: number
+    /** pty 流：会话标识（kind:'pty' 时存在；键入走命令面 shellWrite） */
+    shellId?: string
   }
 }
 
@@ -42,6 +44,10 @@ export interface StreamClientHandlers {
   onOpen: (meta: RunStreamOpenMeta['meta']) => void
   onChunk: (meta: { agentId: string; runId: string; stream: 'llm' | 'exec' }, chunk: RunStreamChunk) => void
   onEnd: (meta: { agentId: string; runId: string; stream: 'llm' | 'exec' }, reason?: string) => void
+  /** pty 流（可选）：会话开流（pty 流的 meta 只有 shellId/boxId，无 agentId/runId） */
+  onPtyOpen?: (meta: { shellId: string; boxId: string }) => void
+  onPtyData?: (meta: { shellId: string; boxId: string }, text: string) => void
+  onPtyEnd?: (meta: { shellId: string; boxId: string }) => void
 }
 
 export interface StreamClient {
@@ -55,6 +61,12 @@ interface StreamRecord {
   stream: 'llm' | 'exec'
 }
 
+/** pty 流归属（OPEN 登记，END 除名） */
+interface PtyRecord {
+  shellId: string
+  boxId: string
+}
+
 /** 连接 WS /stream：断线自动重连（3s 退避）；返回关闭句柄 */
 export function connectRunStreams(
   endpoint: { port: number; token: string },
@@ -62,8 +74,9 @@ export function connectRunStreams(
 ): StreamClient {
   let closed = false
   let socket: WebSocket | null = null
-  /** streamId → 归属（OPEN 登记，END/ABORT 除名） */
+  /** streamId → 归属（OPEN 登记，END/ABORT 除名）；run 流与 pty 流分表 */
   const streams = new Map<number, StreamRecord>()
+  const ptys = new Map<number, PtyRecord>()
 
   const connect = (): void => {
     if (closed) return
@@ -80,6 +93,7 @@ export function connectRunStreams(
     }
     socket.onclose = () => {
       streams.clear()
+      ptys.clear()
       if (!closed) setTimeout(connect, 3_000)
     }
   }
@@ -88,9 +102,27 @@ export function connectRunStreams(
     if (frame.type === FRAME_OPEN) {
       const meta = parseJson(frame.payload) as RunStreamOpenMeta
       const m = meta?.meta
+      if (meta?.kind === 'pty' && m && typeof m.shellId === 'string' && typeof m.boxId === 'string') {
+        ptys.set(frame.streamId, { shellId: m.shellId, boxId: m.boxId })
+        handlers.onPtyOpen?.({ shellId: m.shellId, boxId: m.boxId })
+        return
+      }
       if (m && typeof m.agentId === 'string' && typeof m.runId === 'string' && (m.stream === 'llm' || m.stream === 'exec')) {
         streams.set(frame.streamId, { agentId: m.agentId, runId: m.runId, stream: m.stream })
         handlers.onOpen(m)
+      }
+      return
+    }
+    const pty = ptys.get(frame.streamId)
+    if (pty) {
+      if (frame.type === FRAME_DATA) {
+        const chunk = parseJson(frame.payload) as RunStreamChunk | null
+        if (chunk && typeof chunk.t === 'string') handlers.onPtyData?.(pty, chunk.t)
+        return
+      }
+      if (frame.type === FRAME_END || frame.type === FRAME_ABORT) {
+        ptys.delete(frame.streamId)
+        handlers.onPtyEnd?.(pty)
       }
       return
     }

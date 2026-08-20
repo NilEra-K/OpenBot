@@ -16,6 +16,8 @@ import { AutoApprovalGate, execTool, gated, hostFetchTool, sendMessageTool, Tool
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
 import { StreamHub } from '../stream-hub/index.js'
+import { ShellService } from '../shell-service/index.js'
+import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 
 export interface AssembleOptions {
@@ -67,6 +69,8 @@ export interface AssembledKernel {
   readonly messaging: A2aService
   /** run 实况汇聚（壳把 gateway 的 WS 会话 attach 进来；流是实况不进事件总线） */
   readonly streamHub: StreamHub
+  /** 交互式 shell 会话（PTY）管理与流分发（gateway 回调与 streamHub 并联 attach） */
+  readonly shellService: ShellService
   readonly schedulers: ReadonlyMap<string, AgentScheduler>
   /** 注册 agent：名册 + 调度器 + 专属 Box + turn 引擎接线 */
   addAgent(registration: AgentRegistration): Promise<void>
@@ -123,6 +127,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     new AutoApprovalGate({ bus, ledger, now, nextApprovalId })
   // run 实况汇聚：llm 增量与 exec 输出同型汇入 hub（无 WS 订阅者时丢弃——turn 不受渲染层影响）
   const streamHub = new StreamHub()
+  // 交互式 shell（PTY）：用户亲手操作，不经 run/审批/预算——与 agent exec 路线完全分离
+  const shellService = new ShellService({ backend })
   const onStream = (event: Parameters<StreamHub['handle']>[0]): void => streamHub.handle(event)
   const tools = new ToolRegistry()
     .register(execTool({ backend, bus, onStream }))
@@ -177,6 +183,33 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       const snapshotId = await backend.snapshot(boxId)
       return { boxId, snapshotId }
     })
+    // ---- 交互式 shell（PTY，plan-p3 Step 10）：键入走命令面（每键几字节），输出走 WS /stream ----
+    .register(
+      'v1.boxes.shellOpen',
+      async (payload) => {
+        const { boxId, cols, rows } = shellOpenSchema.parse(payload)
+        return shellService.open(boxId, { ...(cols !== undefined ? { cols } : {}), ...(rows !== undefined ? { rows } : {}) })
+      },
+      shellOpenSchema,
+    )
+    .register(
+      'v1.boxes.shellWrite',
+      async (payload) => {
+        const { shellId, data } = shellWriteSchema.parse(payload)
+        shellService.write(shellId, data)
+        return { ok: true }
+      },
+      shellWriteSchema,
+    )
+    .register(
+      'v1.boxes.shellClose',
+      async (payload) => {
+        const { shellId } = shellIdSchema.parse(payload)
+        shellService.close(shellId)
+        return { ok: true }
+      },
+      shellIdSchema,
+    )
     .register('v1.scheduler.stats', async (payload) => {
       const scheduler = schedulers.get((payload as { agentId: string }).agentId)
       if (!scheduler) throw new AgentSchedulerMissingError((payload as { agentId: string }).agentId)
@@ -200,6 +233,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     registry,
     messaging,
     streamHub,
+    shellService,
     schedulers,
     async addAgent(registration) {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
@@ -262,3 +296,17 @@ export class AgentSchedulerMissingError extends KernelError {
     this.name = 'AgentSchedulerMissingError'
   }
 }
+
+// ---- shell 命令族 wire 校验（zod；与 desktop 命令面同一模式） ----
+
+const shellOpenSchema = z.object({
+  boxId: z.string().min(1),
+  cols: z.number().int().positive().optional(),
+  rows: z.number().int().positive().optional(),
+})
+const shellWriteSchema = z.object({
+  shellId: z.string().min(1),
+  /** 键入（含控制字符与转义序列，原样进 PTY） */
+  data: z.string(),
+})
+const shellIdSchema = z.object({ shellId: z.string().min(1) })

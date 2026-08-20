@@ -1,6 +1,7 @@
 /**
- * 子进程执行底座：wsl.exe / docker / podman CLI 共用——spawn 封装、超时 kill
- * （zombie 契约：执行必须有界）、流式输出回调、退出码捕获。
+ * 子进程执行底座：wsl.exe / docker / podman CLI 共用。
+ * 两类语义分开：runProcess 是有界执行（超时 kill——zombie 契约：执行必须有界）；
+ * spawnShellProcess 是无界交互（PTY 会话——边界是用户亲手关闭，退出走回调不走 Promise）。
  * 解码契约：命令输出默认 utf8 字节直传（Linux 侧进程输出是 UTF-8）；
  * wsl.exe 自身元信息输出（--list/--status）是 UTF-16LE，由调用方指定 encoding。
  * 参考：docs/platforms.md 地雷（wsl.exe UTF-16LE）、ARCHITECTURE.md §6 CLI 即接口。
@@ -119,3 +120,63 @@ const runProcess: ProcRunner = (spec) =>
   })
 
 export { runProcess }
+
+// ---------------------------------------------------------------------------
+// 长驻交互进程（PTY 会话底座）：stdin 可写、输出流式解码、退出回调
+// ---------------------------------------------------------------------------
+
+/** 长驻交互进程句柄（backend.openShell 的进程底座；注入替身可测 argv 与转发） */
+export interface ShellProcess {
+  /** 键入直写 stdin */
+  write(text: string): void
+  /** 输出增量（stdout/stderr 合流，UTF-8 跨块收敛） */
+  onOutput(cb: (text: string) => void): void
+  /** 进程退出（exit / 被杀 / spawn 失败均为 code|null） */
+  onExit(cb: (code: number | null) => void): void
+  /** 杀进程（幂等） */
+  kill(): void
+}
+
+/** 可注入的交互进程启动器（默认 spawnShellProcess；测试注入替身断言 argv） */
+export type ShellSpawner = (command: string[]) => ShellProcess
+
+/** spawn 长驻交互进程：无超时、无聚合（与 runProcess 的有界语义相反） */
+export function spawnShellProcess(command: string[]): ShellProcess {
+  const file = command[0]
+  if (file === undefined) throw new Error('procexec: command 不能为空')
+  const child = spawn(file, command.slice(1), { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  const decoder = new TextDecoder('utf8')
+  const outputCbs = new Set<(text: string) => void>()
+  const exitCbs = new Set<(code: number | null) => void>()
+  let exited = false
+  const finish = (code: number | null): void => {
+    if (exited) return
+    exited = true
+    const rest = decoder.decode() // flush 多字节残留
+    if (rest !== '') for (const cb of outputCbs) cb(rest)
+    for (const cb of exitCbs) cb(code)
+  }
+  const feed = (buf: Buffer): void => {
+    const text = decoder.decode(buf, { stream: true })
+    if (text !== '') for (const cb of outputCbs) cb(text)
+  }
+  child.stdout?.on('data', feed)
+  // 交互会话 stderr 是 script 自身错误（罕见）——合流喂输出不分流（PTY 语义本就单流）
+  child.stderr?.on('data', feed)
+  child.on('close', (code) => finish(code))
+  child.on('error', () => finish(null)) // spawn 失败（ENOENT 等）：close 可能不再触发
+  return {
+    write(text) {
+      if (!child.stdin?.destroyed) child.stdin?.write(text)
+    },
+    onOutput(cb) {
+      outputCbs.add(cb)
+    },
+    onExit(cb) {
+      exitCbs.add(cb)
+    },
+    kill() {
+      child.kill()
+    },
+  }
+}

@@ -97,11 +97,16 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await expect(screen.filter({ hasText: 'mock: ls /work' })).toBeVisible()
     await expect(page.locator('.think', { hasText: '目录是空的' })).toBeVisible()
 
-    // —— Box 操作台（VMware 控制台式大屏）：点屏幕进入、返回关闭 ——
+    // —— Box 操作台：PTY 交互终端（mock 回显假终端）——点屏幕进入，键入回显，返回关闭即杀会话 ——
     await page.getByRole('button', { name: /^进入 box-\d+ 操作台$/ }).click()
     const ops = page.locator('.boxops')
     await expect(ops.locator('.bo-title')).toHaveText(/^box-\d+$/)
-    await expect(ops.locator('.box-term').filter({ hasText: '$ ls /work' })).toBeVisible()
+    await expect(ops.locator('.xterm')).toBeVisible({ timeout: 15_000 })
+    // 开场提示经完整链路到达：backend mock → ShellService pty 流 → WS → term.write
+    await expect(ops.locator('.bterm')).toContainText('mock shell', { timeout: 15_000 })
+    await ops.locator('.bterm').click()
+    await page.keyboard.type('echo OPENBOT_PTY\r')
+    await expect(ops.locator('.bterm')).toContainText('mock: echo OPENBOT_PTY', { timeout: 15_000 })
     await ops.getByRole('button', { name: '返回' }).click()
     await expect(ops).toHaveCount(0)
 

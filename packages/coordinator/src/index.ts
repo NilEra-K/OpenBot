@@ -5,6 +5,7 @@
 export * from './assemble/index.js'
 export * from './sandbox/index.js'
 export * from './stream-hub/index.js'
+export * from './shell-service/index.js'
 export * from './carriers/inproc.js'
 export * from './carriers/utility.js'
 export * from './supervise/index.js'

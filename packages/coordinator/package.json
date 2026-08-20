@@ -17,6 +17,7 @@
     "@openbot/boxes": "workspace:*",
     "@openbot/messaging": "workspace:*",
     "@openbot/runner": "workspace:*",
-    "@openbot/transport": "workspace:*"
+    "@openbot/transport": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

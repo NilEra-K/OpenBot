@@ -108,6 +108,7 @@
 }
 
 .bo-screen {
+  position: relative; /* BoxTerm（交互终端）的定位上下文 */
   flex: 1;
   min-height: 0;
   border: 1px solid var(--line-strong);

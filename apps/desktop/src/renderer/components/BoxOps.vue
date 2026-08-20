@@ -1,25 +1,29 @@
 <script setup lang="ts">
 /**
  * Box 操作台（prototype.html boxops 迁移）：VMware 控制台式大屏——同一块显示器的放大视图。
- * bo-bar：返回 / 标题 / 实况 chip / 快照（caps 驱动）；bo-screen：Box 终端实况大屏。
- * 一期为合格的显示部分：如实呈现 Box 内内容；键鼠接管（PTY）与图形界面画面属后续版本（诚实标注）。
+ * bo-bar：返回 / 标题 / 实况 chip / 快照（caps 驱动）；bo-screen：caps.interactive 时是
+ * PTY 交互终端（键鼠直送 Box 内 bash），否则退回实况行视图（诚实降级，永不放假终端）。
+ * 打开即起会话、关闭即杀（不留后台 shell）。
  */
 import { computed, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import BoxScreen from './BoxScreen.vue'
+import BoxTerm from './BoxTerm.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
 
 const boxId = computed(() => ui.boxOps)
 
-/** 该 Box 的屏幕内容（按 Box 过滤——操作台的归属单位是 Box 而非 agent） */
+/** 该 Box 的屏幕内容（按 Box 过滤——操作台的归属单位是 Box 而非 agent；交互终端模式的对照降级视图） */
 const screenBlocks = computed(() =>
   boxId.value === null ? [] : kernel.streams.filter((s) => s.boxId === boxId.value).slice(-30),
 )
 
 const live = computed(() => screenBlocks.value.some((b) => b.state === 'live'))
+/** 交互终端（PTY）：caps 驱动——按钮/入口永不背离后端能力 */
+const canInteract = computed(() => kernel.caps?.interactive === true)
 const canSnapshot = computed(() => kernel.caps?.snapshot === true)
 const snapshotNote = ref<string | null>(null)
 const snapshotting = ref(false)
@@ -44,8 +48,9 @@ const snapshot = async (): Promise<void> => {
     <div class="bo-bar">
       <button class="btn-ghost bo-back" title="返回" aria-label="返回" @click="ui.closeBoxOps()">←</button>
       <span class="bo-title mono">{{ boxId }}</span>
-      <span class="chip"><span class="stat-dot" :class="{ working: live }"></span>{{ live ? '屏幕实况中' : '屏幕空闲' }}</span>
-      <span class="bo-meta mono">终端画面 · 显示部分</span>
+      <span v-if="canInteract" class="chip"><span class="stat-dot working"></span>交互终端</span>
+      <span v-else class="chip"><span class="stat-dot" :class="{ working: live }"></span>{{ live ? '屏幕实况中' : '屏幕空闲' }}</span>
+      <span class="bo-meta mono">{{ canInteract ? '终端远程控制 · PTY' : '终端画面 · 显示部分' }}</span>
       <div class="bo-actions">
         <span v-if="snapshotNote" class="bo-meta">{{ snapshotNote }}</span>
         <button v-if="canSnapshot" class="btn-ghost" :disabled="snapshotting" @click="snapshot">
@@ -54,10 +59,16 @@ const snapshot = async (): Promise<void> => {
       </div>
     </div>
     <div class="bo-screen">
-      <BoxScreen :blocks="screenBlocks" />
+      <BoxTerm v-if="canInteract && boxId !== null" :key="boxId" :box-id="boxId" />
+      <BoxScreen v-else :blocks="screenBlocks" />
     </div>
     <div class="bo-hint">
-      实况显示——Box 内命令与输出直接呈现，不出本机；键盘接管（PTY 终端）与图形界面画面属后续版本
+      <template v-if="canInteract">
+        终端远程控制——键盘直送 Box 内 bash（vim/top 可用，Ctrl+C 同真终端）；终端尺寸固定 100×30（不随窗口变，需改尺寸可 shell 内 stty）
+      </template>
+      <template v-else>
+        实况显示——Box 内命令与输出直接呈现，不出本机；键盘接管（PTY 终端）与图形界面画面属后续版本
+      </template>
     </div>
   </div>
 </template>

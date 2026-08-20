@@ -107,6 +107,30 @@
     win-controls 同款模式);E2E 合成点击绕过 drag 判定测不出,地雷记录在 platforms.md
 - [ ] 8. electron-builder:win nsis + portable(asar、图标、userData 迁移注意);打包产物真内核冒烟;`dist` 脚本替换占位
 - [ ] 9. 验收:真实后端 E2E 套件(`OPENBOT_E2E_BACKEND=wsl|docker|podman` 选择性跑,默认 mock 不变);**真实 Box 内「改项目→构建」演示(fixture 项目:patch→build→diff 回读)产出 diff**;三命令全绿
+- [x] 10. **PTY 终端远程控制(2026-08-20 用户裁定从 P4 提前,插队在 Step 8 打包前实施)**:操作台大屏从「纯显示」升级为终端级交互——用户亲手在 Box 内敲命令;agent 的 exec 路线(run/审批/预算)完全不涉及
+  - **实测已证(2026-08-20,openbot-box-box-1 真机)**:rootfs 自带 script/stty/bash;`script -qec bash /dev/null`
+    经 wsl.exe 管道=完整 PTY 语义(bash 提示符/bracketed-paste `\e[?2004h`/xterm 标题序列/ls 颜色/
+    键入即时回显零缓冲)——**PTY 在 Linux 侧,Windows 侧零原生模块**;初始尺寸 0 0 须设(经
+    `script -c "stty rows R cols C; exec bash"` 注入,不污染屏幕)
+  - boxes:`BoxBackend` 增可选 `openShell()`(会话句柄 write/onData/onExit/close)+ caps 增 `interactive`;
+    backend-wsl 用 procexec spawn script 包裹 bash;mock 对称实现回显式假终端(CI/E2E 零沙箱依赖不动摇)
+  - 协议:命令面新增 `v1.boxes.shellOpen/Write/Close`(zod 目录)——键入走环回 HTTP(每键几字节
+    ~1ms 无感);输出复用 WS /stream,OPEN meta 的 kind 扩 `'pty'`(流 ID 仍内核单向开流不撞——
+    StreamSession 流 ID 两侧同源分配,renderer 侧永不 openStream)
+  - coordinator:shell 会话表(open/close 生命周期、退出收流发 END)+ StreamHub 挂流
+  - renderer:引 `@xterm/xterm`(纯 JS 零原生依赖);BoxOps 的 bo-screen 在 `caps.interactive` 时挂
+    xterm.js(onData → POST write;pty 流 → term.write);不可交互时保持 BoxScreen 行视图(诚实降级)
+  - **三个边界裁定**:一期固定终端尺寸 100×30(管道方案无 TIOCSWINSZ,中途 stty 注入会干扰运行中
+    vim/top——不跟窗口 resize,界面诚实标注,用户可 shell 内自行 stty);ctx 预览屏保持显示语义
+    (PTY 落点只在操作台大屏);开操作台=起会话、关操作台/退出 bash=杀会话,不留后台会话
+  - 实施(2026-08-20):procexec 增 spawnShellProcess(长驻交互与 runProcess 有界执行语义分开——
+    zombie 契约只约束后者,PTY 的边界是用户亲手关闭);backend-wsl 尺寸钳制 10~500/4~200(防 0 0);
+    mock 回显终端**同步回调+注册前缓冲回放**(实测教训:queueMicrotask 开场提示会在 onData 注册前
+    触发而丢失——await 恢复晚于微任务);coordinator `ShellService`(attach 与 streamHub 并联、
+    惰性 prune、dispose 杀全部——桌面 will-quit 接线);renderer `BoxTerm.vue` 竞态解法=pty 事件按
+    boxId 过滤而非 shellId(WS 事件可先于 shellOpen 的 HTTP 响应到达,先订阅后 open 开场不丢);
+    caps.interactive 驱动 BoxOps 切换(xterm 终端/行视图诚实降级);E2E 断言 xterm 挂载+键盘键入
+    mock 回显闭环;183 单测+E2E 全绿
 
 ## 设计要点(开工前逐条细化,先记已知决策)
 

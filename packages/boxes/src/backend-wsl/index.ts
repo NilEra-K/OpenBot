@@ -8,8 +8,8 @@
  */
 import { KernelError } from '@openbot/core'
 import { mkdir } from 'node:fs/promises'
-import { runProcess } from '../procexec/index.js'
-import type { ProcRunner } from '../procexec/index.js'
+import { runProcess, spawnShellProcess } from '../procexec/index.js'
+import type { ProcRunner, ShellSpawner } from '../procexec/index.js'
 import { BoxesErrorCodes } from '../types.js'
 import type {
   BoxBackend,
@@ -20,6 +20,8 @@ import type {
   BoxStats,
   ExecResult,
   ExecSpec,
+  ShellOpenOptions,
+  ShellSession,
   SnapshotId,
 } from '../types.js'
 
@@ -29,6 +31,8 @@ export const WSL_BOX_CAPS: BoxCaps = {
   headless: true,
   resourceLimits: false,
   isolation: 'low',
+  // PTY：Box 内 script 分配真终端（2026-08-20 实测——bash 全套 readline/颜色/转义序列存活）
+  interactive: true,
 }
 
 /** WSL 发行版名前缀（list() 据此识别我们的 Box；手工发行的 distro 不碰） */
@@ -49,6 +53,8 @@ export interface WslBoxBackendOptions {
   snapshotDir?: string
   /** 子进程执行器注入（默认真实 spawn；测试注入脚本化替身） */
   run?: ProcRunner
+  /** 交互进程启动器注入（默认真实 spawn；测试注入替身断言 argv） */
+  spawnShell?: ShellSpawner
   now?: () => number
   nextBoxId?: () => BoxId
   /** Box 内默认工作目录（exec cwd 缺省值） */
@@ -68,6 +74,7 @@ export class WslBoxBackend implements BoxBackend {
   readonly #dir: string
   readonly #snapshotDir: string
   readonly #run: ProcRunner
+  readonly #spawnShell: ShellSpawner
   readonly #now: () => number
   readonly #nextBoxId: () => BoxId
   readonly #workdir: string
@@ -79,6 +86,7 @@ export class WslBoxBackend implements BoxBackend {
     this.#dir = options.dir
     this.#snapshotDir = options.snapshotDir ?? `${options.dir}/snapshots`
     this.#run = options.run ?? runProcess
+    this.#spawnShell = options.spawnShell ?? spawnShellProcess
     this.#now = options.now ?? (() => 0)
     let counter = 0
     this.#nextBoxId = options.nextBoxId ?? (() => `box-${++counter}`)
@@ -145,6 +153,33 @@ export class WslBoxBackend implements BoxBackend {
       )
     }
     return { exitCode: r.exitCode ?? -1, stdout: r.stdout, stderr: r.stderr }
+  }
+
+  async openShell(boxId: BoxId, opts: ShellOpenOptions = {}): Promise<ShellSession> {
+    const box = this.#require(boxId)
+    // PTY 在 Linux 侧：script 给 bash 分配真终端，Windows 侧只是字节管道（零原生模块）。
+    // 初始尺寸经 script -c 命令行注入（stty 不经 readline、不回显不污染屏幕），exec bash 接管会话；
+    // 尺寸边界钳制（防 0×0——实测裸 script 是 0 0，vim/top 无法工作）
+    const cols = Math.min(Math.max(Math.trunc(opts.cols ?? 100), 10), 500)
+    const rows = Math.min(Math.max(Math.trunc(opts.rows ?? 30), 4), 200)
+    const proc = this.#spawnShell([
+      'wsl', '-d', box.name, '--cd', this.#workdir, '--',
+      'script', '-qec', `stty rows ${rows} cols ${cols}; exec bash`, '/dev/null',
+    ])
+    let dataCb: ((text: string) => void) | null = null
+    let exitCb: ((code: number | null) => void) | null = null
+    proc.onOutput((text) => dataCb?.(text))
+    proc.onExit((code) => exitCb?.(code))
+    return {
+      write: (text) => proc.write(text),
+      onData: (cb) => {
+        dataCb = cb
+      },
+      onExit: (cb) => {
+        exitCb = cb
+      },
+      close: () => proc.kill(),
+    }
   }
 
   async fsRead(boxId: BoxId, path: string): Promise<string | null> {

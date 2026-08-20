@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { WslBoxBackend, WSL_BOX_PREFIX } from '../src/backend-wsl/index.js'
 import { runProcess } from '../src/procexec/index.js'
-import type { ProcResult, ProcRunner, ProcSpec } from '../src/procexec/index.js'
+import type { ProcResult, ProcRunner, ProcSpec, ShellSpawner } from '../src/procexec/index.js'
 
 const OK: ProcResult = { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false }
 
@@ -147,6 +147,48 @@ describe('WslBoxBackend（脚本化替身）', () => {
     const listCall = calls.find((c) => c.command.includes('--list'))
     expect(listCall?.encoding).toBe('utf16le')
   })
+
+  it('openShell：script 真 PTY 包裹——初始尺寸经 -c 注入、尺寸钳制、write/onExit 转发', async () => {
+    const spawned: string[][] = []
+    const writes: string[] = []
+    let exitForward: (code: number | null) => void = () => {}
+    const spawnShell: ShellSpawner = (command) => {
+      spawned.push(command)
+      return {
+        write: (t) => writes.push(t),
+        onOutput: () => {},
+        onExit: (cb) => {
+          exitForward = cb
+        },
+        kill: () => exitForward(1),
+      }
+    }
+    const { run } = scripted(() => OK)
+    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run, spawnShell })
+    await backend.create({ image: 'default' })
+    expect(backend.caps().interactive).toBe(true)
+    const shell = await backend.openShell('box-1', { cols: 120, rows: 40 })
+    expect(spawned).toEqual([
+      [
+        'wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--cd', '/work', '--',
+        'script', '-qec', 'stty rows 40 cols 120; exec bash', '/dev/null',
+      ],
+    ])
+    shell.write('ls\r')
+    expect(writes).toEqual(['ls\r'])
+    const exits: Array<number | null> = []
+    shell.onExit((code) => exits.push(code))
+    shell.close()
+    expect(exits).toEqual([1]) // kill 转发到会话 onExit
+    // 尺寸钳制：0 → 10（下限）、999 → 200（上限）——防 0×0（裸 script 实测是 0 0，vim/top 无法工作）
+    await backend.openShell('box-1', { cols: 0, rows: 999 })
+    expect(spawned.at(-1)).toEqual([
+      'wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--cd', '/work', '--',
+      'script', '-qec', 'stty rows 200 cols 10; exec bash', '/dev/null',
+    ])
+    // Box 不存在的领域错误
+    await expect(backend.openShell('box-9')).rejects.toMatchObject({ code: 'BOX_NOT_FOUND' })
+  })
 })
 
 // ---- 真实套件：OPENBOT_TEST_WSL=1 时才跑（默认 CI 零沙箱依赖） ----
@@ -211,4 +253,37 @@ describe('WslBoxBackend（真实 WSL2）', { skip: !REAL || !REAL_ROOTFS }, () =
     expect(await second.fsRead(box2, '/work/keep.txt')).toBe('跨重启保留的工作区文件')
     await second.teardown(box2)
   }, 300_000)
+
+  it('openShell：真 PTY 交互——提示符/键入回显/尺寸注入/exit 退出（script 经 wsl.exe 管道）', async () => {
+    const backend = new WslBoxBackend({ rootfs: REAL_ROOTFS, dir: realDir, now: () => 0 })
+    const box = await backend.create({ image: 'default' })
+    const shell = await backend.openShell(box, { cols: 100, rows: 30 })
+    let out = ''
+    shell.onData((t) => { out += t })
+    const exits: Array<number | null> = []
+    shell.onExit((code) => exits.push(code))
+    // 等提示符出现（bash 认为自己接着真终端的证据）
+    await waitUntil(() => out.includes('#') || out.includes('$'), 20_000)
+
+    // 键入即回显 + 命令真实执行
+    shell.write('echo PTY_E2E_OK\r')
+    await waitUntil(() => out.includes('PTY_E2E_OK'), 20_000) // 回显与输出都命中
+    // 初始尺寸经 script -c 注入生效
+    shell.write('stty size\r')
+    await waitUntil(() => out.includes('30 100'), 20_000)
+
+    // exit：会话正常退出（exit code 0）
+    shell.write('exit\r')
+    await waitUntil(() => exits.length > 0, 20_000)
+    expect(exits[0]).toBe(0)
+  }, 300_000)
 })
+
+/** 轮询等待条件成立（真机异步；超时抛错带现场） */
+async function waitUntil(cond: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`等待超时（${timeoutMs}ms）`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}

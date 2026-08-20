@@ -153,6 +153,9 @@ export interface LiveStreamBlock {
 let client: GatewayClient | null = null
 let streamClient: StreamClient | null = null
 let unsubscribe: (() => void) | null = null
+/** pty 会话事件订阅者（终端组件挂载注册、卸载退订——实况只发给在看的眼睛） */
+type PtyListener = (ev: { type: 'open' | 'data' | 'end'; shellId: string; boxId: string; text?: string }) => void
+const ptyListeners = new Set<PtyListener>()
 /** 已拉取 transcript 历史的 agent（懒加载去重；内核不重启时 SSE 重放已覆盖） */
 const loadedHistory = new Set<string>()
 
@@ -170,7 +173,7 @@ export const useKernelStore = defineStore('kernel', {
     boxes: [] as BoxCard[],
     edges: [] as GraphEdge[],
     /** 后端能力声明（caps 驱动 UI 按钮的依据） */
-    caps: null as { persistent: boolean; snapshot: boolean; headless: boolean; resourceLimits: boolean; isolation: string } | null,
+    caps: null as { persistent: boolean; snapshot: boolean; headless: boolean; resourceLimits: boolean; isolation: string; interactive: boolean } | null,
     /** settings 里已配置默认 provider（空缺态提示用） */
     providerConfigured: false,
     /** provider 档案清单（settings 视图；无 key 材料） */
@@ -196,11 +199,15 @@ export const useKernelStore = defineStore('kernel', {
         }
         client = createGatewayClient(endpoint)
         unsubscribe = client.subscribe((event) => this.onEvent(event))
-        // run 实况流（WS /stream）：断线自动重连、不补历史（事实走 SSE 事件流）
+        // run 实况流（WS /stream）：断线自动重连、不补历史（事实走 SSE 事件流）；
+        // pty 会话流同线 multiplex（终端组件经 onPtyEvent 订阅）
         streamClient = connectRunStreams(endpoint, {
           onOpen: (meta) => this.onStreamOpen(meta),
           onChunk: (record, chunk) => this.onStreamChunk(record, chunk),
           onEnd: (record, reason) => this.onStreamEnd(record, reason),
+          onPtyOpen: (meta) => this.dispatchPty({ type: 'open', ...meta }),
+          onPtyData: (meta, text) => this.dispatchPty({ type: 'data', ...meta, text }),
+          onPtyEnd: (meta) => this.dispatchPty({ type: 'end', ...meta }),
         })
         const agents = await client.call<Array<{ agentId: string; name?: string; role: string }>>('v1.system.listAgents')
         this.roster = agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role as RosterEntry['role'] }))
@@ -538,6 +545,42 @@ export const useKernelStore = defineStore('kernel', {
       if (!block) return
       block.state = reason === undefined ? 'end' : 'abort'
       if (reason !== undefined) block.abortReason = reason
+    },
+
+    // ---- PTY 会话（操作台终端；键入走命令面，输出走 /stream 的 pty 流） ----
+
+    /** 终端组件订阅会话事件（返回退订函数） */
+    onPtyEvent(listener: PtyListener): () => void {
+      ptyListeners.add(listener)
+      return () => ptyListeners.delete(listener)
+    },
+
+    dispatchPty(ev: { type: 'open' | 'data' | 'end'; shellId: string; boxId: string; text?: string }): void {
+      for (const listener of ptyListeners) listener(ev)
+    },
+
+    /** 起会话（操作台打开时调用；尺寸与后端钳制约定一致） */
+    async shellOpen(boxId: string, opts?: { cols?: number; rows?: number }): Promise<string> {
+      const { shellId } = await this.call<{ shellId: string }>('v1.boxes.shellOpen', {
+        boxId,
+        ...(opts?.cols !== undefined ? { cols: opts.cols } : {}),
+        ...(opts?.rows !== undefined ? { rows: opts.rows } : {}),
+      })
+      return shellId
+    },
+
+    /** 键入（xterm onData 直传——含控制字符与转义序列） */
+    async shellWrite(shellId: string, data: string): Promise<void> {
+      await this.call('v1.boxes.shellWrite', { shellId, data })
+    },
+
+    /** 杀会话（操作台关闭时调用；幂等——已退出不报错） */
+    async shellClose(shellId: string): Promise<void> {
+      try {
+        await this.call('v1.boxes.shellClose', { shellId })
+      } catch (err) {
+        if (!(err instanceof GatewayCommandError)) throw err // 领域失败（已退出）静默；传输失败照抛
+      }
     },
   },
 })

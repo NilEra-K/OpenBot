@@ -24,6 +24,8 @@ export interface BoxCaps {
   headless: boolean
   resourceLimits: boolean
   isolation: 'low' | 'medium' | 'high'
+  /** 交互式 shell（PTY）——操作台终端远程控制的能力声明（caps.interactive=true 必须实现 openShell） */
+  interactive: boolean
 }
 
 export interface BoxSpec {
@@ -63,6 +65,25 @@ export interface BoxInstance {
   createdAt: number
 }
 
+/** 交互式 shell 会话（PTY）：远端真终端——键入直写、输出含 ANSI 转义序列（xterm.js 可直接渲染）。
+ *  与 exec 的有界语义（zombie 契约）相反，会话是无界的：边界是用户亲手关闭（远程控制的语义） */
+export interface ShellSession {
+  /** 键入（文本；控制字符与转义序列原样传输——远端终端自己解释） */
+  write(text: string): void
+  /** 输出增量（含转义序列；多字节 UTF-8 跨块由实现保证收敛） */
+  onData(cb: (text: string) => void): void
+  /** 会话退出（shell exit / 进程被杀）；close 后不再回调 */
+  onExit(cb: (code: number | null) => void): void
+  /** 杀会话（幂等；用户关闭操作台即调） */
+  close(): void
+}
+
+/** openShell 参数：初始终端尺寸（默认 100×30；管道方案无 TIOCSWINSZ，中途不随窗口变） */
+export interface ShellOpenOptions {
+  cols?: number
+  rows?: number
+}
+
 /** 沙箱后端接口——实现见 backend-wsl / backend-docker / backend-mock */
 export interface BoxBackend {
   readonly id: string
@@ -76,4 +97,6 @@ export interface BoxBackend {
   teardown(box: BoxId): Promise<void>
   /** 实例清单（box 目录与 boxes 视图用） */
   list(): Promise<BoxInstance[]>
+  /** 交互式 shell（可选实现；caps.interactive=true 时必须存在——caps 与接口永不背离） */
+  openShell?(box: BoxId, opts?: ShellOpenOptions): Promise<ShellSession>
 }

@@ -41,9 +41,9 @@ export const StreamErrorCodes = {
   STREAM_PROTOCOL_VIOLATION: 'STREAM_PROTOCOL_VIOLATION',
 } as const
 
-/** OPEN 负载的 JSON 结构 */
+/** OPEN 负载的 JSON 结构（kind:'pty' 是交互会话流——键入走命令面，输出走此流） */
 export interface StreamOpenMeta {
-  kind: 'frames' | 'file'
+  kind: 'frames' | 'file' | 'pty'
   boxId?: string
   meta?: unknown
 }

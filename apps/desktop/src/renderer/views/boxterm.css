@@ -1,0 +1,20 @@
+/* Box 交互终端（PTY）：xterm.js 容器填满 bo-screen（padding 由 bo-screen 提供）；
+   固定 100×30（不跟窗口 resize） */
+
+.bterm {
+  position: absolute;
+  inset: 0;
+  padding: 18px 22px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.bterm-host {
+  width: 100%;
+  height: 100%;
+}
+
+/* xterm 视口行高与项目终端屏一致 */
+.bterm-host :deep(.xterm-viewport) {
+  background-color: #080a0b !important;
+}

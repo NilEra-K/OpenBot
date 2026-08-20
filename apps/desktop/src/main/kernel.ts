@@ -260,8 +260,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const gateway = await startGateway({
     transport: kernel.transport,
     bus: kernel.bus,
-    // WS /stream 连接登记进 hub（run 实况分发；断连由 hub 惰性清理）
-    onStreamSession: (session) => kernel.streamHub.attach(session),
+    // WS /stream 连接登记：run 实况（hub）与 PTY 会话流（shellService）并联；断连各自惰性清理
+    onStreamSession: (session) => {
+      kernel.streamHub.attach(session)
+      kernel.shellService.attach(session)
+    },
   })
   const replayed = await approvalGate.replayPending()
   kernel.startWatchdog()
@@ -282,6 +285,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     approvalGate,
     sandbox: sandboxStatus,
     async dispose() {
+      kernel.shellService.dispose() // 杀全部 PTY 会话（不留后台 shell）
       kernel.stopWatchdog()
       await gateway.close()
     },

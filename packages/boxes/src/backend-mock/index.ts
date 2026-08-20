@@ -14,6 +14,8 @@ import type {
   BoxStats,
   ExecResult,
   ExecSpec,
+  ShellOpenOptions,
+  ShellSession,
   SnapshotId,
 } from '../types.js'
 
@@ -24,6 +26,8 @@ export const MOCK_BOX_CAPS: BoxCaps = {
   headless: true,
   resourceLimits: true,
   isolation: 'low',
+  // 回显式假终端（openShell 同步实现）——E2E 全链路可测，CI 零沙箱依赖不动摇
+  interactive: true,
 }
 
 /** 一次 exec 的留痕（断言「runner 让沙箱跑了什么」） */
@@ -96,6 +100,66 @@ export class MockBoxBackend implements BoxBackend {
       }
     }
     return result
+  }
+
+  async openShell(boxId: BoxId, _opts: ShellOpenOptions = {}): Promise<ShellSession> {
+    this.#require(boxId)
+    // 回显式假终端（mock 对称原则）：键入逐字符回显 + 回车「执行」回假输出——真 PTY 的回显由远端
+    // bash 做，mock 自己做；转义序列按行式终端最小集（\r\n / \b），够 E2E 断言回显。
+    // 同步回调（真后端是进程输出异步到达；mock 同步让断言零时序）+ 注册前缓冲回放（开场提示不丢）
+    let dataCb: ((text: string) => void) | null = null
+    let exitCb: ((code: number | null) => void) | null = null
+    let closed = false
+    let line = ''
+    const pending: string[] = []
+    const emit = (text: string): void => {
+      if (closed) return
+      if (dataCb) dataCb(text)
+      else pending.push(text)
+    }
+    const finish = (code: number | null): void => {
+      closed = true
+      exitCb?.(code)
+    }
+    emit('mock shell（回显演示——无真实沙箱，命令不实际执行）\r\n$ ')
+    return {
+      write(text: string): void {
+        if (closed) return
+        for (const ch of text) {
+          if (ch === '\r') {
+            emit('\r\n') // 逐字符回显已发生，回车只补换行
+            const cmd = line.trim()
+            line = ''
+            if (cmd === 'exit') {
+              finish(0)
+              return
+            }
+            if (cmd !== '') emit(`mock: ${cmd}\r\n`)
+            emit('$ ')
+          } else if (ch === '\u007f') {
+            // 退格：真终端的擦除序列
+            if (line !== '') {
+              line = line.slice(0, -1)
+              emit('\b \b')
+            }
+          } else {
+            line += ch
+            emit(ch)
+          }
+        }
+      },
+      onData(cb: (text: string) => void): void {
+        dataCb = cb
+        for (const t of pending.splice(0)) cb(t)
+      },
+      onExit(cb: (code: number | null) => void): void {
+        exitCb = cb
+      },
+      close(): void {
+        if (closed) return
+        finish(null)
+      },
+    }
   }
 
   async fsRead(boxId: BoxId, path: string): Promise<string | null> {
