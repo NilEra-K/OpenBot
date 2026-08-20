@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * console 视图（plan-p2 Step 8，prototype.html 迁移）：
- * 两栏布局（roster + streamcol；ctx 面板待 P3 WS 实况信号源——原型 #11 标注位）。
+ * console 视图（prototype.html 迁移，P2 Step 8 + P3 Step 7 三栏）：
+ * 三栏布局（roster + streamcol + ctx 实况面板——WS /stream 流式信号源就位后落地）。
  * 流内条目：日期分隔 / 消息气泡（user 右对齐、agent markdown）/ A2A 中继行 / Box 执行卡 / 审批 gate 卡。
  * 空缺态：管家缺失 / provider 未配置，均给出去向提示（协议纯度：只呈现事实与引导，不发 UI 指令）。
  */
@@ -11,6 +11,7 @@ import { useUiStore } from '../stores/ui'
 import { renderMarkdown } from '../lib/markdown'
 import { agentColor } from '../lib/agent-color'
 import RosterPanel from '../components/RosterPanel.vue'
+import CtxPanel from '../components/CtxPanel.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -127,7 +128,7 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
 </script>
 
 <template>
-  <section class="console no-ctx">
+  <section class="console">
     <RosterPanel />
 
     <div class="streamcol">
@@ -226,6 +227,9 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
         </div>
       </div>
     </div>
+
+    <!-- 右栏：ctx 实况面板（llm 打字机 + Box 命令输出；原型 #11 标注位） -->
+    <CtxPanel />
   </section>
 </template>
 

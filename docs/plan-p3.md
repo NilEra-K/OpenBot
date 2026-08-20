@@ -73,7 +73,38 @@
     只读呈现探测状态(disabled 选项「待实现 P3 Step 4」)——不放假选项
   - `packages/boxes` index 增 probe 导出;coordinator index 增 sandbox 导出;desktop package.json 补 boxes 依赖
 - [ ] 6. 资源统计与磁盘压力告警:内核定时 stats 轮询 → WS 实况/事件;磁盘压力判定在内核(进协议的派生量归内核)→ 告警事件 → UI 角标;boxes 仪表接真数据(P2 降级项解锁)
-- [ ] 7. 流式双线:llm `openai-compat` stream:true(SSE 增量解析)+ exec 流式 → WS `/stream` 接 renderer;console 打字机与 ctx 三栏面板(P2 原型 #11 标注位)落地
+- [x] 7. 流式双线:llm `openai-compat` stream:true(SSE 增量解析)+ exec 流式 → WS `/stream` 接 renderer;console 打字机与 ctx 三栏面板(P2 原型 #11 标注位)落地
+  - llm:`ChatRequest.onText`(聚合语义不变)+ SSE 消费器(delta.content 增量、tool_calls 按 index
+    累积拼装、`[DONE]` 终止、流中断=LLM_RESPONSE_INVALID)+ FetchLike 扩流式 body
+    (AsyncIterable/ReadableStream 双兼容);mock 对称拆块(3 码元定长;留痕剥离回调再 clone)
+  - runner:`RunStreamEvent`(open/chunk/end/abort × llm/exec)+ onStream 注入——chat 轮次与
+    execTool 同型上报(exec 带 command/exitCode/stderr 通道;chatRound 与工具轮计数分离,
+    预算语义不变);失败路径 abort 带原因
+  - coordinator:`StreamHub`——gateway onStreamSession 登记会话,事件驱动流生命周期
+    (同 run 多流按序号;无订阅者丢弃——turn 不受渲染层影响;中途接入只看新流:
+    实况断线不补);桌面 main 接线 hub.attach
+  - renderer:`lib/stream.ts` 手写 14 字节帧解码(零内核 import,与 P2 gateway 客户端同哲学;
+    断线 3s 重连)+ store 流实况块(容量 80 优先淘汰已结束)+ `CtxPanel.vue`(原型 cs-bar/cs-term
+    屏幕卡:LIVE 点/终端行/stderr t-bar 着色/打字机光标/无流状态屏)+ ConsoleView 三栏
+    (246px 1fr 318px);**打字机取舍:token 增量进 ctx(实况),消息气泡仍等事件(事实)**
+  - E2E:mock-openai 增 SSE 分支(runner 恒 onText → 恒 stream:true,端点必须支持);
+    ctx 断言 exec 卡(命令+输出)与 llm 增量;176 测试全绿
+  - **显示器语义裁定(2026-08-19 用户确认)**:「看进 Box」分三阶——一期=合格显示部分
+    (命令与输出的实况,`$ ls`+结果按时间序;现有 exec 流管道模式即信号源,零内核改动,本轮完成);
+    终端级远程控制(vim/top 画面+键鼠直送——PTY:ConPTY/node-pty 原生模块+xterm.js)P4 按需评估;
+    GUI 画面(远程控制软件式像素流,Box 内跑 x11vnc 等)P4+ 按需评估——PTY 与 VNC 同属
+    「远程控制」能力族的后续升级,一期把显示器语义与实况显示做对(心智模型:终端程序输出的是
+    字符流+转义序列不是像素,PTY 的作用是骗过程序接了真显示器从而输出画面级字节流——没有它
+    vim/top 直接拒绝工作,管道模式下逐行纯文本即全部事实)
+  - 最终形态:ctx=思考条(llm 增量,agent 进程不在 Box 内不冒充屏幕内容——诚实分层)+一块屏幕
+    (exec 流拼 `$ 命令`+输出行/stderr 着色/live 光标,点击进操作台大屏;实现类 .cs-screen-body);
+    `BoxOps.vue` 操作台大屏(VMware 控制台式,按 Box 归属过滤,boxes 卡片亦可开;bo-hint 诚实标注
+    键鼠接管与 GUI 属后续版本);`BoxScreen.vue` 为 ctx 预览与操作台共用的显示器组件;
+    E2E 断言同步升级为显示器语义(屏幕命令行+输出、思考条文本、操作台开/返回闭环)
+  - **实测地雷(drag 区吃点击,2026-08-20)**:BoxOps 返回按钮真机点不动、按住拖动整个窗口——
+    bo-bar 落在壳 titlebar(app-region:drag,高 38px)矩形内,而 fixed overlay 盖住 titlebar
+    不改变 Chromium drag 判定;修法=全屏 overlay 显式 no-drag(boxops 与审批 scrim 同修,与
+    win-controls 同款模式);E2E 合成点击绕过 drag 判定测不出,地雷记录在 platforms.md
 - [ ] 8. electron-builder:win nsis + portable(asar、图标、userData 迁移注意);打包产物真内核冒烟;`dist` 脚本替换占位
 - [ ] 9. 验收:真实后端 E2E 套件(`OPENBOT_E2E_BACKEND=wsl|docker|podman` 选择性跑,默认 mock 不变);**真实 Box 内「改项目→构建」演示(fixture 项目:patch→build→diff 回读)产出 diff**;三命令全绿
 

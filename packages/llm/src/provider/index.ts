@@ -57,6 +57,12 @@ export interface ChatRequest {
   messages: ChatMessage[]
   tools?: ToolSpec[]
   system?: string
+  /**
+   * 流式文本增量回调（可选）：提供时 provider 走流式协议，逐块回调回复文本增量——
+   * 聚合语义不变，chat() 仍返回完整 ChatResponse（流是实况、聚合是事实）。
+   * 纯工具调用回合可能零次回调（无可视文本）。
+   */
+  onText?: (delta: string) => void
 }
 
 export interface ChatResponse {

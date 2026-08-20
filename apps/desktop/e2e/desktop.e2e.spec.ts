@@ -90,6 +90,21 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await expect(page.locator('.m-text', { hasText: '目录是空的' })).toBeVisible({ timeout: 30_000 })
     await expect(page.locator('.task .chip', { hasText: '完成' })).toBeVisible({ timeout: 15_000 })
 
+    // —— ctx 显示器（P3 Step 7）：worker1 会话——屏幕呈现 Box 命令与输出实况（$ 命令行 + mock 输出），
+    // 思考条呈现 llm 增量（agent 进程不在 Box 内，不冒充屏幕内容——诚实分层） ——
+    const screen = page.locator('.ctx-screen')
+    await expect(screen.filter({ hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
+    await expect(screen.filter({ hasText: 'mock: ls /work' })).toBeVisible()
+    await expect(page.locator('.think', { hasText: '目录是空的' })).toBeVisible()
+
+    // —— Box 操作台（VMware 控制台式大屏）：点屏幕进入、返回关闭 ——
+    await page.getByRole('button', { name: /^进入 box-\d+ 操作台$/ }).click()
+    const ops = page.locator('.boxops')
+    await expect(ops.locator('.bo-title')).toHaveText(/^box-\d+$/)
+    await expect(ops.locator('.box-term').filter({ hasText: '$ ls /work' })).toBeVisible()
+    await ops.getByRole('button', { name: '返回' }).click()
+    await expect(ops).toHaveCount(0)
+
     // steward 最终回复（回管家会话看：点名册管家条目）
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     await page.locator('.roster-item', { hasText: '管家' }).click()

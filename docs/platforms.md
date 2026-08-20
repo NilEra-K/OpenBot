@@ -30,3 +30,7 @@ Linux / macOS 后端 P4 进。接口按 caps 设计，永不按「最强后端�
   electron/electron#36280（bug A，上游未修，VS Code / Linear 同样如此；撕裂/残影变体已在
   Electron 39.2.6+ 修复，我们用的 43 已含）。**不是我们 CSS/JS 的问题，勿再排查页面侧**；
   右缘锚定的大块元素（如 ctx 面板）最显眼。等上游修复随 Electron 升级自然获得。
+- **全屏 overlay 必须显式 `-webkit-app-region: no-drag`**：fixed/inset:0 元素视觉上盖住 titlebar
+  （drag 区）不改变 Chromium 的 drag 判定——不声明 no-drag，落在 titlebar 矩形（顶部 38px）内的
+  真实点击被当拖窗吃掉（BoxOps 返回按钮点不动、按住拖动整个窗口，2026-08-20 实证）；
+  Playwright/CDP 合成点击绕过 drag 判定，**E2E 测不出此坑**，防回归靠本条记录与真机走查。

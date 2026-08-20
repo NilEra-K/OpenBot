@@ -1,0 +1,145 @@
+/* ctx 面板（prototype.html 迁移：一块显示器 + 思考条） */
+
+.ctx {
+  overflow-y: auto;
+  padding: 12px 16px 16px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---- 思考条：agent 的 llm 增量（不在 Box 内，独立于屏幕） ---- */
+
+.think {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg1);
+  padding: 6px 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  flex: none;
+}
+
+.think.is-live {
+  border-color: rgba(var(--accent-rgb), 0.3);
+}
+
+.think-label {
+  color: var(--ink3);
+  flex: none;
+}
+
+.think-text {
+  color: var(--ink2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* 尾部对齐：长文本显示最新增量（思考进行时的「正在说」） */
+  text-align: left;
+}
+
+/* ---- 一块显示器（prototype .ctx-screen / .cs-bar / .cs-term） ---- */
+
+.ctx-screen {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #080a0b;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+
+.ctx-screen:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.ctx-screen:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.ctx-screen.is-static {
+  cursor: default;
+}
+
+.ctx-screen.is-static:hover {
+  border-color: var(--line-strong);
+  box-shadow: none;
+}
+
+.cs-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  background: rgba(20, 22, 24, 0.92);
+  font-size: 10px;
+  color: var(--ink3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex: none;
+}
+
+.cs-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #73ce95;
+  letter-spacing: 0.05em;
+  flex: none;
+}
+
+.cs-live.asleep {
+  color: var(--ink3);
+}
+
+/* 状态点（与 roster/boxes 同款：working = 脉冲） */
+.stat-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink3);
+  flex: none;
+}
+
+.stat-dot.working {
+  background: var(--success);
+  animation: ctx-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ctx-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.cs-screen-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 9px 10px;
+  font-size: 10px;
+  line-height: 1.8;
+  color: #9fb3ac;
+  display: flex;
+  flex-direction: column;
+}
+
+.ctx-idle {
+  color: #8a938e;
+  font-size: 10.5px;
+  line-height: 1.8;
+  padding: 8px 2px;
+}
+
+.mono {
+  font-family: var(--mono);
+}

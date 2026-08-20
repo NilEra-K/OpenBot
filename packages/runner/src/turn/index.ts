@@ -10,6 +10,7 @@ import type { TranscriptStore } from '@openbot/state'
 import type { A2aRunPayload, UserChatRunPayload } from '@openbot/messaging'
 import { LlmError } from '@openbot/llm'
 import type { ChatMessage, ChatProvider } from '@openbot/llm'
+import type { RunStreamEvent } from '../stream/index.js'
 import type { ToolContext, ToolRegistry } from '../tools/index.js'
 
 export const RunnerErrorCodes = {
@@ -33,6 +34,11 @@ export interface TurnRunnerDeps {
   nextMessageId: () => string
   systemPrompt?: string | ((agentId: string) => string)
   maxToolRounds?: number
+  /**
+   * run 实况上报（装配注入，接 WS /stream；不进事件总线）：
+   * llm 轮次 open/chunk/end（onText 增量）；exec 流由工具层（BoxToolDeps.onStream）同型上报。
+   */
+  onStream?: (event: RunStreamEvent) => void
 }
 
 interface TurnInput {
@@ -81,9 +87,29 @@ export class TurnRunner {
     messages.push(...history, input.userMessage)
 
     const maxRounds = this.#deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS
-    let round = 0
+    const emitStream = this.#deps.onStream
+    const emit = (event: Omit<RunStreamEvent, 'agentId' | 'runId'>): void => {
+      emitStream?.({ ...event, agentId, runId: run.runId })
+    }
+    let round = 0 // 工具轮计数（预算判据，语义不变）
+    let chatRound = 0 // chat 序号（llm 流事件标注，含终答轮）
     for (;;) {
-      const response = await this.#chat(agentId, messages, run.signal)
+      // llm 流：open（轮次序号）→ onText 增量 chunk → end/abort（聚合终态语义在 chat 返回值里）
+      chatRound += 1
+      emit({ type: 'open', stream: 'llm', meta: { round: chatRound } })
+      let response: Awaited<ReturnType<ChatProvider['chat']>>
+      try {
+        response = await this.#chat(
+          agentId,
+          messages,
+          run.signal,
+          emitStream ? (delta) => emit({ type: 'chunk', stream: 'llm', text: delta }) : undefined,
+        )
+        emit({ type: 'end', stream: 'llm' })
+      } catch (err) {
+        emit({ type: 'abort', stream: 'llm', reason: err instanceof Error ? err.message : String(err) })
+        throw err
+      }
       if (response.toolCalls.length === 0) {
         const text = response.text ?? ''
         const messageId = this.#deps.nextMessageId()
@@ -121,9 +147,12 @@ export class TurnRunner {
   }
 
   /** 边界转换：LlmError → 同 code 的 KernelError；未知异常归类 LLM_FAILED */
-  async #chat(agentId: string, messages: ChatMessage[], signal: AbortSignal) {
+  async #chat(agentId: string, messages: ChatMessage[], signal: AbortSignal, onText?: (delta: string) => void) {
     try {
-      return await this.#deps.llmOf(agentId).chat({ messages, tools: this.#deps.tools.specs() }, signal)
+      return await this.#deps.llmOf(agentId).chat(
+        { messages, tools: this.#deps.tools.specs(), ...(onText ? { onText } : {}) },
+        signal,
+      )
     } catch (err) {
       if (err instanceof KernelError) throw err
       if (err instanceof LlmError) throw new KernelError(err.code, err.message)

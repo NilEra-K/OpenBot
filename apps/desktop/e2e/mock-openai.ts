@@ -3,6 +3,8 @@
  * renderer 经 settings 表单配置为 provider，真实覆盖 openai-compat 客户端的 fetch 路径。
  * 分派按请求 messages 特征（而非全局序号）：A2A 后 steward 与 worker 并行请求，
  * 「最后一条消息的 role/内容 + 最近工具名」是身份的稳定判据，天然无竞态。
+ * 流式对称：请求体 stream:true 时按 SSE 返回（P3 Step 7 起 runner 恒带 onText → 恒 stream:true），
+ * tool_calls 的 arguments 分两块下发（覆盖增量拼装路径），text 按 3 字符拆块。
  */
 import { createServer } from 'node:http'
 
@@ -17,7 +19,7 @@ interface ScriptStep {
 export interface MockOpenAi {
   port: number
   /** 收到的请求体留痕（断言「内核让 LLM 说了什么」） */
-  requests: Array<{ model: string; messages: unknown[] }>
+  requests: Array<{ model: string; stream?: boolean; messages: unknown[] }>
   close(): Promise<void>
 }
 
@@ -28,7 +30,7 @@ interface WireMessage {
 }
 
 export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> {
-  const requests: Array<{ model: string; messages: unknown[] }> = []
+  const requests: MockOpenAi['requests'] = []
   let responseSeq = 0
 
   const server = createServer((req, res) => {
@@ -40,9 +42,13 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
         res.end(JSON.stringify({ error: 'mock 只实现 POST /chat/completions' }))
         return
       }
-      const body = JSON.parse(raw || '{}') as { model?: string; messages?: WireMessage[] }
+      const body = JSON.parse(raw || '{}') as {
+        model?: string
+        stream?: boolean
+        messages?: WireMessage[]
+      }
       const messages = body.messages ?? []
-      requests.push({ model: body.model ?? '', messages })
+      requests.push({ model: body.model ?? '', stream: body.stream, messages })
 
       const last = messages[messages.length - 1] ?? { role: '', content: '' }
       const lastAssistantWithCalls = [...messages].reverse().find((m) => m.tool_calls?.length)
@@ -54,6 +60,11 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
         return
       }
 
+      responseSeq += 1
+      if (body.stream === true) {
+        respondSse(res, step, responseSeq)
+        return
+      }
       const message: Record<string, unknown> = { role: 'assistant' }
       if (step.toolCalls?.length) {
         message['tool_calls'] = step.toolCalls.map((c) => ({
@@ -64,7 +75,6 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
       } else {
         message['content'] = step.text ?? ''
       }
-      responseSeq += 1
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(
         JSON.stringify({
@@ -89,4 +99,41 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
     requests,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   }
+}
+
+/** SSE 流式响应（chat completions stream 面；与 openai-compat consumeSse 双向对照） */
+function respondSse(res: import('node:http').ServerResponse, step: ScriptStep, seq: number): void {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  const sse = (obj: unknown): void => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  }
+  sse({ id: `mock-${seq}`, choices: [{ index: 0, delta: { role: 'assistant' } }] })
+  if (step.toolCalls?.length) {
+    // arguments 分两块：覆盖客户端的增量拼装路径
+    for (const call of step.toolCalls) {
+      const args = JSON.stringify(call.args)
+      const half = Math.ceil(args.length / 2)
+      sse({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 0, id: call.id, type: 'function', function: { name: call.name, arguments: args.slice(0, half) } }],
+            },
+          },
+        ],
+      })
+      sse({
+        choices: [
+          { index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args.slice(half) } }] } },
+        ],
+      })
+    }
+  } else if (step.text !== undefined) {
+    for (let i = 0; i < step.text.length; i += 3) {
+      sse({ choices: [{ index: 0, delta: { content: step.text.slice(i, i + 3) } }] })
+    }
+  }
+  res.write('data: [DONE]\n\n')
+  res.end()
 }

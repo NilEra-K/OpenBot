@@ -257,7 +257,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     await kernel.addAgent({ agentId, llm: provider })
   }
 
-  const gateway = await startGateway({ transport: kernel.transport, bus: kernel.bus })
+  const gateway = await startGateway({
+    transport: kernel.transport,
+    bus: kernel.bus,
+    // WS /stream 连接登记进 hub（run 实况分发；断连由 hub 惰性清理）
+    onStreamSession: (session) => kernel.streamHub.attach(session),
+  })
   const replayed = await approvalGate.replayPending()
   kernel.startWatchdog()
 

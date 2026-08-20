@@ -15,6 +15,7 @@ import { A2aService } from '@openbot/messaging'
 import { AutoApprovalGate, execTool, gated, hostFetchTool, sendMessageTool, ToolRegistry, TurnRunner } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
+import { StreamHub } from '../stream-hub/index.js'
 import { randomUUID } from 'node:crypto'
 
 export interface AssembleOptions {
@@ -64,6 +65,8 @@ export interface AssembledKernel {
   readonly backend: BoxBackend
   readonly registry: BoxRegistry
   readonly messaging: A2aService
+  /** run 实况汇聚（壳把 gateway 的 WS 会话 attach 进来；流是实况不进事件总线） */
+  readonly streamHub: StreamHub
   readonly schedulers: ReadonlyMap<string, AgentScheduler>
   /** 注册 agent：名册 + 调度器 + 专属 Box + turn 引擎接线 */
   addAgent(registration: AgentRegistration): Promise<void>
@@ -118,8 +121,11 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     options.approvalGateFactory?.({ bus, ledger }) ??
     options.approvalGate ??
     new AutoApprovalGate({ bus, ledger, now, nextApprovalId })
+  // run 实况汇聚：llm 增量与 exec 输出同型汇入 hub（无 WS 订阅者时丢弃——turn 不受渲染层影响）
+  const streamHub = new StreamHub()
+  const onStream = (event: Parameters<StreamHub['handle']>[0]): void => streamHub.handle(event)
   const tools = new ToolRegistry()
-    .register(execTool({ backend, bus }))
+    .register(execTool({ backend, bus, onStream }))
     .register(sendMessageTool(messaging))
     .register(gated(hostFetchTool(), { gate }))
 
@@ -132,6 +138,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     nextMessageId,
     systemPrompt: options.systemPrompt,
     maxToolRounds: options.maxToolRounds,
+    onStream,
   })
   executeRef.current = runner.execute
 
@@ -192,6 +199,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     backend,
     registry,
     messaging,
+    streamHub,
     schedulers,
     async addAgent(registration) {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册

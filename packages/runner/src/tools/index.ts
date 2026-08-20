@@ -9,6 +9,7 @@ import type { EventBus } from '@openbot/core'
 import type { ToolCall, ToolSpec } from '@openbot/llm'
 import type { BoxBackend } from '@openbot/boxes'
 import type { A2aService } from '@openbot/messaging'
+import type { RunStreamEvent } from '../stream/index.js'
 
 export const ToolErrorCodes = {
   TOOL_NOT_FOUND: 'TOOL_NOT_FOUND',
@@ -91,9 +92,11 @@ function requireBox(ctx: ToolContext): string {
 export interface BoxToolDeps {
   backend: BoxBackend
   bus: EventBus
+  /** run 实况上报（装配注入，与 TurnRunner 的 onStream 同型汇流——经 WS /stream，不进事件总线） */
+  onStream?: (event: RunStreamEvent) => void
 }
 
-/** exec：Box 内执行命令（Box 内自由，不过闸） */
+/** exec：Box 内执行命令（Box 内自由，不过闸）。输出增量经 onStream 实况上报（stdout/stderr 通道） */
 export function execTool(deps: BoxToolDeps): Tool {
   return {
     spec: { name: 'exec', description: '在沙箱 Box 内执行命令（安全，无需审批）' },
@@ -105,16 +108,46 @@ export function execTool(deps: BoxToolDeps): Tool {
       }
       const boxId = requireBox(ctx)
       const cwd = typeof record['cwd'] === 'string' ? record['cwd'] : undefined
-      deps.bus.emit('v1.box.exec', { boxId, runId: ctx.runId, phase: 'started', command })
-      const result = await deps.backend.exec(boxId, { command, cwd, timeoutMs: 30_000 })
-      deps.bus.emit('v1.box.exec', {
-        boxId,
+      const emit = deps.onStream
+      emit?.({
+        type: 'open',
+        agentId: ctx.agentId,
         runId: ctx.runId,
-        phase: 'finished',
-        command,
-        exitCode: result.exitCode,
+        stream: 'exec',
+        meta: { command, ...(boxId !== null ? { boxId } : {}) },
       })
-      return [`exit=${result.exitCode}`, result.stdout, result.stderr].filter((s) => s !== '').join('\n')
+      deps.bus.emit('v1.box.exec', { boxId, runId: ctx.runId, phase: 'started', command })
+      try {
+        const result = await deps.backend.exec(boxId, {
+          command,
+          cwd,
+          timeoutMs: 30_000,
+          ...(emit
+            ? {
+                onChunk: (c) =>
+                  emit({ type: 'chunk', agentId: ctx.agentId, runId: ctx.runId, stream: 'exec', text: c.text, channel: c.stream }),
+              }
+            : {}),
+        })
+        deps.bus.emit('v1.box.exec', {
+          boxId,
+          runId: ctx.runId,
+          phase: 'finished',
+          command,
+          exitCode: result.exitCode,
+        })
+        emit?.({ type: 'end', agentId: ctx.agentId, runId: ctx.runId, stream: 'exec', exitCode: result.exitCode })
+        return [`exit=${result.exitCode}`, result.stdout, result.stderr].filter((s) => s !== '').join('\n')
+      } catch (err) {
+        emit?.({
+          type: 'abort',
+          agentId: ctx.agentId,
+          runId: ctx.runId,
+          stream: 'exec',
+          reason: err instanceof Error ? err.message : String(err),
+        })
+        throw err
+      }
     },
   }
 }

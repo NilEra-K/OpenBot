@@ -14,10 +14,18 @@ export const useUiStore = defineStore('ui', {
     draft: '',
     /** 审批弹窗「稍后处理」的 nonce（只影响弹窗呈现，不碰内核挂起；流内 gate 卡与角标仍可见） */
     dismissedApprovals: [] as string[],
+    /** Box 操作台（VMware 控制台式大屏）：当前打开的 Box id；null = 关闭 */
+    boxOps: null as string | null,
   }),
   actions: {
     switchView(view: ViewName) {
       this.currentView = view
+    },
+    openBoxOps(boxId: string) {
+      this.boxOps = boxId
+    },
+    closeBoxOps() {
+      this.boxOps = null
     },
     dismissApproval(nonce: string) {
       if (!this.dismissedApprovals.includes(nonce)) this.dismissedApprovals.push(nonce)

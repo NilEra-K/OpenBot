@@ -1,0 +1,45 @@
+/* Box 终端屏幕行样式（BoxScreen 共用：ctx 预览屏与 Box 操作台大屏；
+   原型 .bo-screen/.cs-term 的行级样式同源） */
+
+.box-term {
+  overflow-y: auto;
+  min-height: 100%;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.bt-line {
+  min-height: 1.8em;
+  line-height: 1.8;
+}
+
+.t-acc {
+  color: #eeb154;
+  font-weight: 600;
+}
+
+.t-bar {
+  color: #eeb154;
+}
+
+.bt-dim {
+  color: #8a938e;
+}
+
+/* 打字机光标（live 块尾部闪烁） */
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: #9fb3ac;
+  animation: bt-caret 1s steps(1) infinite;
+}
+
+@keyframes bt-caret {
+  50% {
+    opacity: 0;
+  }
+}

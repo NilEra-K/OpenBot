@@ -6,9 +6,11 @@
  */
 import { computed, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
+import { useUiStore } from '../stores/ui'
 import { agentColor } from '../lib/agent-color'
 
 const kernel = useKernelStore()
+const ui = useUiStore()
 
 const stateChip = (state: 'active' | 'sleeping' | 'snapshot'): { cls: string; label: string } => {
   switch (state) {
@@ -95,8 +97,14 @@ const snapshot = async (boxId: string): Promise<void> => {
               <div class="box-sub">image={{ box.image }} · {{ box.state }}</div>
             </div>
             <span class="chip" :class="stateChip(box.state).cls">{{ stateChip(box.state).label }}</span>
-            <div v-if="kernel.caps?.snapshot" class="box-actions">
-              <button class="btn btn-secondary btn-sm" :disabled="snapping.has(box.boxId)" @click="snapshot(box.boxId)">
+            <div class="box-actions">
+              <button class="btn btn-secondary btn-sm" @click="ui.openBoxOps(box.boxId)">操作台</button>
+              <button
+                v-if="kernel.caps?.snapshot"
+                class="btn btn-secondary btn-sm"
+                :disabled="snapping.has(box.boxId)"
+                @click="snapshot(box.boxId)"
+              >
                 {{ snapping.has(box.boxId) ? '快照中…' : '快照' }}
               </button>
             </div>

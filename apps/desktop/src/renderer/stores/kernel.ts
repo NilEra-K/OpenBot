@@ -5,7 +5,9 @@
 import { defineStore } from 'pinia'
 import { createGatewayClient } from '../lib/gateway'
 import { GatewayCommandError } from '../lib/gateway'
+import { connectRunStreams } from '../lib/stream'
 import type { GatewayClient, GatewayEndpoint } from '../lib/gateway'
+import type { StreamClient } from '../lib/stream'
 import type { KernelEvent } from '@openbot/transport'
 
 /** preload 注入的全局（index.cts 暴露；E2E 可在页面加载前替换） */
@@ -129,8 +131,27 @@ export interface SandboxStatus {
   rootfsReady: boolean
 }
 
+/** 流实况块（ctx 屏幕与 Box 操作台的渲染单元；流是实况不进事件总线——断线不补，只有当下） */
+export interface LiveStreamBlock {
+  key: string
+  agentId: string
+  runId: string
+  stream: 'llm' | 'exec'
+  seq: number
+  /** exec 流：命令行与所属 Box；llm 流：轮次序号 */
+  command?: string[]
+  boxId?: string
+  round?: number
+  stdout: string
+  stderr: string
+  state: 'live' | 'end' | 'abort'
+  abortReason?: string
+  at: number
+}
+
 /** 模块级客户端（非序列化对象不入 state） */
 let client: GatewayClient | null = null
+let streamClient: StreamClient | null = null
 let unsubscribe: (() => void) | null = null
 /** 已拉取 transcript 历史的 agent（懒加载去重；内核不重启时 SSE 重放已覆盖） */
 const loadedHistory = new Set<string>()
@@ -157,6 +178,8 @@ export const useKernelStore = defineStore('kernel', {
     defaultProvider: null as string | null,
     /** 沙箱后端装配事实（settings 视图呈现） */
     sandbox: null as SandboxStatus | null,
+    /** run 实况流块（ctx 面板；容量有限——只保留最近） */
+    streams: [] as LiveStreamBlock[],
     lastSeq: 0,
   }),
   getters: {
@@ -173,6 +196,12 @@ export const useKernelStore = defineStore('kernel', {
         }
         client = createGatewayClient(endpoint)
         unsubscribe = client.subscribe((event) => this.onEvent(event))
+        // run 实况流（WS /stream）：断线自动重连、不补历史（事实走 SSE 事件流）
+        streamClient = connectRunStreams(endpoint, {
+          onOpen: (meta) => this.onStreamOpen(meta),
+          onChunk: (record, chunk) => this.onStreamChunk(record, chunk),
+          onEnd: (record, reason) => this.onStreamEnd(record, reason),
+        })
         const agents = await client.call<Array<{ agentId: string; name?: string; role: string }>>('v1.system.listAgents')
         this.roster = agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role as RosterEntry['role'] }))
         const steward = await client.call<{ agentId: string } | null>('v1.system.getSteward')
@@ -190,6 +219,8 @@ export const useKernelStore = defineStore('kernel', {
     shutdown() {
       unsubscribe?.()
       unsubscribe = null
+      streamClient?.close()
+      streamClient = null
       client = null
       this.connected = false
     },
@@ -450,6 +481,63 @@ export const useKernelStore = defineStore('kernel', {
       const edge = this.edges.find((e) => e.from === from && e.to === to)
       if (edge) edge.count += 1
       else this.edges.push({ from, to, count: 1 })
+    },
+    // ---- run 实况流（ctx 面板；流是实况不进事件总线） ----
+
+    /** 容量上限：超出时优先淘汰最旧的已结束块（进行中的永不淘汰） */
+    trimStreamsLocal(): void {
+      if (this.streams.length <= 80) return
+      const finished = this.streams.filter((s) => s.state !== 'live')
+      let toDrop = this.streams.length - 80
+      const dropKeys = new Set<string>()
+      for (const block of finished) {
+        if (toDrop <= 0) break
+        dropKeys.add(block.key)
+        toDrop -= 1
+      }
+      this.streams = this.streams.filter((s) => !dropKeys.has(s.key))
+    },
+
+    onStreamOpen(meta: NonNullable<import('../lib/stream').RunStreamOpenMeta['meta']>): void {
+      const key = `${meta.runId}:${meta.stream}:${meta.seq}`
+      if (this.streams.some((s) => s.key === key)) return // 防重（重连竞态）
+      this.streams.push({
+        key,
+        agentId: meta.agentId,
+        runId: meta.runId,
+        stream: meta.stream,
+        seq: meta.seq,
+        ...(meta.command !== undefined ? { command: meta.command } : {}),
+        ...(meta.boxId !== undefined ? { boxId: meta.boxId } : {}),
+        ...(meta.round !== undefined ? { round: meta.round } : {}),
+        stdout: '',
+        stderr: '',
+        state: 'live',
+        at: Date.now(),
+      })
+      this.trimStreamsLocal()
+    },
+
+    onStreamChunk(
+      record: { agentId: string; runId: string; stream: 'llm' | 'exec' },
+      chunk: { t: string; ch?: 'stdout' | 'stderr' },
+    ): void {
+      // 同 run 同类的最新块（hub 与 renderer 同一路由语义）
+      const block = [...this.streams].reverse().find(
+        (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live',
+      )
+      if (!block) return
+      if (chunk.ch === 'stderr') block.stderr += chunk.t
+      else block.stdout += chunk.t
+    },
+
+    onStreamEnd(record: { agentId: string; runId: string; stream: 'llm' | 'exec' }, reason?: string): void {
+      const block = [...this.streams].reverse().find(
+        (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live',
+      )
+      if (!block) return
+      block.state = reason === undefined ? 'end' : 'abort'
+      if (reason !== undefined) block.abortReason = reason
     },
   },
 })

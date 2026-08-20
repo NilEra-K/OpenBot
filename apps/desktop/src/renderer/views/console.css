@@ -1,8 +1,8 @@
-/* console 视图样式（prototype.html 迁移；ctx 面板位 P3 接 WS 实况后启用三栏） */
+/* console 视图样式（prototype.html 迁移；P3 Step 7 起三栏——ctx 实况面板就位） */
 
 .console {
   display: grid;
-  grid-template-columns: 246px 1fr;
+  grid-template-columns: 246px 1fr 318px;
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;

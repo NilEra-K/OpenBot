@@ -13,6 +13,7 @@ import TasksView from './views/TasksView.vue'
 import GraphView from './views/GraphView.vue'
 import SettingsView from './views/SettingsView.vue'
 import ApprovalModal from './components/ApprovalModal.vue'
+import BoxOps from './components/BoxOps.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -83,6 +84,9 @@ onUnmounted(() => kernel.shutdown())
 
     <!-- 审批弹窗（全局层：挂起审批的注意力捕获；流内 gate 卡保留对话流上下文） -->
     <ApprovalModal />
+
+    <!-- Box 操作台（VMware 控制台式大屏覆盖层；ctx 屏幕与 Box 卡片均可打开） -->
+    <BoxOps />
   </div>
 </template>
 

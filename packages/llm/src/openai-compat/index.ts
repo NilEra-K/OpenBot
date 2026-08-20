@@ -35,6 +35,8 @@ export type FetchLike = (input: string, init?: {
   status: number
   json: () => Promise<unknown>
   text: () => Promise<string>
+  /** 流式响应体（stream:true 时使用）；测试注入异步迭代器（真实 fetch 是 web ReadableStream） */
+  body?: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
 }>
 
 export interface OpenAiCompatProviderOptions {
@@ -79,11 +81,12 @@ export class OpenAiCompatProvider implements ChatProvider {
     const timeoutSignal = AbortSignal.timeout(timeoutMs)
     const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
+    const streaming = request.onText !== undefined
     const messages = toWireMessages(request)
     const body: Record<string, unknown> = {
       model: config.model,
       messages,
-      stream: false,
+      stream: streaming,
     }
     if (request.tools && request.tools.length > 0) body['tools'] = toWireTools(request.tools)
     if (config.temperature !== undefined) body['temperature'] = config.temperature
@@ -122,13 +125,35 @@ export class OpenAiCompatProvider implements ChatProvider {
       throw new LlmError(`LLM_HTTP_${response.status}`, `HTTP ${response.status}: ${text.slice(0, 500)}`)
     }
 
-    let payload: unknown
-    try {
-      payload = await response.json()
-    } catch (err) {
-      throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, `响应不是 JSON：${String(err)}`)
+    if (!streaming) {
+      let payload: unknown
+      try {
+        payload = await response.json()
+      } catch (err) {
+        throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, `响应不是 JSON：${String(err)}`)
+      }
+      return parseCompletion(payload, config.model)
     }
-    return parseCompletion(payload, config.model)
+
+    // 流式路径：SSE 增量解析（onText 逐块回调），聚合终态语义与非流式一致
+    if (!response.body) {
+      throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, '流式响应缺少 body')
+    }
+    try {
+      return await consumeSse(response.body, request.onText!, config.model, combined)
+    } catch (err) {
+      if (err instanceof LlmError) throw err
+      if (signal?.aborted) {
+        throw new LlmError(LlmErrorCodes.LLM_ABORTED, '流式请求已被调用方中止')
+      }
+      if (isTimeoutError(err)) {
+        throw new LlmError(LlmErrorCodes.LLM_TIMEOUT, `请求超时（${timeoutMs}ms）`)
+      }
+      throw new LlmError(
+        LlmErrorCodes.LLM_REQUEST_FAILED,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 }
 
@@ -173,8 +198,7 @@ function toWireTools(tools: ToolSpec[]): unknown[] {
 }
 
 /** 响应解析：choices[0].message → ChatResponse；arguments JSON 串解析失败保留原文（回喂自纠错） */
-function parseCompletion(payload: unknown, model: string): ChatResponse {
-  const choices = recordOf(payload)?.['choices']
+function parseCompletion(payload: unknown, model: string): ChatResponse {  const choices = recordOf(payload)?.['choices']
   if (!Array.isArray(choices) || choices.length === 0) {
     throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, '响应缺少 choices')
   }
@@ -230,6 +254,98 @@ function isTimeoutError(err: unknown): boolean {
     err !== null &&
     (err as { name?: string }).name === 'TimeoutError'
   )
+}
+
+// ---------------------------------------------------------------------------
+// SSE 流式解析（chat completions stream:true 面）：文本增量走 onText，聚合终态语义与非流式一致
+// ---------------------------------------------------------------------------
+
+/** tool_calls 增量累积槽（按 delta.tool_calls[].index 归位；id/name 首块给出，arguments 字符串逐块拼接） */
+interface ToolCallAcc {
+  id: string
+  name: string
+  args: string
+}
+
+async function consumeSse(
+  body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
+  onText: (delta: string) => void,
+  model: string,
+  signal: AbortSignal,
+): Promise<ChatResponse> {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let text = ''
+  const toolAcc = new Map<number, ToolCallAcc>()
+
+  for await (const chunk of iterateBody(body)) {
+    if (signal.aborted) {
+      throw new LlmError(LlmErrorCodes.LLM_ABORTED, '流式请求已被中止')
+    }
+    buffer += decoder.decode(chunk, { stream: true })
+    // SSE 行协议：事件以 \n 分行（\r\n 容错）；只认 data: 行
+    let nl = buffer.indexOf('\n')
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).replace(/\r$/, '')
+      buffer = buffer.slice(nl + 1)
+      nl = buffer.indexOf('\n')
+      if (!line.startsWith('data:')) continue
+      const data = line.slice('data:'.length).trimStart()
+      if (data === '[DONE]') {
+        const toolCalls = [...toolAcc.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, acc]) => ({ id: acc.id, name: acc.name, args: parseArgsLoose(acc.args) }))
+        return { text: text === '' ? null : text, toolCalls, meta: { model } }
+      }
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(data)
+      } catch (err) {
+        throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, `SSE 数据块不是 JSON：${String(err)}`)
+      }
+      const choices = recordOf(parsed)?.['choices']
+      const delta = Array.isArray(choices) && choices.length > 0
+        ? recordOf(recordOf(choices[0])?.['delta'])
+        : null
+      if (!delta) continue // usage/role 等无 delta 的块直接跳过
+      const content = delta['content']
+      if (typeof content === 'string' && content !== '') {
+        text += content
+        onText(content)
+      }
+      const rawCalls = delta['tool_calls']
+      if (Array.isArray(rawCalls)) {
+        for (const raw of rawCalls) {
+          const call = recordOf(raw)
+          const fn = recordOf(call?.['function'])
+          if (!call) continue
+          const index = typeof call['index'] === 'number' ? call['index'] : 0
+          const acc = toolAcc.get(index) ?? { id: '', name: '', args: '' }
+          if (typeof call['id'] === 'string' && call['id'] !== '') acc.id = call['id']
+          if (typeof fn?.['name'] === 'string' && fn['name'] !== '') acc.name = fn['name']
+          if (typeof fn?.['arguments'] === 'string') acc.args += fn['arguments']
+          toolAcc.set(index, acc)
+        }
+      }
+    }
+  }
+  throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, 'SSE 流意外结束（未收到 [DONE]）')
+}
+
+/** 响应体归一迭代：web ReadableStream 或注入的 AsyncIterable（测试） */
+async function* iterateBody(
+  body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
+): AsyncGenerator<Uint8Array> {
+  if (Symbol.asyncIterator in body) {
+    yield* body
+    return
+  }
+  const reader = (body as ReadableStream<Uint8Array>).getReader()
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return
+    if (value) yield value
+  }
 }
 
 /** 代理 dispatcher：仅 proxyUrl 配置时按需加载（undici 为 llm 唯一运行时依赖，纯 JS 无编译） */

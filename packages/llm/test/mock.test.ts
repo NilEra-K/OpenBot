@@ -63,3 +63,28 @@ describe('MockChatProvider', () => {
     expect(err.message).toBe('诊断')
   })
 })
+
+describe('MockChatProvider 流式对称（onText）', () => {
+  it('提供 onText 时按 3 码元定长拆块回调；聚合结果不变', async () => {
+    const provider = new MockChatProvider({ steps: [{ text: '你好世界abc' }] })
+    const deltas: string[] = []
+    const r = await provider.chat({ ...req('q'), onText: (t) => deltas.push(t) })
+    expect(deltas).toEqual(['你好世', '界ab', 'c'])
+    expect(r.text).toBe('你好世界abc')
+  })
+
+  it('纯工具调用步零回调；不提供 onText 时零回调且行为不变', async () => {
+    const provider = new MockChatProvider({
+      steps: [
+        { toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['ls'] } }] },
+        { text: '完成' },
+      ],
+    })
+    const deltas: string[] = []
+    const r1 = await provider.chat({ ...req('q'), onText: (t) => deltas.push(t) })
+    expect(deltas).toEqual([])
+    expect(r1.toolCalls.length).toBe(1)
+    const r2 = await provider.chat(req('继续'))
+    expect(r2.text).toBe('完成')
+  })
+})

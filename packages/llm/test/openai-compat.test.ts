@@ -179,3 +179,99 @@ describe('OpenAiCompatProvider 错误映射', () => {
     expect(calls.length).toBe(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 流式（onText → stream:true SSE）——与 backend-mock/procexec 同一「流是实况、聚合是事实」契约
+// ---------------------------------------------------------------------------
+
+/** SSE 响应：chunks 逐块产出（跨块边界由测试自行切，验证行缓冲）；注入式异步迭代器 body */
+function sseRes(chunks: string[]): Awaited<ReturnType<FetchLike>> {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw new Error('流式路径不应走 json()')
+    },
+    text: async () => chunks.join(''),
+    body: (async function* () {
+      const encoder = new TextEncoder()
+      for (const c of chunks) yield encoder.encode(c)
+    })(),
+  }
+}
+
+/** SSE data 行事件 */
+const ev = (obj: unknown): string => `data: ${JSON.stringify(obj)}\n\n`
+const delta = (d: Record<string, unknown>): unknown => ({ choices: [{ delta: d }] })
+
+describe('OpenAiCompatProvider 流式（onText）', () => {
+  it('stream:true + 文本增量逐块回调 + 聚合终态；data 行跨 chunk 边界收敛', async () => {
+    // 故意把第二条 data 行切开跨三个 chunk（多字节中文 + 换行分离）
+    const { fetchImpl, calls } = makeFetch(() =>
+      sseRes([
+        ev(delta({ role: 'assistant' })),
+        'data: {"choices":[{"del',
+        'ta":{"content":"你好"}}]}',
+        '\n\n',
+        ev(delta({ content: '!' })),
+        'data: [DONE]\n\n',
+      ]),
+    )
+    const provider = new OpenAiCompatProvider({ config, fetchImpl })
+    const deltas: string[] = []
+    const response = await provider.chat(
+      { messages: [{ role: 'user', content: 'hi' }], onText: (t) => deltas.push(t) },
+    )
+    expect(deltas).toEqual(['你好', '!'])
+    expect(response.text).toBe('你好!')
+    expect(response.toolCalls).toEqual([])
+    // 流式开关：请求体 stream 必须为 true
+    const body = JSON.parse(calls[0]!.init.body ?? '{}') as Record<string, unknown>
+    expect(body['stream']).toBe(true)
+  })
+
+  it('tool_calls 增量拼装（index 归位、arguments 逐块拼接、[DONE] 后聚合）', async () => {
+    const { fetchImpl } = makeFetch(() =>
+      sseRes([
+        ev(delta({ tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'exec', arguments: '{"command":' } }] })),
+        ev(delta({ tool_calls: [{ index: 0, function: { arguments: '["ls"]}' } }] })),
+        'data: [DONE]\n\n',
+      ]),
+    )
+    const provider = new OpenAiCompatProvider({ config, fetchImpl })
+    const deltas: string[] = []
+    const response = await provider.chat(
+      { messages: [{ role: 'user', content: '列目录' }], onText: (t) => deltas.push(t) },
+    )
+    expect(deltas).toEqual([]) // 纯工具调用回合零文本增量
+    expect(response.text).toBeNull()
+    expect(response.toolCalls).toEqual([{ id: 'c1', name: 'exec', args: { command: ['ls'] } }])
+  })
+
+  it('流意外结束（无 [DONE]）：LLM_RESPONSE_INVALID', async () => {
+    const { fetchImpl } = makeFetch(() => sseRes([ev(delta({ content: '半' }))]))
+    const provider = new OpenAiCompatProvider({ config, fetchImpl })
+    await expect(
+      provider.chat({ messages: [{ role: 'user', content: 'x' }], onText: () => {} }),
+    ).rejects.toMatchObject({ code: 'LLM_RESPONSE_INVALID' })
+  })
+
+  it('流式响应缺 body：LLM_RESPONSE_INVALID', async () => {
+    const { fetchImpl } = makeFetch(() => ({ ok: true, status: 200, json: async () => ({}), text: async () => '' }))
+    const provider = new OpenAiCompatProvider({ config, fetchImpl })
+    await expect(
+      provider.chat({ messages: [{ role: 'user', content: 'x' }], onText: () => {} }),
+    ).rejects.toMatchObject({ code: 'LLM_RESPONSE_INVALID' })
+  })
+
+  it('无 onText 仍走非流式 json 路径（stream:false 不变）', async () => {
+    const { fetchImpl, calls } = makeFetch(() =>
+      jsonRes({ choices: [{ message: { content: '聚合' } }] }),
+    )
+    const provider = new OpenAiCompatProvider({ config, fetchImpl })
+    const response = await provider.chat(req([{ role: 'user', content: 'x' }]))
+    expect(response.text).toBe('聚合')
+    const body = JSON.parse(calls[0]!.init.body ?? '{}') as Record<string, unknown>
+    expect(body['stream']).toBe(false)
+  })
+})

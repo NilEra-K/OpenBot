@@ -15,10 +15,12 @@ import {
   ToolRegistry,
   TurnRunner,
 } from '../src/index.js'
+import type { RunStreamEvent } from '../src/index.js'
 
 interface HarnessOptions {
   maxToolRounds?: number
   boxOf?: (agentId: string) => string | null
+  onStream?: (event: RunStreamEvent) => void
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -67,7 +69,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
 
   const gate = new AutoApprovalGate({ bus, ledger, now: () => t, nextApprovalId: () => `appr-${++approvalCounter}` })
   const tools = new ToolRegistry()
-    .register(execTool({ backend, bus }))
+    .register(execTool({ backend, bus, onStream: options.onStream }))
     .register(sendMessageTool(messaging))
     .register(gated(hostFetchTool(), { gate }))
 
@@ -84,6 +86,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     nextMessageId: () => `msg-${++msgCounter}`,
     systemPrompt: '你是 OpenBot 测试 agent',
     maxToolRounds: options.maxToolRounds,
+    onStream: options.onStream,
   })
   executeRef.current = runner.execute
 
@@ -236,5 +239,78 @@ describe('TurnRunner A2A 链路（chat → send_message → 对端 turn → box 
     const provider = h.llms.get('a1')!
     const second = provider.requests[1]?.messages ?? []
     expect(second[second.length - 1]?.content).toContain('宿主网络桩')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// run 流事件（onStream）——llm 增量与 exec 实况同型上报（流是实况、聚合是事实）
+// ---------------------------------------------------------------------------
+
+describe('TurnRunner 流事件（onStream）', () => {
+  /** 归一形状（省 agentId/runId，断言关注序列与载荷） */
+  const shape = (e: RunStreamEvent) => ({
+    type: e.type,
+    stream: e.stream,
+    ...(e.meta ?? {}),
+    ...(e.text !== undefined ? { text: e.text } : {}),
+    ...(e.channel !== undefined ? { channel: e.channel } : {}),
+    ...(e.exitCode !== undefined ? { exitCode: e.exitCode } : {}),
+  })
+
+  it('全序列：llm 轮1(工具调用,零 chunk) → exec open/chunk/end → llm 轮2 增量 → end', async () => {
+    const events: RunStreamEvent[] = []
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['node', '-v'] } }] },
+          { text: '装好了' },
+        ],
+      },
+      { onStream: (e) => events.push(e) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '装环境', nonce: 'n1' })
+    await waitIdle([a1])
+
+    // agentId/runId 全序列一致
+    expect(events.every((e) => e.agentId === 'a1' && e.runId === 'a1-run-1')).toBe(true)
+    expect(events.map(shape)).toEqual([
+      { type: 'open', stream: 'llm', round: 1 },
+      { type: 'end', stream: 'llm' }, // 纯工具调用轮：零 chunk，chat 返回即收流
+      { type: 'open', stream: 'exec', command: ['node', '-v'], boxId: 'box-1' },
+      { type: 'chunk', stream: 'exec', text: 'mock: node -v', channel: 'stdout' },
+      { type: 'end', stream: 'exec', exitCode: 0 },
+      { type: 'open', stream: 'llm', round: 2 },
+      { type: 'chunk', stream: 'llm', text: '装好了' }, // mock 定长 3 码元拆块
+      { type: 'end', stream: 'llm' },
+    ])
+  })
+
+  it('llm 失败：abort 带原因（run 照常失败，流如实中止）', async () => {
+    const events: RunStreamEvent[] = []
+    const h = makeHarness({ a1: [{ text: '第一步' }] }, { onStream: (e) => events.push(e) })
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: 'q1', nonce: 'n1' })
+    await waitIdle([a1])
+    // 第二次 chat 脚本耗尽 → 第二个 run 的 llm 流 open 后 abort
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: 'q2', nonce: 'n2' })
+    await waitIdle([a1])
+    const second = events.filter((e) => e.runId === 'a1-run-2')
+    expect(second.map(shape)).toEqual([
+      { type: 'open', stream: 'llm', round: 1 },
+      { type: 'abort', stream: 'llm' },
+    ])
+    expect(second.at(-1)?.reason).toContain('脚本')
+  })
+
+  it('无 onStream：行为不变（回归）', async () => {
+    const h = makeHarness({
+      a1: [{ text: '直接回答' }],
+    })
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: 'q', nonce: 'n1' })
+    await waitIdle([a1])
+    const records = await h.transcript.readAll('a1')
+    expect(records.map((r) => r.kind)).toEqual(['user', 'agent'])
   })
 })
