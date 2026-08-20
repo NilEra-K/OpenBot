@@ -9,6 +9,7 @@ import type { EventBus } from '@openbot/core'
 import type { ToolCall, ToolSpec } from '@openbot/llm'
 import type { BoxBackend } from '@openbot/boxes'
 import type { A2aService } from '@openbot/messaging'
+import type { TranscriptStore } from '@openbot/state'
 import type { RunStreamEvent } from '../stream/index.js'
 
 export const ToolErrorCodes = {
@@ -16,6 +17,15 @@ export const ToolErrorCodes = {
   TOOL_ARGS_INVALID: 'TOOL_ARGS_INVALID',
   TOOL_NO_BOX: 'TOOL_NO_BOX',
 } as const
+
+/** 过程文本持久上限（防 transcript 撑爆；截断加尾标——诚实标记不静默丢） */
+export const MAX_THINKING_CHARS = 8_000
+export const MAX_EXEC_OUTPUT_CHARS = 16_000
+
+/** 持久截断：超长文本截断并加尾标（turn 与工具层共用） */
+export function truncateForTranscript(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n[…超长已截断]`
+}
 
 /** 工具执行上下文：turn 引擎组装，工具不得越权取其他信息 */
 export interface ToolContext {
@@ -94,6 +104,8 @@ export interface BoxToolDeps {
   bus: EventBus
   /** run 实况上报（装配注入，与 TurnRunner 的 onStream 同型汇流——经 WS /stream，不进事件总线） */
   onStream?: (event: RunStreamEvent) => void
+  /** 过程事实持久（可选注入——exec 完成点聚合落 transcript，重启后对话流可恢复） */
+  transcript?: TranscriptStore
 }
 
 /** exec：Box 内执行命令（Box 内自由，不过闸）。输出增量经 onStream 实况上报（stdout/stderr 通道） */
@@ -122,6 +134,8 @@ export function execTool(deps: BoxToolDeps): Tool {
           command,
           cwd,
           timeoutMs: 30_000,
+          // run 取消/抢占传导：中止即杀 Box 内命令（用户打断工作中的 agent 的信号终点）
+          signal: ctx.signal,
           ...(emit
             ? {
                 onChunk: (c) =>
@@ -137,6 +151,15 @@ export function execTool(deps: BoxToolDeps): Tool {
           exitCode: result.exitCode,
         })
         emit?.({ type: 'end', agentId: ctx.agentId, runId: ctx.runId, stream: 'exec', exitCode: result.exitCode })
+        // 过程事实：exec 完成点聚合落 transcript（实况断线不补，事实可重放）
+        await deps.transcript?.append(ctx.agentId, 'exec', {
+          runId: ctx.runId,
+          boxId,
+          command,
+          exitCode: result.exitCode,
+          stdout: truncateForTranscript(result.stdout, MAX_EXEC_OUTPUT_CHARS),
+          stderr: truncateForTranscript(result.stderr, MAX_EXEC_OUTPUT_CHARS),
+        })
         return [`exit=${result.exitCode}`, result.stdout, result.stderr].filter((s) => s !== '').join('\n')
       } catch (err) {
         emit?.({
@@ -144,6 +167,14 @@ export function execTool(deps: BoxToolDeps): Tool {
           agentId: ctx.agentId,
           runId: ctx.runId,
           stream: 'exec',
+          reason: err instanceof Error ? err.message : String(err),
+        })
+        // 中止也是事实：记录错误语义（重启后呈现同样诚实）
+        await deps.transcript?.append(ctx.agentId, 'exec', {
+          runId: ctx.runId,
+          boxId,
+          command,
+          aborted: true,
           reason: err instanceof Error ? err.message : String(err),
         })
         throw err

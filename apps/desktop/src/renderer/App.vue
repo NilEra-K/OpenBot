@@ -134,6 +134,26 @@ body {
   font-size: 14px;
 }
 
+/* 全局滚动条（prototype 92-94 行同源）：深色界面统一——原生白底灰条在深色 UI 中割裂 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg3);
+  border-radius: 5px;
+  border: 2px solid var(--bg1); /* 与容器底同色的边框=滑块四周留隙的悬浮感 */
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent; /* 横纵交汇角（bo-screen 横向滚动场景） */
+}
+
 #app {
   height: 100%;
 }

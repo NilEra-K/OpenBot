@@ -12,6 +12,8 @@ export const ApprovalErrorCodes = {
   APPROVAL_DENIED: 'APPROVAL_DENIED',
   /** resolve 了从未受理过的审批 */
   APPROVAL_NOT_FOUND: 'APPROVAL_NOT_FOUND',
+  /** 审批等待中 run 被中止——审批作废（不视为 denied，也不视为 approved） */
+  APPROVAL_RUN_ABORTED: 'APPROVAL_RUN_ABORTED',
 } as const
 
 export type ApprovalDecision = 'approved' | 'denied'
@@ -29,6 +31,12 @@ export interface ApprovalRequest {
 export interface ApprovalGate {
   /** true=放行；false=拒绝（工具收到 APPROVAL_DENIED） */
   request(request: ApprovalRequest): Promise<boolean>
+  /**
+   * run 中止善后（可选实现）：该 run 的挂起审批按 denied 落账并唤醒等待方——
+   * 用户中止 run = 否决其未决请求（审批卡随 resolved 事件自然收敛，账本不孤儿、重启不重放）。
+   * 返回处理条数。
+   */
+  revokeRun?(runId: string): Promise<number>
 }
 
 export interface AutoApprovalGateDeps {
@@ -96,7 +104,8 @@ interface PendingApproval {
 
 /**
  * 挂起式闸门（桌面装配用）：request() 挂起至 resolve()（审批弹窗回写）——
- * 无闸门侧超时，挂死由 run 的 deadlineMs 兜底（审批期间 run 未结束，语义自洽）。
+ * 挂起不设闸门侧超时；run 中止的解锁走 gated() 的 signal race + 装配层 revokeRun 善后
+ * （deadlineMs 只 abort signal，叫不醒本挂起——勿再依赖 deadline 兜底）。
  * 幂等与崩溃恢复：账本 pending + 重启后再次 request 同 nonce → 重发 requested 事件再挂起；
  * 已决议的 nonce → 直接回放首次决定，不再弹窗。approvalId 由 nonce 确定性派生（重发同 id）。
  */
@@ -145,6 +154,17 @@ export class ManualApprovalGate implements ApprovalGate {
   /** 决议回写（v1.approval.resolve 命令的目标）：账本落定 + 唤醒等待方 + resolved 事件 */
   async resolve(nonce: string, decision: ApprovalDecision): Promise<boolean> {
     return this.#withLock(() => this.#resolveLocked(nonce, decision))
+  }
+
+  /** run 中止善后（ApprovalGate.revokeRun）：该 run 的挂起审批按 denied 落账——用户主权传导 */
+  async revokeRun(runId: string): Promise<number> {
+    return this.#withLock(async () => {
+      const targets = [...this.#pending.values()].filter((p) => p.request.runId === runId)
+      for (const target of targets) {
+        await this.#resolveLocked(target.request.nonce, 'denied')
+      }
+      return targets.length
+    })
   }
 
   /** 当前挂起中的审批（UI/测试观察面） */

@@ -25,6 +25,8 @@ export interface ProcSpec {
   encoding?: 'utf8' | 'utf16le'
   /** 流式回调；聚合结果仍完整返回（流是实况，聚合是事实） */
   onChunk?: (chunk: ProcChunk) => void
+  /** 外部中止（run 取消/抢占传导）：触发即 kill 子进程，结果置 aborted（与超时正交） */
+  signal?: AbortSignal
 }
 
 export interface ProcResult {
@@ -34,6 +36,8 @@ export interface ProcResult {
   stdout: string
   stderr: string
   timedOut: boolean
+  /** 外部 AbortSignal 中止（用户打断工作中的 agent 的传导终点） */
+  aborted: boolean
 }
 
 /** 可注入的执行器类型（测试注入替身；默认 runProcess） */
@@ -70,12 +74,28 @@ const runProcess: ProcRunner = (spec) =>
     }
     const acc = { stdout: '', stderr: '' }
     let timedOut = false
+    let aborted = false
     let settled = false
+
+    // 外部中止：kill 子进程，close 后以 aborted 结算（与超时 kill 同型）；监听器结算后移除防泄漏
+    const abortSignal = spec.signal
+    const onAbort = (): void => {
+      aborted = true
+      child.kill()
+    }
+    const detachAbort = (): void => {
+      abortSignal?.removeEventListener('abort', onAbort)
+    }
+    if (abortSignal) {
+      if (abortSignal.aborted) onAbort()
+      else abortSignal.addEventListener('abort', onAbort, { once: true })
+    }
 
     // spawn 的 error 事件（ENOENT 等）可能在 exit 之前或之后；只认第一个终态
     child.on('error', (err) => {
       if (settled) return
       settled = true
+      detachAbort()
       if (timer) clearTimeout(timer)
       const e = new Error(`进程启动失败：${file}`, { cause: err })
       e.name = 'ProcSpawnError'
@@ -107,6 +127,7 @@ const runProcess: ProcRunner = (spec) =>
     child.on('close', (exitCode, signal) => {
       if (settled) return
       settled = true
+      detachAbort()
       if (timer) clearTimeout(timer)
       // flush 解码器残留（流内最后一块不完整多字节序列在此收敛）
       resolve({
@@ -115,6 +136,7 @@ const runProcess: ProcRunner = (spec) =>
         stdout: acc.stdout + decoders.stdout.decode(),
         stderr: acc.stderr + decoders.stderr.decode(),
         timedOut,
+        aborted,
       })
     })
   })

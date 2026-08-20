@@ -17,6 +17,28 @@ const kernel = useKernelStore()
 const hostEl = ref<HTMLElement | null>(null)
 const note = ref<string | null>(null)
 
+/**
+ * 开场回放：该 Box 近期 agent 执行（与 ctx 屏幕同源的实况块）渲染成终端文本——
+ * 「接手显示器」的连续性：进去先看到 agent 刚干的活，分隔行之下才是新会话提示符。
+ * 本地 write 先落屏（pty 输出经 WS 异步后到，天然在回放之下）；实况断线不补——
+ * 重启后无回放直接新会话（诚实降级）。
+ */
+const recentExecText = (): string => {
+  const blocks = kernel.streams.filter((s) => s.boxId === props.boxId && s.stream === 'exec').slice(-10)
+  if (blocks.length === 0) return ''
+  const parts: string[] = []
+  for (const block of blocks) {
+    if (block.command) parts.push(`\x1b[33m$ ${block.command.join(' ')}\x1b[0m\r\n`)
+    const out = block.stdout.replace(/\s+$/, '')
+    if (out !== '') parts.push(`${out}\r\n`)
+    const err = block.stderr.replace(/\s+$/, '')
+    if (err !== '') parts.push(`\x1b[31m${err}\x1b[0m\r\n`)
+    if (block.state === 'abort') parts.push(`\x1b[31m✗ 已中止：${block.abortReason ?? ''}\x1b[0m\r\n`)
+  }
+  parts.push('\x1b[90m── 以上为该 Box 近期执行（agent）· 下方为新终端会话 ──\x1b[0m\r\n\r\n')
+  return parts.join('')
+}
+
 let term: Terminal | null = null
 let shellId: string | null = null
 let offPty: (() => void) | null = null
@@ -36,6 +58,8 @@ onMounted(() => {
     },
   })
   term.open(hostEl.value!)
+  // 开场回放先落屏（本地 write 即时；pty 输出经 WS 异步到达，天然接在回放之下）
+  term.write(recentExecText())
   // 输出：pty 流 → term.write（按 boxId 过滤——见文件头竞态说明）
   offPty = kernel.onPtyEvent((ev) => {
     if (ev.boxId !== props.boxId) return

@@ -1,8 +1,8 @@
 /**
  * turn 执行引擎：调度器 execute 回调的实现——chat（用户消息）与 a2a（私聊唤醒）两种 run。
  * 工具循环：llm 回 toolCalls → 逐个执行 → 结果回喂 → 直到无命令（终答）或预算耗尽。
- * transcript 只记领域消息（user/agent/a2a），工具往返留在 turn 内（详细任务日志归 v1.task，后续）。
- * 参考：ARCHITECTURE.md §3.6。
+ * transcript 记领域消息（user/agent/a2a）与过程事实（thinking/exec——完成点聚合落盘，
+ * 重启后对话流可恢复；不进 llm 历史）。参考：ARCHITECTURE.md §3.6/§7。
  */
 import { KernelError } from '@openbot/core'
 import type { ActiveRun, EventBus, RunExecutor } from '@openbot/core'
@@ -12,6 +12,7 @@ import { LlmError } from '@openbot/llm'
 import type { ChatMessage, ChatProvider } from '@openbot/llm'
 import type { RunStreamEvent } from '../stream/index.js'
 import type { ToolContext, ToolRegistry } from '../tools/index.js'
+import { MAX_THINKING_CHARS, truncateForTranscript } from '../tools/index.js'
 
 export const RunnerErrorCodes = {
   RUN_KIND_UNKNOWN: 'RUN_KIND_UNKNOWN',
@@ -19,6 +20,8 @@ export const RunnerErrorCodes = {
   RUN_TOOL_BUDGET_EXCEEDED: 'RUN_TOOL_BUDGET_EXCEEDED',
   /** llm 抛出非 LlmError 的未知错误 */
   LLM_FAILED: 'LLM_FAILED',
+  /** run 已被外部中止（用户打断/抢占）——轮间检查点的快速终止 */
+  RUN_ABORTED: 'RUN_ABORTED',
 } as const
 
 export const DEFAULT_MAX_TOOL_ROUNDS = 8
@@ -94,6 +97,11 @@ export class TurnRunner {
     let round = 0 // 工具轮计数（预算判据，语义不变）
     let chatRound = 0 // chat 序号（llm 流事件标注，含终答轮）
     for (;;) {
+      // 轮间中止检查点：工具已返回但 run 已被取消/抢占时立即终止——不再发起下一轮 llm
+      // （exec 由后端 signal 杀进程；此检查点兜住审批等不感知 signal 的等待返回后的收尾）
+      if (run.signal.aborted) {
+        throw new KernelError(RunnerErrorCodes.RUN_ABORTED, `run 已中止（run ${run.runId}）`)
+      }
       // llm 流：open（轮次序号）→ onText 增量 chunk → end/abort（聚合终态语义在 chat 返回值里）
       chatRound += 1
       emit({ type: 'open', stream: 'llm', meta: { round: chatRound } })
@@ -110,6 +118,14 @@ export class TurnRunner {
         emit({ type: 'abort', stream: 'llm', reason: err instanceof Error ? err.message : String(err) })
         throw err
       }
+      // 过程事实：本轮思考落 transcript（中间轮与终答轮都记、final 区分——终答文本在
+      // thinking 与 agent 消息各存一份，一致性优先；toChatMessages 不映射此 kind，不进 llm 历史）
+      await this.#deps.transcript.append(agentId, 'thinking', {
+        runId: run.runId,
+        round: chatRound,
+        text: truncateForTranscript(response.text ?? '', MAX_THINKING_CHARS),
+        final: response.toolCalls.length === 0,
+      })
       if (response.toolCalls.length === 0) {
         const text = response.text ?? ''
         const messageId = this.#deps.nextMessageId()

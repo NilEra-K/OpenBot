@@ -117,8 +117,13 @@
     (ERR_IPC_CHANNEL_CLOSED/V8 Realloc 断言),--no-file-parallelism 单 worker 正常
   - **对话流聚合(2026-08-20 用户裁定)**:「模型说的+模型做的」聚合进对话流——思考块(llm 增量,
     全部轮次留痕)与 task 卡内嵌输出区($ 命令+输出一体,复用 BoxScreen)按时间序进 stream,
-    ctx 右栏纯化为一块显示器(与原型 is-single 同构);实况断线不补——重启后历史卡退化为
-    命令+状态,不造假(细案见 P3-ctx-ops-align.md 追加轮次)
+    ctx 右栏纯化为一块显示器(与原型 is-single 同构);当时重启后历史卡退化(实况断线不补)——
+    随后由「过程事实持久」条目补齐(细案见 P3-ctx-ops-align.md 追加轮次)
+  - **过程事实持久(2026-08-20 用户裁定)**:思考与执行过程重启后消失(实况断线不补的直接后果)
+    →完成点聚合落 transcript(新 kind 'thinking'/'exec',append-only 向前兼容,不进 llm 历史);
+    终答轮 thinking 与 agent 消息双份存(一致性优先,用户确认);截断防线 8k/16k 带尾标;
+    恢复走 loadHistory 伪流块投影(渲染层零改动,按 runId+维度去重);E2E 二次启动断言
+    (细案见 P3-ctx-ops-align.md 追加轮次三)
 - [ ] 8. electron-builder:win nsis + portable(asar、图标、userData 迁移注意);打包产物真内核冒烟;`dist` 脚本替换占位
 - [ ] 9. 验收:真实后端 E2E 套件(`OPENBOT_E2E_BACKEND=wsl|docker|podman` 选择性跑,默认 mock 不变);**真实 Box 内「改项目→构建」演示(fixture 项目:patch→build→diff 回读)产出 diff**;三命令全绿
 - [x] 10. **PTY 终端远程控制(2026-08-20 用户裁定从 P4 提前,插队在 Step 8 打包前实施)**:操作台大屏从「纯显示」升级为终端级交互——用户亲手在 Box 内敲命令;agent 的 exec 路线(run/审批/预算)完全不涉及
@@ -145,6 +150,28 @@
     boxId 过滤而非 shellId(WS 事件可先于 shellOpen 的 HTTP 响应到达,先订阅后 open 开场不丢);
     caps.interactive 驱动 BoxOps 切换(xterm 终端/行视图诚实降级);E2E 断言 xterm 挂载+键盘键入
     mock 回显闭环;183 单测+E2E 全绿
+- [x] 11. **用户中止修复(2026-08-20 用户报障:「AGENT 工作时无法打断他」)**:打断链路「有壳无芯」——
+  UI 按钮/命令面/调度器都在,signal 在三个底层环节断掉
+  - **断点一(exec 主因)**:`ToolContext.signal` 组装了但 `execTool` 调 `backend.exec()` 时丢弃;
+    `ExecSpec`/`ProcSpec` 均无 signal 字段(只有超时 kill)——agent 在 Box 里跑命令时(exec 硬编码
+    30s 超时)点中止完全无效,turn 挂到命令自然结束
+  - **断点二(审批死锁)**:`ManualApprovalGate.request()` 挂起不感知 signal——原注释声称「挂死由
+    deadlineMs 兜底」是错误认知(deadline 只 abort signal,叫不醒挂起;watchdog 也只在
+    !aborted 时动手);run 停在审批时中止即槽位死锁,唯一解锁是用户批准/拒绝
+  - **断点三(体验)**:首次 cancel 后 signal 已 abort 但 run 仍 running;再点 `scheduler.cancel`
+    返回 false 抛 SCHED_RUN_NOT_CANCELLABLE 被 UI 静默吞——怎么点都没反应
+  - **修复(自底向上)**:procexec `ProcSpec.signal`(abort 监听 kill,`ProcResult.aborted` 与 timedOut
+    正交)→ `ExecSpec.signal`(可选字段读取端兼容)+ backend-wsl 透传抛 `BOX_EXEC_ABORTED` + mock
+    race 对称 → execTool 传 `ctx.signal` + TurnRunner 轮间检查点(工具返回即终止,不空走一轮 llm)→
+    `gated()` signal race(挂起中止抛 APPROVAL_RUN_ABORTED)+ `ManualApprovalGate.revokeRun`(装配层
+    订阅 lifecycle finished(aborted),该 run 未决审批按 denied 落账——**用户裁定:中止即否决**,
+    resolved 事件收敛 UI 卡、账本不孤儿、重启不重放)→ UI「正在中止…」禁用态(run 离开 queued/running
+    自动复位)+ streamUnits 末尾残余区分 pending/ended(既有 bug:中止后「工作中…」永不消失)
+  - **实测教训**:coordinator/runner 测试链接 workspace 依赖的 **dist 构建产物**——改 boxes 源码后必须
+    `pnpm build` 再跑下游测试,否则新逻辑不生效且表现为「玄学挂起」;E2E 同理要先 `build:renderer`
+  - 验收:procexec node 子进程真杀断言/wsl 替身透传断言/mock race/turn 中止传导/gated race/revokeRun/
+    装配全链路(审批挂起取消→aborted+denied 收敛);E2E 中止用例(审批弹窗「稍后处理」→中止→
+    「正在中止…」→gate 卡消失→run 卡「已中止」→mock 仅收到 1 次 llm 请求);202 单测+E2E 全绿
 
 ## 设计要点(开工前逐条细化,先记已知决策)
 

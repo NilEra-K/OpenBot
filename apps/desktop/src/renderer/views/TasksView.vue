@@ -3,7 +3,7 @@
  * 排程视图（prototype.html 迁移）：三 lane 队列——user（永远最先）/ agent / background。
  * 数据源：v1.lifecycle.* 事件累积（RunCard）；状态永远诚实（含 escaped/reaped）。
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { RunCard } from '../stores/kernel'
 import { agentColor } from '../lib/agent-color'
@@ -44,6 +44,25 @@ const fmtDur = (ms: number): string => {
 
 const fmtTime = (at: number): string =>
   new Date(at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+/** 正在中止的 runId 集合（点击即置的本地反馈态；run 离开 queued/running 自动清——事实归事件流） */
+const cancelling = ref(new Set<string>())
+
+/** 中止 run（原型 task-foot 的 abort 位）：排队中直接结算，活跃中经 AbortSignal 传播 */
+const cancelRun = (run: RunCard): void => {
+  if (cancelling.value.has(run.runId)) return
+  cancelling.value = new Set(cancelling.value).add(run.runId)
+  void kernel.cancelRun(run.agentId, run.runId).catch(() => {})
+}
+watch(
+  () => kernel.runs.map((r) => `${r.runId}:${r.state}`).join('|'),
+  () => {
+    const live = new Set(
+      kernel.runs.filter((r) => r.state === 'queued' || r.state === 'running').map((r) => r.runId),
+    )
+    cancelling.value = new Set([...cancelling.value].filter((id) => live.has(id)))
+  },
+)
 
 /** 今日 run（本地 0 点起；无数据的指标藏起来——诚实降级，不造 mock 数字） */
 const todayRuns = computed(() => {
@@ -93,6 +112,15 @@ const successRate = computed(() => {
             <span class="stat-dot" :style="{ background: agentColor(run.agentId) }"></span>
             <span class="run-agent">{{ run.agentId }}</span>
             <span class="chip" :class="stateChip(run).cls">{{ stateChip(run).label }}</span>
+            <button
+              v-if="run.state === 'queued' || run.state === 'running'"
+              class="run-stop"
+              :disabled="cancelling.has(run.runId)"
+              :title="`中止 run ${run.runId}`"
+              @click="cancelRun(run)"
+            >
+              {{ cancelling.has(run.runId) ? '正在中止…' : '中止' }}
+            </button>
           </div>
           <div class="run-what mono">{{ run.summary ?? run.runId }}</div>
           <div class="run-meta mono">

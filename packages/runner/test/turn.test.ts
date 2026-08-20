@@ -6,6 +6,7 @@ import { A2aService } from '@openbot/messaging'
 import { MockChatProvider } from '@openbot/llm'
 import type { MockStep } from '@openbot/llm'
 import { MockBoxBackend } from '@openbot/boxes'
+import type { ExecResult, ExecSpec } from '@openbot/boxes'
 import {
   AutoApprovalGate,
   execTool,
@@ -21,6 +22,8 @@ interface HarnessOptions {
   maxToolRounds?: number
   boxOf?: (agentId: string) => string | null
   onStream?: (event: RunStreamEvent) => void
+  /** mock 后端 exec 行为注入（慢 exec 模拟子进程长跑——中止传导的编排位） */
+  exec?: (boxId: string, spec: ExecSpec) => ExecResult | Promise<ExecResult>
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -37,7 +40,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
   const llms = new Map<string, MockChatProvider>(
     Object.entries(llmSteps).map(([agentId, steps]) => [agentId, new MockChatProvider({ steps })]),
   )
-  const backend = new MockBoxBackend({ now: () => t })
+  const backend = new MockBoxBackend({ now: () => t, ...(options.exec ? { exec: options.exec } : {}) })
   const boxes = new Map<string, string>()
 
   const executeRef: { current: RunExecutor | null } = { current: null }
@@ -69,7 +72,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
 
   const gate = new AutoApprovalGate({ bus, ledger, now: () => t, nextApprovalId: () => `appr-${++approvalCounter}` })
   const tools = new ToolRegistry()
-    .register(execTool({ backend, bus, onStream: options.onStream }))
+    .register(execTool({ backend, bus, onStream: options.onStream, transcript }))
     .register(sendMessageTool(messaging))
     .register(gated(hostFetchTool(), { gate }))
 
@@ -113,6 +116,15 @@ async function waitIdle(schedulers: { isIdle: boolean }[]): Promise<void> {
   throw new Error('等待调度器空闲超时')
 }
 
+/** 轮询等待条件成立（异步编排窗口；超时抛错） */
+async function waitUntil(cond: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`等待超时（${timeoutMs}ms）`)
+    await new Promise<void>((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 const kinds = (events: KernelEvent[], type: KernelEvent['type']): number =>
   events.filter((e) => e.type === type).length
 
@@ -139,10 +151,46 @@ describe('TurnRunner chat（工具循环）', () => {
     expect(second[second.length - 1]?.content).toBe('exit=0\nmock: node -v')
 
     const records = await h.transcript.readAll('a1')
-    expect(records.map((r) => r.kind)).toEqual(['user', 'agent'])
-    expect(records[1]?.payload).toMatchObject({ text: '装好了', replyTo: acc.messageId })
+    // 过程事实穿插：user → thinking(轮1) → exec → thinking(轮2,终答) → agent
+    expect(records.map((r) => r.kind)).toEqual(['user', 'thinking', 'exec', 'thinking', 'agent'])
+    expect(records[4]?.payload).toMatchObject({ text: '装好了', replyTo: acc.messageId })
     expect(kinds(h.events, 'v1.box.exec')).toBe(2) // started + finished
     expect(kinds(h.events, 'v1.message.agent')).toBe(1)
+  })
+
+  it('过程事实：thinking（final 区分轮次）与 exec（命令/exitCode/输出）在完成点写入', async () => {
+    const h = makeHarness({
+      a1: [
+        { text: '先查一下版本', toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['node', '-v'] } }] },
+        { text: '装好了' },
+      ],
+    })
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '装环境', nonce: 'n1' })
+    await waitIdle([a1])
+
+    const records = await h.transcript.readAll('a1')
+    expect(records.map((r) => r.kind)).toEqual(['user', 'thinking', 'exec', 'thinking', 'agent'])
+    expect(records[1]?.payload).toMatchObject({ round: 1, text: '先查一下版本', final: false })
+    expect(records[2]?.payload).toMatchObject({
+      command: ['node', '-v'],
+      exitCode: 0,
+      stdout: 'mock: node -v',
+      stderr: '',
+    })
+    expect(records[3]?.payload).toMatchObject({ round: 2, text: '装好了', final: true })
+  })
+
+  it('过程事实截断：超长思考与输出加尾标（诚实标记不静默丢）', async () => {
+    const h = makeHarness({ a1: [{ text: 'x'.repeat(20_000) }] })
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '说说', nonce: 'n1' })
+    await waitIdle([a1])
+
+    const think = (await h.transcript.readAll('a1')).find((r) => r.kind === 'thinking')
+    const text = (think?.payload as { text: string }).text
+    expect(text.endsWith('[…超长已截断]')).toBe(true)
+    expect(text.length).toBeLessThanOrEqual(8_000 + '[…超长已截断]'.length + 1)
   })
 
   it('未知工具：错误文本回喂（turn 不崩），模型可继续终答', async () => {
@@ -158,7 +206,7 @@ describe('TurnRunner chat（工具循环）', () => {
     const provider = h.llms.get('a1')!
     const second = provider.requests[1]?.messages ?? []
     expect(second[second.length - 1]?.content).toContain('错误 TOOL_NOT_FOUND')
-    expect((await h.transcript.readAll('a1'))[1]?.payload).toMatchObject({ text: '换了个办法' })
+    expect((await h.transcript.readAll('a1'))[2]?.payload).toMatchObject({ text: '换了个办法' })
   })
 
   it('无 Box 的 agent：in-box 工具报 TOOL_NO_BOX（回喂文本）', async () => {
@@ -189,8 +237,43 @@ describe('TurnRunner chat（工具循环）', () => {
     expect(a1.isIdle).toBe(true)
     const finished = h.events.find((e) => e.type === 'v1.lifecycle.finished')
     expect(finished?.payload).toMatchObject({ state: 'failed', code: 'RUN_TOOL_BUDGET_EXCEEDED' })
-    // 没有终答：transcript 只有 user 记录
-    expect((await h.transcript.readAll('a1')).map((r) => r.kind)).toEqual(['user'])
+    // 没有终答消息；过程记录保留至预算爆点（轮 3 的 thinking 已写、工具未执行）
+    expect((await h.transcript.readAll('a1')).map((r) => r.kind)).toEqual([
+      'user',
+      'thinking',
+      'exec',
+      'thinking',
+      'exec',
+      'thinking',
+    ])
+  })
+
+  it('exec 进行中取消：后端杀命令、aborted 事实落盘、run 以 aborted/RUN_CANCELLED 结算', async () => {
+    // 慢 exec（永不返回——真实后端对应子进程长跑）；cancel 后 mock 响应 signal 抛 BOX_EXEC_ABORTED
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['sleep', '999'] } }] },
+          { text: '不该走到终答' },
+        ],
+      },
+      { exec: () => new Promise<ExecResult>(() => {}) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '长任务', nonce: 'n1' })
+    await waitUntil(() => h.backend.calls.length === 1, 2_000) // exec 已开始（取消的活跃窗口）
+
+    expect(a1.cancel('a1-run-1')).toBe(true)
+    await waitIdle([a1])
+
+    const finished = h.events.find((e) => e.type === 'v1.lifecycle.finished')
+    expect(finished?.payload).toMatchObject({ state: 'aborted', code: 'RUN_CANCELLED' })
+    // 轮间检查点：llm 第二轮不再发起（脚本第二步未消费——工具回喂后立即终止）
+    expect(h.llms.get('a1')!.requests.length).toBe(1)
+    // exec 的中止也是事实：transcript 落 aborted 记录（重启后呈现同样诚实）
+    const execRecord = (await h.transcript.readAll('a1')).find((r) => r.kind === 'exec')
+    expect(execRecord?.payload).toMatchObject({ command: ['sleep', '999'], aborted: true })
+    expect((execRecord?.payload as { reason?: string }).reason).toContain('中止')
   })
 })
 
@@ -211,9 +294,9 @@ describe('TurnRunner A2A 链路（chat → send_message → 对端 turn → box 
     await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '帮我查目录', nonce: 'n1' })
     await waitIdle([a1, a2])
 
-    // a1：user + a2a-out + agent 终答；a2：a2a-in + agent 终答
-    expect((await h.transcript.readAll('a1')).map((r) => r.kind)).toEqual(['user', 'a2a-out', 'agent'])
-    expect((await h.transcript.readAll('a2')).map((r) => r.kind)).toEqual(['a2a-in', 'agent'])
+    // a1：user → thinking(委派轮) → a2a-out → thinking(终答轮) → agent；a2：a2a-in → thinking → exec → thinking → agent
+    expect((await h.transcript.readAll('a1')).map((r) => r.kind)).toEqual(['user', 'thinking', 'a2a-out', 'thinking', 'agent'])
+    expect((await h.transcript.readAll('a2')).map((r) => r.kind)).toEqual(['a2a-in', 'thinking', 'exec', 'thinking', 'agent'])
     // a2 的入站提示带 A2A 前缀，且在 a2 的 Box（box-2）执行
     const p2 = h.llms.get('a2')!
     expect(p2.requests[0]?.messages[1]?.content).toBe('[A2A a1] 查一下目录')
@@ -303,7 +386,7 @@ describe('TurnRunner 流事件（onStream）', () => {
     expect(second.at(-1)?.reason).toContain('脚本')
   })
 
-  it('无 onStream：行为不变（回归）', async () => {
+  it('无 onStream：流事件不发，过程记录照写（回归）', async () => {
     const h = makeHarness({
       a1: [{ text: '直接回答' }],
     })
@@ -311,6 +394,6 @@ describe('TurnRunner 流事件（onStream）', () => {
     await h.messaging.sendUserMessage({ toAgentId: 'a1', text: 'q', nonce: 'n1' })
     await waitIdle([a1])
     const records = await h.transcript.readAll('a1')
-    expect(records.map((r) => r.kind)).toEqual(['user', 'agent'])
+    expect(records.map((r) => r.kind)).toEqual(['user', 'thinking', 'agent'])
   })
 })

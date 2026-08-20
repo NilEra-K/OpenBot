@@ -4,7 +4,7 @@
  * 确定性：时钟与 id 工厂在此集中供应；默认真实时钟（生产），CLI/测试注入确定性时钟。
  */
 import { AgentScheduler, EventBus, KernelError } from '@openbot/core'
-import type { RunExecutor } from '@openbot/core'
+import type { LifecycleFinishedPayload, RunExecutor } from '@openbot/core'
 import { AgentStore, IdempotencyLedger, InMemoryFs, TranscriptStore } from '@openbot/state'
 import type { FsAdapter } from '@openbot/state'
 import { MockChatProvider } from '@openbot/llm'
@@ -121,17 +121,26 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     },
   })
 
-  const gate =
+  const gate: ApprovalGate =
     options.approvalGateFactory?.({ bus, ledger }) ??
     options.approvalGate ??
     new AutoApprovalGate({ bus, ledger, now, nextApprovalId })
+  // run 中止的审批善后（用户主权传导）：中止即否决该 run 的未决审批——gated() 的 signal race
+  // 唤醒等待方，revokeRun 把账本按 denied 落定（resolved 事件让 UI 卡收敛，重启不重放孤儿审批）
+  bus.on('v1.lifecycle.finished', (event) => {
+    // on 的 handler 收全量事件类型（无 per-type 重载）：显式按 payload 形状收窄
+    const { state, runId } = event.payload as LifecycleFinishedPayload
+    if (state === 'aborted' && gate.revokeRun) {
+      void gate.revokeRun(runId).catch(() => {})
+    }
+  })
   // run 实况汇聚：llm 增量与 exec 输出同型汇入 hub（无 WS 订阅者时丢弃——turn 不受渲染层影响）
   const streamHub = new StreamHub()
   // 交互式 shell（PTY）：用户亲手操作，不经 run/审批/预算——与 agent exec 路线完全分离
   const shellService = new ShellService({ backend })
   const onStream = (event: Parameters<StreamHub['handle']>[0]): void => streamHub.handle(event)
   const tools = new ToolRegistry()
-    .register(execTool({ backend, bus, onStream }))
+    .register(execTool({ backend, bus, onStream, transcript }))
     .register(sendMessageTool(messaging))
     .register(gated(hostFetchTool(), { gate }))
 
@@ -223,6 +232,21 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
         queueDepths: scheduler.queueDepths(),
       }
     })
+    // 用户中止（打断工作中的 agent）：排队中直接结算 aborted，活跃中经 AbortSignal 传播
+    // （execute 契约要求响应 signal——llm/exec 链路均已接线）
+    .register(
+      'v1.scheduler.cancel',
+      async (payload) => {
+        const { agentId, runId } = schedulerCancelSchema.parse(payload)
+        const scheduler = schedulers.get(agentId)
+        if (!scheduler) throw new AgentSchedulerMissingError(agentId)
+        if (!scheduler.cancel(runId)) {
+          throw new KernelError('SCHED_RUN_NOT_CANCELLABLE', `run 不存在或已不可中止：${runId}`)
+        }
+        return { ok: true }
+      },
+      schedulerCancelSchema,
+    )
 
   let watchdogTimer: ReturnType<typeof setInterval> | null = null
 
@@ -314,3 +338,4 @@ const shellWriteSchema = z.object({
   data: z.string(),
 })
 const shellIdSchema = z.object({ shellId: z.string().min(1) })
+const schedulerCancelSchema = z.object({ agentId: z.string().min(1), runId: z.string().min(1) })

@@ -295,6 +295,10 @@ export const useKernelStore = defineStore('kernel', {
       const { snapshotId } = await this.call<{ snapshotId: string }>('v1.boxes.snapshot', { boxId })
       return snapshotId
     },
+    /** 中止 run（打断工作中的 agent）：排队中直接结算，活跃中经 AbortSignal 传播 */
+    async cancelRun(agentId: string, runId: string): Promise<void> {
+      await this.call('v1.scheduler.cancel', { agentId, runId })
+    },
     /** 刷新 provider 配置（boot 与 settings 视图操作后调用） */
     async refreshSettings(): Promise<void> {
       const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null }>('v1.settings.list')
@@ -340,22 +344,97 @@ export const useKernelStore = defineStore('kernel', {
         throw err
       }
       for (const record of records) {
-        const p = record.payload as { messageId?: string; text?: string; from?: string; to?: string }
-        if (typeof p.messageId !== 'string' || typeof p.text !== 'string') continue
-        if (this.messages.some((m) => m.messageId === p.messageId)) continue // 事件流已覆盖
+        const p = record.payload as Record<string, unknown>
+        // ---- 过程事实恢复（thinking/exec 记录）：投影为已结束的伪流块与 exec 卡——
+        // 渲染层 streamUnits/execStreamsOf 零改动复用；实况块在场时跳过（按 runId+维度去重，
+        // renderer 刷新而内核还活的场景不双计；与消息 messageId 去重同款哲学） ----
+        if (record.kind === 'thinking') {
+          if (typeof p['runId'] !== 'string' || typeof p['text'] !== 'string') continue
+          const round = typeof p['round'] === 'number' ? p['round'] : undefined
+          if (
+            this.streams.some(
+              (s) => s.runId === p['runId'] && s.stream === 'llm' && (s.round ?? undefined) === round,
+            )
+          ) {
+            continue
+          }
+          this.streams.push({
+            key: `h-${agentId}-${record.seq}`,
+            agentId,
+            runId: p['runId'],
+            stream: 'llm',
+            seq: record.seq,
+            ...(round !== undefined ? { round } : {}),
+            stdout: p['text'],
+            stderr: '',
+            state: 'end',
+            at: record.at,
+          })
+          continue
+        }
+        if (record.kind === 'exec') {
+          if (
+            typeof p['runId'] !== 'string' ||
+            typeof p['boxId'] !== 'string' ||
+            !Array.isArray(p['command'])
+          ) {
+            continue
+          }
+          const command = p['command'] as string[]
+          if (!this.execs.some((c) => c.key === p['runId'])) {
+            this.execs.push({
+              key: p['runId'],
+              boxId: p['boxId'],
+              runId: p['runId'],
+              command,
+              phase: 'finished',
+              ...(typeof p['exitCode'] === 'number' ? { exitCode: p['exitCode'] } : {}),
+              at: record.at,
+            })
+          }
+          // 同 run 多次 exec：按命令行区分去重（实况块在场优先）
+          const cmdKey = command.join(' ')
+          if (
+            !this.streams.some(
+              (s) => s.runId === p['runId'] && s.stream === 'exec' && (s.command?.join(' ') ?? null) === cmdKey,
+            )
+          ) {
+            const aborted = p['aborted'] === true
+            this.streams.push({
+              key: `h-${agentId}-${record.seq}`,
+              agentId,
+              runId: p['runId'],
+              stream: 'exec',
+              seq: record.seq,
+              command,
+              boxId: p['boxId'],
+              stdout: typeof p['stdout'] === 'string' ? p['stdout'] : '',
+              stderr: typeof p['stderr'] === 'string' ? p['stderr'] : '',
+              state: aborted ? 'abort' : 'end',
+              ...(aborted && typeof p['reason'] === 'string' ? { abortReason: p['reason'] } : {}),
+              at: record.at,
+            })
+          }
+          continue
+        }
+        // ---- 领域消息映射（user/agent/a2a） ----
+        const msg = p as { messageId?: string; text?: string; from?: string; to?: string }
+        if (typeof msg.messageId !== 'string' || typeof msg.text !== 'string') continue
+        if (this.messages.some((m) => m.messageId === msg.messageId)) continue // 事件流已覆盖
         const mapped: ChatMessage | null =
           record.kind === 'user'
-            ? { messageId: p.messageId, kind: 'user', from: 'user', to: agentId, text: p.text, at: record.at }
+            ? { messageId: msg.messageId, kind: 'user', from: 'user', to: agentId, text: msg.text, at: record.at }
             : record.kind === 'agent'
-              ? { messageId: p.messageId, kind: 'agent', from: agentId, to: 'user', text: p.text, at: record.at }
-              : record.kind === 'a2a-out' && typeof p.to === 'string'
-                ? { messageId: p.messageId, kind: 'a2a', from: agentId, to: p.to, text: p.text, at: record.at }
-                : record.kind === 'a2a-in' && typeof p.from === 'string'
-                  ? { messageId: p.messageId, kind: 'a2a', from: p.from, to: agentId, text: p.text, at: record.at }
+              ? { messageId: msg.messageId, kind: 'agent', from: agentId, to: 'user', text: msg.text, at: record.at }
+              : record.kind === 'a2a-out' && typeof msg.to === 'string'
+                ? { messageId: msg.messageId, kind: 'a2a', from: agentId, to: msg.to, text: msg.text, at: record.at }
+                : record.kind === 'a2a-in' && typeof msg.from === 'string'
+                  ? { messageId: msg.messageId, kind: 'a2a', from: msg.from, to: agentId, text: msg.text, at: record.at }
                   : null
         if (mapped) this.messages.push(mapped)
       }
       this.messages.sort((a, b) => a.at - b.at)
+      this.trimStreamsLocal()
     },
     /** 事件分发：内核是唯一事实源，这里只做投影 */
     onEvent(event: KernelEvent) {

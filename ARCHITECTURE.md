@@ -271,7 +271,7 @@ interface BoxBackend {
   readonly id: string;
   caps(): BoxCaps;                       // persistent / snapshot / headless / resourceLimits / isolation / interactive
   create(spec: BoxSpec): Promise<BoxId>;
-  exec(box: BoxId, cmd: ExecSpec): Promise<ExecResult>;      // 含流式输出
+  exec(box: BoxId, cmd: ExecSpec): Promise<ExecResult>;      // 含流式输出；ExecSpec.signal 触发即终止命令（run 取消/抢占传导）
   fsRead/fsWrite(box: BoxId, path, ...): Promise<...>;
   snapshot(box: BoxId): Promise<SnapshotId>;
   stats(box: BoxId): Promise<BoxStats>;  // CPU/内存/磁盘，喂磁盘压力告警
@@ -279,6 +279,8 @@ interface BoxBackend {
   openShell?(box: BoxId, opts?): Promise<ShellSession>;      // 交互式终端（PTY；caps.interactive=true 必须实现）
 }
 ```
+
+**用户中止的信号传导（用户主权）**：`v1.scheduler.cancel` → 调度器 `controller.abort()` → `run.signal` 沿三层传播——llm 轮（provider fetch 的 AbortSignal）、exec 轮（`ToolContext.signal` → `ExecSpec.signal` → procexec kill 子进程）、审批挂起（`gated()` 的 signal race；run 以 aborted 结算时装配层把该 run 的未决审批按 denied 落账——中止即否决，账本不孤儿）。
 
 **PTY 交互终端（2026-08-20 用户裁定从 P4 提前进 P3）**：用户亲手在 Box 内敲命令（操作台大屏，xterm.js 渲染），与 agent 的 exec 路线（run/审批/预算）完全分离。WSL 后端用 Box 内 `script` 分配真终端——**PTY 在 Linux 侧，Windows 侧零原生模块**；键入走环回命令面（`v1.boxes.shellOpen/Write/Close`，每键几字节），输出走 WS `/stream` 的 `kind:'pty'` 流。一期固定尺寸 100×30（管道方案无 TIOCSWINSZ，中途 stty 会干扰运行中程序）。
 

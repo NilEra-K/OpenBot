@@ -12,7 +12,7 @@ import { WslBoxBackend, WSL_BOX_PREFIX } from '../src/backend-wsl/index.js'
 import { runProcess } from '../src/procexec/index.js'
 import type { ProcResult, ProcRunner, ProcSpec, ShellSpawner } from '../src/procexec/index.js'
 
-const OK: ProcResult = { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false }
+const OK: ProcResult = { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, aborted: false }
 
 /** 记录调用的替身执行器 */
 function scripted(impl: (spec: ProcSpec) => ProcResult | Promise<ProcResult>): { run: ProcRunner; calls: ProcSpec[] } {
@@ -96,6 +96,22 @@ describe('WslBoxBackend（脚本化替身）', () => {
     await expect(backend.exec('box-1', { command: ['sleep', '999'], timeoutMs: 100 })).rejects.toMatchObject({
       code: 'BOX_EXEC_TIMEOUT',
     })
+  })
+
+  it('exec signal 透传给子进程执行器（run 取消/抢占的传导链）；aborted 抛 BOX_EXEC_ABORTED', async () => {
+    const controller = new AbortController()
+    const { run, calls } = scripted((spec) => {
+      // 只让 exec 调用中止（--cd 是 exec 专属）
+      if (spec.command.includes('--cd')) return { ...OK, exitCode: null, aborted: true }
+      return OK
+    })
+    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run })
+    await backend.create({ image: 'default' })
+    await expect(
+      backend.exec('box-1', { command: ['sleep', '999'], signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'BOX_EXEC_ABORTED' })
+    const execCall = calls.find((c) => c.command.includes('--cd'))
+    expect(execCall?.signal).toBe(controller.signal) // 传导链：ExecSpec.signal → ProcSpec.signal
   })
 
   it('fsWrite 走 base64 中转；fsRead cat 失败返回 null（不抛）', async () => {

@@ -3,8 +3,9 @@
  * originMessageId + toolCallId，redrive 后重试同键，不双弹窗、不双执行）。
  * 包内工具（in-box）自由、不过闸；host 工具按需包 gated()。
  */
+import { KernelError } from '@openbot/core'
 import type { ToolCall } from '@openbot/llm'
-import { approvalDenied } from '../approval/index.js'
+import { approvalDenied, ApprovalErrorCodes } from '../approval/index.js'
 import type { ApprovalGate, ApprovalRequest } from '../approval/index.js'
 import type { Tool, ToolContext } from '../tools/index.js'
 
@@ -27,7 +28,11 @@ export function gated(tool: Tool, deps: GatedToolDeps): Tool {
         reason: deps.reason?.(ctx, args),
         nonce: `${ctx.originMessageId}:${call.id}`,
       }
-      const approved = await deps.gate.request(request)
+      // 已中止的 run 不进闸门（不发 requested 事件——用户中止后不再弹窗打扰）
+      if (ctx.signal.aborted) {
+        throw new KernelError(ApprovalErrorCodes.APPROVAL_RUN_ABORTED, 'run 已中止，审批作废')
+      }
+      const approved = await requestRacingAbort(deps.gate.request(request), ctx.signal)
       if (!approved) {
         const err = approvalDenied(request)
         return `错误 ${err.code}: ${err.message}`
@@ -35,4 +40,28 @@ export function gated(tool: Tool, deps: GatedToolDeps): Tool {
       return tool.execute(ctx, args)
     },
   }
+}
+
+/**
+ * 审批等待与 run 中止 race：中止即作废（抛 APPROVAL_RUN_ABORTED——用户中止 run，
+ * 未决请求不再等决议；遗留审批条目由装配层 revokeRun 按 denied 落账收敛）。
+ * 竞争失败后原 promise 不再消费，挂 noop catch 防 unhandled rejection。
+ */
+function requestRacingAbort(promise: Promise<boolean>, signal: AbortSignal): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(new KernelError(ApprovalErrorCodes.APPROVAL_RUN_ABORTED, 'run 已中止，审批作废'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (approved) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(approved)
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(err)
+      },
+    )
+  })
 }

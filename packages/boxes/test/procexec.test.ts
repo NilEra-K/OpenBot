@@ -17,6 +17,7 @@ describe('runProcess', () => {
     expect(r.stdout).toBe('out1\n')
     expect(r.stderr).toBe('err1\n')
     expect(r.timedOut).toBe(false)
+    expect(r.aborted).toBe(false)
   })
 
   it('onChunk 流式分块回调（聚合仍完整）', async () => {
@@ -38,6 +39,42 @@ describe('runProcess', () => {
     expect(r.timedOut).toBe(true)
     expect(r.exitCode).toBeNull()
   }, 10_000)
+
+  it('外部 signal 中止：aborted 置位、子进程被杀（不再等自然结束）', async () => {
+    const controller = new AbortController()
+    const pending = runProcess({
+      command: [node, '-e', 'setTimeout(() => {}, 10000)'],
+      signal: controller.signal,
+    })
+    controller.abort()
+    const r = await pending
+    expect(r.aborted).toBe(true)
+    expect(r.timedOut).toBe(false)
+    expect(r.exitCode).toBeNull()
+  }, 10_000)
+
+  it('已 aborted 的 signal：不等输出立即 kill', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const r = await runProcess({
+      command: [node, '-e', 'setTimeout(() => {}, 10000)'],
+      signal: controller.signal,
+    })
+    expect(r.aborted).toBe(true)
+    expect(r.exitCode).toBeNull()
+  }, 10_000)
+
+  it('signal 正常完成：aborted=false、监听器已移除（不泄漏）', async () => {
+    const controller = new AbortController()
+    const r = await runProcess({
+      command: [node, '-e', "console.log('done')"],
+      signal: controller.signal,
+    })
+    expect(r.aborted).toBe(false)
+    expect(r.exitCode).toBe(0)
+    // 完成后 abort 不再影响任何事（once 监听器已 detach；此处不抛不挂即通过）
+    controller.abort()
+  })
 
   it('utf16le 解码：多字节跨块收敛', async () => {
     // wsl.exe 元信息输出是 UTF-16LE；模拟分块写「你a好」（每码元 2 字节，共 8 字节，

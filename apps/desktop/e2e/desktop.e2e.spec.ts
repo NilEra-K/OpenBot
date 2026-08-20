@@ -141,6 +141,32 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     // mock 端点收到的请求数：steward×3 + worker×2（两 agent 共享 provider 的证据）
     expect(mock.requests.length).toBeGreaterThanOrEqual(5)
 
+    // —— 重启恢复（过程事实持久）：第二次启动同 userData——thinking/exec 记录经 loadHistory
+    // 恢复为流块/exec 卡投影，worker1 会话的思考块与执行输出仍在（实况断线不补的事实对照闭环） ——
+    await app.close()
+    const app2 = await _electron.launch({
+      args: ['.'],
+      env: {
+        ...process.env,
+        OPENBOT_USER_DATA: userData,
+        OPENBOT_EXTRA_AGENTS: 'worker1',
+        OPENBOT_SANDBOX: 'mock',
+      },
+    })
+    const page2 = await app2.firstWindow()
+    try {
+      await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+      await page2.locator('.roster-item', { hasText: 'worker1' }).click()
+      await expect(page2.locator('.think', { hasText: '目录是空的' })).toBeVisible({ timeout: 15_000 })
+      await expect(page2.locator('.task .bt-line', { hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
+      await expect(page2.locator('.task .bt-line', { hasText: 'mock: ls /work' })).toBeVisible()
+      // ctx 屏幕同步恢复（伪流块走同一渲染路径——任意时刻接管不受重启影响）
+      const screen2 = page2.locator('.ctx-screen')
+      await expect(screen2.filter({ hasText: '$ ls /work' })).toBeVisible()
+    } finally {
+      await app2.close()
+    }
+
     // —— 一致性走查素材：五视图截图（带真实数据;目录由 OPENBOT_SHOT_DIR 控制,默认跳过） ——
     const shotDir = process.env.OPENBOT_SHOT_DIR
     if (shotDir) {
@@ -157,6 +183,75 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
         await page.screenshot({ path: join(shotDir, `app-${name}.png`) })
       }
     }
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('中止工作中的 agent（审批挂起中打断：run aborted 收敛 + 未决审批作废）', async () => {
+  const mock = await startMockOpenAi([
+    // 1. steward 收用户消息 → 出 Box 抓取：触发审批闸门——run 挂起等决议（中止的稳定活跃窗口）
+    {
+      match: (l) => l.role === 'user' && !l.content.startsWith('[A2A'),
+      toolCalls: [{ id: 'c1', name: 'host_fetch', args: { url: 'https://example.com/' } }],
+    },
+    // 2. 审批后的终答步——中止后不应被消费（llm 第二轮不发起的对照）
+    { match: (_l, t) => t === 'host_fetch', text: '不该走到这里' },
+  ])
+
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-cancel-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // settings：配置 provider（mock 端点）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // console：发消息 → run 进入审批挂起（弹窗出现即稳定窗口，等多久都在「工作中」）
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.composer-box input').fill('抓个网页')
+    await page.locator('.composer-box input').press('Enter')
+    const modal = page.locator('.approval-modal', { hasText: 'host_fetch' })
+    await expect(modal).toBeVisible({ timeout: 30_000 })
+
+    // 进行中单元：工作中… + 中止入口。弹窗先「稍后处理」藏掉（模态 scrim 盖住会话层；
+    // run 仍挂起——内核挂起不受渲染局部态影响，中止窗口稳定）
+    await modal.getByRole('button', { name: '稍后处理' }).click()
+    await expect(page.locator('.approval-modal')).toHaveCount(0)
+    const stop = page.locator('.m-stop')
+    await expect(page.locator('.m-state', { hasText: '工作中…' })).toBeVisible({ timeout: 15_000 })
+    await stop.click()
+    await expect(stop).toBeDisabled()
+    await expect(stop).toHaveText('正在中止…')
+
+    // 未决审批随 run 中止被否决：流内 gate 卡收敛（revokeRun 的 resolved 事件）
+    await expect(page.locator('.gate')).toHaveCount(0, { timeout: 15_000 })
+    // run 以 aborted 收敛：「工作中…」消失、无终答（终答步未被消费）
+    await expect(page.locator('.m-state', { hasText: '工作中…' })).toHaveCount(0, { timeout: 15_000 })
+    await expect(page.locator('.m-text', { hasText: '不该走到这里' })).toHaveCount(0)
+    // 排程视图：run 卡「已中止」
+    await page.getByRole('button', { name: '排程', exact: true }).click()
+    await expect(page.locator('.run .chip', { hasText: '已中止' })).toBeVisible({ timeout: 15_000 })
+    // llm 第二轮不发起：mock 端点只收到过第一次请求
+    expect(mock.requests.length).toBe(1)
   } finally {
     await app.close()
     await mock.close()

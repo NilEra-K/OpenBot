@@ -145,7 +145,16 @@ export class WslBoxBackend implements BoxBackend {
       command,
       timeoutMs: spec.timeoutMs,
       onChunk: spec.onChunk,
+      // run 取消/抢占传导：外部中止即 kill wsl.exe 进程（与超时 kill 同型）
+      ...(spec.signal !== undefined ? { signal: spec.signal } : {}),
     })
+    if (r.aborted) {
+      // 用户打断工作中的 agent 的传导终点——与超时同型抛错，工具层落 aborted 事实
+      throw new KernelError(
+        BoxesErrorCodes.BOX_EXEC_ABORTED,
+        `exec 已中止：${spec.command.join(' ')}`,
+      )
+    }
     if (r.timedOut) {
       throw new KernelError(
         BoxesWslErrorCodes.BOX_EXEC_TIMEOUT,

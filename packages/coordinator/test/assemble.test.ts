@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MockChatProvider } from '@openbot/llm'
 import type { MockStep } from '@openbot/llm'
+import { ManualApprovalGate } from '@openbot/runner'
 import { assembleKernel, InProcessCarrier } from '../src/index.js'
 import type { AssembledKernel } from '../src/index.js'
 import type { KernelEvent } from '@openbot/core'
@@ -54,8 +55,9 @@ describe('assembleKernel 全链路（经 transport 客户端驱动，壳视角�
 
     const t1 = await client.call<{ kind: string }[]>('v1.transcript.read', { agentId: 'a1' })
     const t2 = await client.call<{ kind: string }[]>('v1.transcript.read', { agentId: 'a2' })
-    expect(t1.map((r) => r.kind)).toEqual(['user', 'a2a-out', 'agent'])
-    expect(t2.map((r) => r.kind)).toEqual(['a2a-in', 'agent'])
+    // 过程事实穿插（thinking/exec）：a1 委派轮、a2 执行轮各带思考记录
+    expect(t1.map((r) => r.kind)).toEqual(['user', 'thinking', 'a2a-out', 'thinking', 'agent'])
+    expect(t2.map((r) => r.kind)).toEqual(['a2a-in', 'thinking', 'exec', 'thinking', 'agent'])
 
     const boxes = await client.call<{ boxId: string }[]>('v1.boxes.list')
     expect(boxes.map((b) => b.boxId)).toEqual(['box-1', 'box-2'])
@@ -91,7 +93,7 @@ describe('assembleKernel 全链路（经 transport 客户端驱动，壳视角�
     expect(retry).toEqual({ messageId: first.messageId, runId: retry.runId, first: false })
     await waitIdle(kernel)
     const records = await client.call<{ kind: string }[]>('v1.transcript.read', { agentId: 'a1' })
-    expect(records.map((r) => r.kind)).toEqual(['user', 'agent'])
+    expect(records.map((r) => r.kind)).toEqual(['user', 'thinking', 'agent'])
   })
 })
 
@@ -167,6 +169,64 @@ describe('assembleKernel Box 命令', () => {
     await expect(client.call('v1.boxes.snapshot', { boxId: 'ghost' })).rejects.toMatchObject({
       code: 'BOX_NOT_FOUND',
     })
+  })
+})
+
+describe('assembleKernel 用户中止（打断工作中的 agent）', () => {
+  it('审批挂起中取消：run 以 aborted 结算、未决审批按 denied 落账（resolved 事件收敛 UI 卡）', async () => {
+    // 桌面同款 ManualApprovalGate（挂起式）——审批死锁路径的真实装配
+    let gateRef: import('@openbot/runner').ManualApprovalGate | null = null
+    const kernel = assembleKernel({
+      now: () => 0,
+      bootPrefix: 't',
+      approvalGateFactory: (deps) => {
+        gateRef = new ManualApprovalGate(deps)
+        return gateRef
+      },
+    })
+    const client = kernel.transport.createClient()
+    const events: KernelEvent[] = []
+    client.subscribe((e) => events.push(e))
+    await kernel.addAgent({
+      agentId: 'a1',
+      llm: new MockChatProvider({
+        steps: [
+          { toolCalls: [{ id: 'c1', name: 'host_fetch', args: { url: 'https://example.com' } }] },
+          { text: '不该走到终答' },
+        ],
+      }),
+    })
+    const acceptance = await client.call<{ runId: string }>('v1.message.sendUser', {
+      toAgentId: 'a1',
+      text: '取个网页',
+      nonce: 'n-abort-1',
+    })
+    // 等审批挂起出现（run 卡在 gate.request 的死锁窗口——本次修复的目标场景）
+    for (let i = 0; i < 200 && gateRef!.pending().length === 0; i++) {
+      await new Promise<void>((r) => setTimeout(r, 5))
+    }
+    expect(gateRef!.pending()).toHaveLength(1)
+
+    expect(await client.call<{ ok: boolean }>('v1.scheduler.cancel', { agentId: 'a1', runId: acceptance.runId })).toEqual({ ok: true })
+    await waitIdle(kernel)
+
+    const finished = events.find((e) => e.type === 'v1.lifecycle.finished')
+    expect(finished?.payload).toMatchObject({ state: 'aborted', code: 'RUN_CANCELLED' })
+    // 未决审批随 run 中止被否决：resolved(denied) 事件发出（UI 卡收敛）、账本落定
+    const resolved = events.find((e) => e.type === 'v1.approval.resolved')
+    expect(resolved?.payload).toMatchObject({ decision: 'denied' })
+    expect(gateRef!.pending()).toHaveLength(0)
+    // 终答不发生（llm 第二步未消费）
+    expect(events.filter((e) => e.type === 'v1.message.agent')).toHaveLength(0)
+  })
+
+  it('取消不存在/已结算的 run：SCHED_RUN_NOT_CANCELLABLE 按 code 拒绝', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'a1' })
+    await expect(
+      client.call('v1.scheduler.cancel', { agentId: 'a1', runId: 'ghost-run' }),
+    ).rejects.toMatchObject({ code: 'SCHED_RUN_NOT_CANCELLABLE' })
   })
 })
 

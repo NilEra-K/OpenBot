@@ -92,6 +92,36 @@
 - 验证：build/typecheck 过；184 单测 + E2E 全绿（新断言：流内 `.think`、`.task .bt-line` 的
   `$ ls /work` 与 mock 输出）。
 
+## 追加轮次三：过程事实持久化（重启可恢复，2026-08-20 用户裁定）
+
+**需求**：思考过程与执行过程重启后消失（实况断线不补裁定的直接后果）——用户要求持久。
+**裁定**：终答轮 thinking 与 agent 消息各存一份，**一致性优先**。
+
+### TODOLIST
+
+- [x] 1. runner：turn 每轮 thinking 记录（round/final 标志；中间轮与终答轮都写）+ 截断工具
+- [x] 2. runner：execTool 完成点 exec 记录（command/exitCode/stdout/stderr；中止路径 aborted+reason）
+- [x] 3. assemble 接线（execTool 依赖注入 transcript）+ runner 单测（+2 用例：记录形状与截断）
+- [x] 4. renderer：loadHistory 恢复 thinking/exec 投影（伪流块 state 'end' + ExecCard；按 runId+维度
+  去重——实况在场优先，与消息 messageId 去重同款哲学）
+- [x] 5. E2E：第二次启动同 userData 断言过程仍在（+ctx 屏幕恢复）+ 全量验证
+- [x] 6. 文档补记
+
+### 落点
+
+- **分层叙事更新**：实况语义不变（WS 流断线不补）；新增**完成点聚合事实**——thinking/exec
+  在轮次/执行完成时落 transcript（append-only 新 kind 天然向前兼容；`toChatMessages` 只映射
+  四种领域消息，新 kind 不进 llm 历史，零污染）。turn/index.ts 头注释的「工具往返留在 turn 内」
+  口子兑现。
+- **体积防线**：思考截 8_000 字符、exec 输出截 16_000，尾标 `[…超长已截断]`（诚实标记不静默丢）。
+- **恢复路径**：loadHistory 把 thinking/exec 记录投影为已结束的伪流块（key `h-<agentId>-<seq>`）
+  与 exec 卡（key=runId）——渲染层 streamUnits/execStreamsOf **零改动**直接复用；renderer 刷新而
+  内核还活的场景按 runId+round / runId+命令行 去重不双计。
+- **测试代价**：7 处旧 transcript kind 序列断言更新（runner 5 + coordinator 2）——序列从
+  `['user','agent']` 变 `['user','thinking','agent']` 等；预算耗尽用例语义更新为「无终答消息、
+  过程保留至爆点（末轮 thinking 已写、工具未执行）」。
+- 验证：186 单测（+2）+ E2E 全绿（第二次启动 worker1 会话思考块/task 输出/ctx 屏幕均在）。
+
 ## 追加轮次二：消息聚合单元 + 输出占位（2026-08-20 用户裁定）
 
 **需求**：① think/task 放在 m-name 之下（归属 agent 消息结构），思考过程可展开/收起；

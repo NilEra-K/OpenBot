@@ -22,6 +22,35 @@ describe('MockBoxBackend', () => {
     expect((await backend.exec(box, { command: ['good'] })).stdout).toBe('ok')
   })
 
+  it('exec 中止语义对称：signal abort 不等注入实现、立即抛 BOX_EXEC_ABORTED', async () => {
+    // 永不 resolve 的注入实现——真实后端对应「子进程长跑」，中止必须立即生效
+    const backend = new MockBoxBackend({
+      exec: () => new Promise<ExecResult>(() => {}),
+    })
+    const box = await backend.create({ image: 'default' })
+    const controller = new AbortController()
+    const pending = backend.exec(box, { command: ['sleep', '999'], signal: controller.signal })
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'BOX_EXEC_ABORTED' })
+  })
+
+  it('exec 已 aborted 的 signal：请求即抛，不进注入实现', async () => {
+    let implRan = false
+    const backend = new MockBoxBackend({
+      exec: () => {
+        implRan = true
+        return { exitCode: 0, stdout: 'late', stderr: '' }
+      },
+    })
+    const box = await backend.create({ image: 'default' })
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      backend.exec(box, { command: ['ls'], signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'BOX_EXEC_ABORTED' })
+    expect(implRan).toBe(false)
+  })
+
   it('fs 读写按 Box 隔离；未写返回 null', async () => {
     const backend = new MockBoxBackend()
     const b1 = await backend.create({ image: 'default' })

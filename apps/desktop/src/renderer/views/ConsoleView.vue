@@ -49,25 +49,54 @@ const agentBusy = computed(() =>
   kernel.runs.some((r) => r.agentId === ui.activeAgentId && (r.state === 'queued' || r.state === 'running')),
 )
 
+/** 进行中 run（中止入口的目标） */
+const activeRun = computed(
+  () =>
+    kernel.runs.find(
+      (r) => r.agentId === ui.activeAgentId && (r.state === 'queued' || r.state === 'running'),
+    ) ?? null,
+)
+
+/** 正在中止的 runId（点击即置；SCHED_RUN_NOT_CANCELLABLE 等错误静默——已在中止中） */
+const cancellingRunId = ref<string | null>(null)
+
+/** 打断（用户主权）：中止后 lifecycle finished(aborted) 事件自然收敛进行中单元 */
+const cancelActive = (): void => {
+  const run = activeRun.value
+  if (!run || cancellingRunId.value === run.runId) return
+  // 本地「正在中止…」反馈即置（渲染局部态，解耦纪律 #1）；run 离开 queued/running 自动复位
+  cancellingRunId.value = run.runId
+  void kernel.cancelRun(run.agentId, run.runId).catch(() => {})
+}
+watch(activeRun, (run) => {
+  if (!run || run.runId !== cancellingRunId.value) cancellingRunId.value = null
+})
+
 /** 该 run 的 exec 实况块（task 卡内嵌输出区：命令行+输出一体的终端语义；无实况数据的历史卡退化现状） */
 const execStreamsOf = (runId?: string): LiveStreamBlock[] =>
   runId !== undefined ? kernel.streams.filter((s) => s.runId === runId && s.stream === 'exec') : []
 
 /**
  * 流内渲染单元：「模型说的+模型做的」聚合进消息结构——agent 消息吸收它之前的思考块与
- * exec 卡（m-name 之下、m-text 之前），一轮回复是一个完整单元；user 消息前先把残余块
- * flush 成无文本的块组（事实不丢）；末尾残余 = 进行中单元（run 进行中，最终消息未到）。
+ * exec 卡（m-name 之下、m-text 之前，**单元内按时间交错**），一轮回复是一个完整单元；
+ * user 消息前先把残余块 flush 成无文本的块组（事实不丢）；末尾残余 = 进行中单元
+ * （run 进行中，最终消息未到）。
  */
+/** 聚合单元的组成部分（保持插入序=时间序——think 与 exec 交错，不分层） */
+type UnitPart = { kind: 'think'; block: LiveStreamBlock } | { kind: 'exec'; index: number }
+
 interface StreamUnit {
   key: string
   at: number
-  kind: 'divider' | 'msg-user' | 'relay' | 'agent' | 'pending'
+  kind: 'divider' | 'msg-user' | 'relay' | 'agent' | 'pending' | 'ended'
   /** msg-user / relay / agent（最终消息；块组与进行中单元无） */
   msgIndex?: number
-  /** 聚合进来的思考块（实况）与 exec 卡（事实，按 execs 索引） */
-  thinks: LiveStreamBlock[]
-  execs: number[]
+  parts: UnitPart[]
 }
+
+/** 组成部分的发生时间（flush/进行中单元的排序值） */
+const partAt = (part: UnitPart): number =>
+  part.kind === 'think' ? part.block.at : kernel.execs[part.index]!.at
 
 interface RawRow {
   key: string
@@ -109,44 +138,56 @@ const streamUnits = computed<StreamUnit[]>(() => {
   raw.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key))
 
   const units: StreamUnit[] = []
-  let pendingThinks: LiveStreamBlock[] = []
-  let pendingExecs: number[] = []
+  let pendingParts: UnitPart[] = []
   let lastDay = ''
   for (const row of raw) {
     const day = new Date(row.at).toDateString()
     if (day !== lastDay) {
-      units.push({ key: `d${day}`, at: row.at, kind: 'divider', thinks: [], execs: [] })
+      units.push({ key: `d${day}`, at: row.at, kind: 'divider', parts: [] })
       lastDay = day
     }
     if (row.kind === 'exec') {
-      pendingExecs.push(row.execIndex!)
+      pendingParts.push({ kind: 'exec', index: row.execIndex! })
     } else if (row.kind === 'think') {
-      pendingThinks.push(row.block!)
+      pendingParts.push({ kind: 'think', block: row.block! })
     } else if (row.kind === 'msg-agent') {
       // agent 消息：吸收前置块——聚合单元
-      units.push({ key: row.key, at: row.at, kind: 'agent', msgIndex: row.msgIndex, thinks: pendingThinks, execs: pendingExecs })
-      pendingThinks = []
-      pendingExecs = []
+      units.push({ key: row.key, at: row.at, kind: 'agent', msgIndex: row.msgIndex, parts: pendingParts })
+      pendingParts = []
     } else if (row.kind === 'msg-user') {
       // user 消息前 flush 残余块（上一轮无最终消息也不能丢事实），新一轮重新累积
-      if (pendingThinks.length > 0 || pendingExecs.length > 0) {
-        const at = pendingThinks.at(-1)?.at ?? (pendingExecs.length > 0 ? kernel.execs[pendingExecs.at(-1)!]!.at : row.at)
-        units.push({ key: `f-${row.key}`, at, kind: 'agent', thinks: pendingThinks, execs: pendingExecs })
-        pendingThinks = []
-        pendingExecs = []
+      if (pendingParts.length > 0) {
+        units.push({ key: `f-${row.key}`, at: partAt(pendingParts.at(-1)!), kind: 'agent', parts: pendingParts })
+        pendingParts = []
       }
-      units.push({ key: row.key, at: row.at, kind: 'msg-user', msgIndex: row.msgIndex, thinks: [], execs: [] })
+      units.push({ key: row.key, at: row.at, kind: 'msg-user', msgIndex: row.msgIndex, parts: [] })
     } else {
       // relay：流内标记，不清空累积（块仍归属后续 agent 消息）
-      units.push({ key: row.key, at: row.at, kind: 'relay', msgIndex: row.msgIndex, thinks: [], execs: [] })
+      units.push({ key: row.key, at: row.at, kind: 'relay', msgIndex: row.msgIndex, parts: [] })
     }
   }
-  // 末尾残余：进行中单元——run 进行中（或防御性保留的纯块组），无块且 busy 时三个点占位
-  if (pendingThinks.length > 0 || pendingExecs.length > 0 || agentBusy.value) {
-    const lastAt = pendingThinks.at(-1)?.at ?? (pendingExecs.length > 0 ? kernel.execs[pendingExecs.at(-1)!]!.at : Date.now())
-    units.push({ key: 'pending', at: lastAt, kind: 'pending', thinks: pendingThinks, execs: pendingExecs })
+  // 末尾残余：进行中单元（run queued/running——三个点占位与中止入口）或已终结的无终答块组
+  // （run aborted/failed 无终答——事实留痕但如实标记终态，不再冒充进行中）
+  if (pendingParts.length > 0) {
+    units.push({
+      key: 'pending',
+      at: partAt(pendingParts.at(-1)!),
+      kind: agentBusy.value ? 'pending' : 'ended',
+      parts: pendingParts,
+    })
+  } else if (agentBusy.value) {
+    units.push({ key: 'pending', at: Date.now(), kind: 'pending', parts: [] })
   }
   return units
+})
+
+/** 已终结块组的状态行：该 agent 最新 run 的终态文案（aborted/failed 事实；无则不显示） */
+const endedOutcomeLabel = computed(() => {
+  const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId).at(-1)
+  if (!last) return null
+  if (last.state === 'aborted') return '已中止'
+  if (last.state === 'failed') return last.code ? `失败 · ${last.code}` : '失败'
+  return null
 })
 
 // ---- 思考块折叠（渲染局部态——抽屉开合归 renderer，解耦纪律 #1） ----
@@ -294,46 +335,60 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
                     {{ activeAgent?.name ?? ui.activeAgentId }}
                   </span>
                   <span v-if="unit.kind === 'pending'" class="m-state">工作中…</span>
+                  <button
+                    v-if="unit.kind === 'pending' && activeRun"
+                    class="m-stop"
+                    :disabled="cancellingRunId === activeRun.runId"
+                    title="中止当前 run"
+                    @click="cancelActive"
+                  >
+                    {{ cancellingRunId === activeRun.runId ? '正在中止…' : '中止' }}
+                  </button>
+                  <!-- 已终结的无终答块组（run aborted/failed）：终态事实行，不再冒充进行中 -->
+                  <span v-else-if="unit.kind === 'ended' && endedOutcomeLabel" class="m-state">{{ endedOutcomeLabel }}</span>
                   <span v-else-if="unit.msgIndex !== undefined" class="m-time">{{ fmtTime(unit.at) }}</span>
                 </div>
 
-                <!-- 思考块：live 展开实时增量，完成后收起（摘要 + 展开箭头） -->
-                <div v-for="block in unit.thinks" :key="block.key" class="think" :class="{ 'is-live': block.state === 'live' }">
-                  <button class="think-head" type="button" @click="toggleThink(block.key)">
-                    <span class="think-tag">{{ block.state === 'live' ? '思考中' : '思考' }}</span>
-                    <span v-if="block.state !== 'live'" class="think-sum mono">{{ thinkSummary(block) }}</span>
-                    <span class="think-chev" :class="{ open: isThinkOpen(block) }" aria-hidden="true">
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"></path></svg>
-                    </span>
-                  </button>
-                  <div v-if="isThinkOpen(block)" class="think-body-wrap">
-                    <span class="think-body mono">{{ block.stdout }}</span>
-                    <span v-if="block.state === 'live'" class="think-caret"></span>
+                <!-- 单元内按时间序交错：思考块与 task 卡不分层（think→task→think→…如实还原轮次） -->
+                <template v-for="part in unit.parts" :key="part.kind === 'think' ? part.block.key : kernel.execs[part.index]!.key">
+                  <!-- 思考块：live 展开实时增量，完成后收起（摘要 + 展开箭头） -->
+                  <div v-if="part.kind === 'think'" class="think" :class="{ 'is-live': part.block.state === 'live' }">
+                    <button class="think-head" type="button" @click="toggleThink(part.block.key)">
+                      <span class="think-tag">{{ part.block.state === 'live' ? '思考中' : '思考' }}</span>
+                      <span v-if="part.block.state !== 'live'" class="think-sum mono">{{ thinkSummary(part.block) }}</span>
+                      <span class="think-chev" :class="{ open: isThinkOpen(part.block) }" aria-hidden="true">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"></path></svg>
+                      </span>
+                    </button>
+                    <div v-if="isThinkOpen(part.block)" class="think-body-wrap">
+                      <span class="think-body mono">{{ part.block.stdout }}</span>
+                      <span v-if="part.block.state === 'live'" class="think-caret"></span>
+                    </div>
                   </div>
-                </div>
 
-                <!-- task 卡：box 执行（有实况时输出区内嵌） -->
-                <div v-for="ei in unit.execs" :key="kernel.execs[ei]!.key" class="task">
-                  <div class="task-head">
-                    <span class="chip">box · {{ kernel.execs[ei]!.boxId }}</span>
-                    <span class="chip" :class="kernel.execs[ei]!.phase === 'started' ? 'chip-accent' : kernel.execs[ei]!.exitCode === 0 ? 'chip-success' : 'chip-danger'">
-                      {{ kernel.execs[ei]!.phase === 'started' ? '运行中' : kernel.execs[ei]!.exitCode === 0 ? '完成' : `退出 ${kernel.execs[ei]!.exitCode}` }}
-                    </span>
-                    <!-- 命令行：有实况输出区时由输出区呈现（$ 命令 + 输出一体），无实况的历史卡在此兜底 -->
-                    <span v-if="execStreamsOf(kernel.execs[ei]!.runId).length === 0" class="task-title mono">
-                      {{ kernel.execs[ei]!.command.join(' ') }}
-                    </span>
+                  <!-- task 卡：box 执行（有实况时输出区内嵌） -->
+                  <div v-else class="task">
+                    <div class="task-head">
+                      <span class="chip">box · {{ kernel.execs[part.index]!.boxId }}</span>
+                      <span class="chip" :class="kernel.execs[part.index]!.phase === 'started' ? 'chip-accent' : kernel.execs[part.index]!.exitCode === 0 ? 'chip-success' : 'chip-danger'">
+                        {{ kernel.execs[part.index]!.phase === 'started' ? '运行中' : kernel.execs[part.index]!.exitCode === 0 ? '完成' : `退出 ${kernel.execs[part.index]!.exitCode}` }}
+                      </span>
+                      <!-- 命令行：有实况输出区时由输出区呈现（$ 命令 + 输出一体），无实况的历史卡在此兜底 -->
+                      <span v-if="execStreamsOf(kernel.execs[part.index]!.runId).length === 0" class="task-title mono">
+                        {{ kernel.execs[part.index]!.command.join(' ') }}
+                      </span>
+                    </div>
+                    <BoxScreen
+                      v-if="execStreamsOf(kernel.execs[part.index]!.runId).length"
+                      class="task-out"
+                      :blocks="execStreamsOf(kernel.execs[part.index]!.runId)"
+                    />
                   </div>
-                  <BoxScreen
-                    v-if="execStreamsOf(kernel.execs[ei]!.runId).length"
-                    class="task-out"
-                    :blocks="execStreamsOf(kernel.execs[ei]!.runId)"
-                  />
-                </div>
+                </template>
 
                 <!-- 最终文本（markdown）；进行中且尚无任何输出块 → 三个点占位（首 token 到达即被实况取代） -->
                 <div v-if="unit.msgIndex !== undefined" class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text)"></div>
-                <div v-else-if="unit.kind === 'pending' && unit.thinks.length === 0 && unit.execs.length === 0" class="m-text typing" aria-label="正在生成回复">
+                <div v-else-if="unit.kind === 'pending' && unit.parts.length === 0" class="m-text typing" aria-label="正在生成回复">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                 </div>
               </div>

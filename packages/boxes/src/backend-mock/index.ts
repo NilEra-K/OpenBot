@@ -86,7 +86,7 @@ export class MockBoxBackend implements BoxBackend {
   async exec(boxId: BoxId, spec: ExecSpec): Promise<ExecResult> {
     this.#require(boxId)
     this.calls.push({ boxId, spec, at: this.#now() })
-    const result = await this.#execImpl(boxId, spec)
+    const result = await this.#execRacingAbort(boxId, spec)
     // 流式语义对称（mock 对称原则）：结果按行拆块回调——真实后端是逐块到达，
     // 调用方（runner/WS 实况）不感知后端种类
     if (spec.onChunk) {
@@ -100,6 +100,29 @@ export class MockBoxBackend implements BoxBackend {
       }
     }
     return result
+  }
+
+  /** 中止语义对称（真实后端：signal 触发即 kill 子进程）：abort 不等 execImpl、立即抛 BOX_EXEC_ABORTED */
+  async #execRacingAbort(boxId: BoxId, spec: ExecSpec): Promise<ExecResult> {
+    const signal = spec.signal
+    if (!signal) return this.#execImpl(boxId, spec)
+    const aborted = (): KernelError =>
+      new KernelError(BoxesErrorCodes.BOX_EXEC_ABORTED, `exec 已中止：${spec.command.join(' ')}`)
+    if (signal.aborted) throw aborted()
+    return await new Promise<ExecResult>((resolve, reject) => {
+      const onAbort = (): void => reject(aborted())
+      signal.addEventListener('abort', onAbort, { once: true })
+      Promise.resolve(this.#execImpl(boxId, spec)).then(
+        (result) => {
+          signal.removeEventListener('abort', onAbort)
+          resolve(result)
+        },
+        (err: unknown) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(err)
+        },
+      )
+    })
   }
 
   async openShell(boxId: BoxId, _opts: ShellOpenOptions = {}): Promise<ShellSession> {

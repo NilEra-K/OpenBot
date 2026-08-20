@@ -107,6 +107,31 @@ describe('ManualApprovalGate', () => {
     })
   })
 
+  it('revokeRun：run 中止善后——该 run 的挂起审批按 denied 落账、等待方唤醒、resolved 事件照发', async () => {
+    const { gate, events, ledger } = makeGate()
+    const p1 = gate.request(req('m8:c1')) // run-1
+    const p2 = gate.request({ ...req('m8:c2'), runId: 'run-2' }) // 其他 run 的不受牵连
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(await gate.revokeRun('run-1')).toBe(1)
+    expect(await p1).toBe(false) // 等待方被唤醒（否决）
+    expect((await ledger.lookup('approval:m8:c1'))?.outcome).toBe(false) // 账本落定
+    const resolved = events.filter((e) => e.type === 'v1.approval.resolved')
+    expect(resolved.map((e) => e.payload.nonce)).toEqual(['m8:c1'])
+    expect(resolved[0]!.payload).toMatchObject({ decision: 'denied' }) // UI 卡自然收敛
+    expect(gate.pending().map((p) => p.nonce)).toEqual(['m8:c2']) // run-2 的照挂
+    expect(await gate.revokeRun('run-1')).toBe(0) // 幂等：无遗留返回 0
+    await gate.resolve('m8:c2', 'approved') // 收尾不泄漏
+    expect(await p2).toBe(true)
+  })
+
+  it('revokeRun 后再决议：幂等回放首决（denied），不翻转', async () => {
+    const { gate } = makeGate()
+    const p = gate.request(req('m8:c9'))
+    await gate.revokeRun('run-1')
+    expect(await gate.resolve('m8:c9', 'approved')).toBe(false) // 回放 revoked 首决
+    expect(await p).toBe(false)
+  })
+
   it('replayPending：装配时扫账本重发 requested（UI 重弹窗），决议后落账本', async () => {
     const h1 = makeGate()
     void h1.gate.request(req('m7:c1'))

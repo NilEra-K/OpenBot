@@ -120,6 +120,32 @@
   color: var(--ink3);
 }
 
+/* 中止（打断工作中的 agent）：进行中单元 meta 行的内联入口 */
+.m-stop {
+  border: 1px solid rgba(var(--danger-rgb), 0.4);
+  border-radius: 6px;
+  background: transparent;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--danger);
+  cursor: pointer;
+  transition: background 140ms var(--ease);
+}
+
+.m-stop:hover {
+  background: rgba(var(--danger-rgb), 0.12);
+}
+
+/* 正在中止（点击后本地反馈态——run 结算前按钮禁用，防重复点击报错被吞） */
+.m-stop:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.m-stop:disabled:hover {
+  background: transparent;
+}
+
 .m-retry {
   border: none;
   background: none;

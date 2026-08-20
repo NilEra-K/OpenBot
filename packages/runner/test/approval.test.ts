@@ -85,4 +85,31 @@ describe('gated() 闸门包装', () => {
     await tool.execute(ctx({ runId: 'run-重驱后的新run' }), { url: 'https://x' })
     expect(requests).toEqual(['msg-9:c1', 'msg-9:c1'])
   })
+
+  it('审批挂起中 run 中止：抛 APPROVAL_RUN_ABORTED（不再等决议）', async () => {
+    // 永不决议的闸门——审批挂起（真实对应：用户弹窗未答）
+    const gate = { request: () => new Promise<boolean>(() => {}) }
+    const tool = gated(hostFetchTool(), { gate })
+    const controller = new AbortController()
+    const pending = tool.execute(ctx({ signal: controller.signal }), { url: 'https://x' })
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'APPROVAL_RUN_ABORTED' })
+  })
+
+  it('已中止的 run 请求过闸：立即作废（不进闸门请求）', async () => {
+    let requested = false
+    const gate = {
+      async request(): Promise<boolean> {
+        requested = true
+        return true
+      },
+    }
+    const tool = gated(hostFetchTool(), { gate })
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      tool.execute(ctx({ signal: controller.signal }), { url: 'https://x' }),
+    ).rejects.toMatchObject({ code: 'APPROVAL_RUN_ABORTED' })
+    expect(requested).toBe(false)
+  })
 })
