@@ -151,7 +151,11 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   // ---- 命令目录（P1）：协议纯度——只有领域命令，无 UI 指令 ----
   transport
     .register('v1.system.ping', async () => ({ pong: true }))
-    .register('v1.system.listAgents', async () => agentStore.list())
+    // 返回项带该 agent 的专属 Box 归属（addAgent 注册即 create 的领域事实；ctx 任意时刻接管的信号源）
+    .register('v1.system.listAgents', async () => {
+      const agents = await agentStore.list()
+      return agents.map((agent) => ({ ...agent, boxId: boxes.get(agent.agentId) ?? null }))
+    })
     .register('v1.system.getSteward', async () => agentStore.findSteward())
     .register('v1.system.appointSteward', async (payload) => {
       const { agentId } = payload as { agentId: string }

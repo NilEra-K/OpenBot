@@ -124,6 +124,23 @@ describe('assembleKernel 组织模型命令', () => {
     ])
   })
 
+  it('listAgents 返回项带专属 Box 归属（注册即创建的领域事实）', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'a1', steward: true })
+    await kernel.addAgent({ agentId: 'a2' })
+
+    const agents = await client.call<Array<{ agentId: string; role: string; boxId: string | null }>>(
+      'v1.system.listAgents',
+    )
+    expect(agents.map((a) => a.agentId).sort()).toEqual(['a1', 'a2'])
+    for (const agent of agents) {
+      // 注册即 create：归属必然存在且各 agent 独立（ctx 任意时刻接管的信号源）
+      expect(agent.boxId).toMatch(/^box-/)
+      expect(agents.filter((a) => a.boxId === agent.boxId)).toHaveLength(1)
+    }
+  })
+
   it('未知 agent 命令：STATE_AGENT_NOT_FOUND 按 code 透传', async () => {
     const kernel = makeKernel()
     const client = kernel.transport.createClient()

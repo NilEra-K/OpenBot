@@ -63,6 +63,7 @@ const snapshot = async (): Promise<void> => {
       <BoxScreen v-else :blocks="screenBlocks" />
     </div>
     <div class="bo-hint">
+      <span class="stat-dot working"></span>
       <template v-if="canInteract">
         终端远程控制——键盘直送 Box 内 bash（vim/top 可用，Ctrl+C 同真终端）；终端尺寸固定 100×30（不随窗口变，需改尺寸可 shell 内 stty）
       </template>

@@ -70,6 +70,16 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
 
     // —— console：发消息 ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
+
+    // —— ctx 任意时刻接管（P3 对齐）：无 exec 史（steward 会话、IDLE 屏）也可点开操作台——
+    // boxId 来自 roster 事实（v1.system.listAgents 返回项），不依赖执行史
+    await expect(page.locator('.ctx-screen')).toContainText('等待任务派发', { timeout: 15_000 })
+    await expect(page.locator('.cs-hint')).toContainText('点击进入 Box 操作台')
+    await page.getByRole('button', { name: /^进入 box-\d+ 操作台$/ }).click()
+    await expect(page.locator('.boxops .bo-title')).toHaveText(/^box-\d+$/)
+    await page.locator('.boxops').getByRole('button', { name: '返回' }).click()
+    await expect(page.locator('.boxops')).toHaveCount(0)
+
     await page.locator('.composer-box input').fill('帮我检查工作区并抓取网页')
     await page.locator('.composer-box input').press('Enter')
     // 用户消息气泡（乐观占位已收敛为正式）
@@ -90,12 +100,14 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await expect(page.locator('.m-text', { hasText: '目录是空的' })).toBeVisible({ timeout: 30_000 })
     await expect(page.locator('.task .chip', { hasText: '完成' })).toBeVisible({ timeout: 15_000 })
 
-    // —— ctx 显示器（P3 Step 7）：worker1 会话——屏幕呈现 Box 命令与输出实况（$ 命令行 + mock 输出），
-    // 思考条呈现 llm 增量（agent 进程不在 Box 内，不冒充屏幕内容——诚实分层） ——
+    // —— 对话流聚合（P3 调整）：worker1 会话——思考块在流内（llm 增量全部轮次留痕），
+    // task 卡内嵌输出区（$ 命令行 + mock 输出一体），ctx 右栏纯化为一块显示器 ——
+    await expect(page.locator('.think', { hasText: '目录是空的' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.task .bt-line', { hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.task .bt-line', { hasText: 'mock: ls /work' })).toBeVisible()
     const screen = page.locator('.ctx-screen')
-    await expect(screen.filter({ hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
+    await expect(screen.filter({ hasText: '$ ls /work' })).toBeVisible()
     await expect(screen.filter({ hasText: 'mock: ls /work' })).toBeVisible()
-    await expect(page.locator('.think', { hasText: '目录是空的' })).toBeVisible()
 
     // —— Box 操作台：PTY 交互终端（mock 回显假终端）——点屏幕进入，键入回显，返回关闭即杀会话 ——
     await page.getByRole('button', { name: /^进入 box-\d+ 操作台$/ }).click()

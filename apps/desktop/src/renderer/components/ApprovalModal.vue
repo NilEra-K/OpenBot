@@ -85,7 +85,8 @@ watch(
 .approval-scrim {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* 高于操作台（80）：操作台开着时出 Box 审批也必须可见——审批是注意力捕获层 */
+  z-index: 90;
   /* 全屏 overlay 显式退出拖窗区：fixed 盖住 titlebar 不改变 drag 判定（Chromium 行为），
      不声明 no-drag 则顶部 38px 内的真实点击被当拖窗吃掉 */
   -webkit-app-region: no-drag;

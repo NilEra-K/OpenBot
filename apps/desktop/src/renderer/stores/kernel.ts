@@ -26,6 +26,9 @@ export interface RosterEntry {
   agentId: string
   name?: string
   role: 'steward' | 'worker'
+  /** 该 agent 的专属 Box（v1.system.listAgents 返回；注册即创建——ctx 任意时刻可接管的信号源）。
+   *  可选：roster 事件 push 的新 agent（运行中注册）归属未知，待下次快照刷新。 */
+  boxId?: string | null
 }
 
 export interface ChatMessage {
@@ -209,8 +212,13 @@ export const useKernelStore = defineStore('kernel', {
           onPtyData: (meta, text) => this.dispatchPty({ type: 'data', ...meta, text }),
           onPtyEnd: (meta) => this.dispatchPty({ type: 'end', ...meta }),
         })
-        const agents = await client.call<Array<{ agentId: string; name?: string; role: string }>>('v1.system.listAgents')
-        this.roster = agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role as RosterEntry['role'] }))
+        const agents = await client.call<Array<{ agentId: string; name?: string; role: string; boxId?: string | null }>>('v1.system.listAgents')
+        this.roster = agents.map((a) => ({
+          agentId: a.agentId,
+          name: a.name,
+          role: a.role as RosterEntry['role'],
+          boxId: a.boxId ?? null,
+        }))
         const steward = await client.call<{ agentId: string } | null>('v1.system.getSteward')
         this.stewardId = steward?.agentId ?? null
         await this.refreshSettings()

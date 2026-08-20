@@ -5,8 +5,7 @@
   overflow-y: auto;
   min-height: 100%;
   font-family: var(--mono);
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre; /* 原型同款：长行不折行，随滚动容器横向滚动 */
 }
 
 .bt-line {
@@ -23,18 +22,22 @@
   color: #eeb154;
 }
 
+.t-ok {
+  color: #73ce95;
+}
+
 .bt-dim {
   color: #8a938e;
 }
 
-/* 打字机光标（live 块尾部闪烁） */
+/* 打字机光标（live 块尾部闪烁；原型 .t-cursor 同款琥珀 8×15） */
 .caret {
   display: inline-block;
-  width: 7px;
-  height: 13px;
+  width: 8px;
+  height: 15px;
   margin-left: 2px;
   vertical-align: -2px;
-  background: #9fb3ac;
+  background: #eeb154;
   animation: bt-caret 1s steps(1) infinite;
 }
 

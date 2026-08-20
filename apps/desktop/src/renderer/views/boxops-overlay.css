@@ -2,10 +2,14 @@
 
 .boxops {
   position: fixed;
-  inset: 0;
+  /* 对齐原型语义（boxops 覆盖 main 主区、rail 侧栏保留可见可点）：留出 titlebar 38px 与 rail 56px */
+  top: 38px;
+  left: 56px;
+  right: 0;
+  bottom: 0;
   z-index: 80;
-  /* 全屏 overlay 显式退出拖窗区：fixed 盖住 titlebar 不改变 drag 判定（Chromium 行为），
-     不声明 no-drag 则 bo-bar（顶部 38px 内）的真实点击被当拖窗吃掉（实测：点返回拖动整个窗口） */
+  /* 全屏 overlay 显式退出拖窗区：fixed 盖住 titlebar 不改变 drag 判定（Chromium 行为）。
+     现已让出 titlebar 区域，此声明保留作防御（z 轴仍在 drag 矩形延伸判定内） */
   -webkit-app-region: no-drag;
   display: flex;
   flex-direction: column;
@@ -113,23 +117,25 @@
   min-height: 0;
   border: 1px solid var(--line-strong);
   background: #080a0b;
-  margin: 14px;
   padding: 18px 22px;
-  overflow: hidden;
+  overflow: auto; /* 原型同款：长行横向滚动（BoxTerm 的 xterm 自管滚动不受影响） */
+  outline: none;
   font-size: 13px;
   line-height: 1.95;
   color: #c7cfcb;
+  white-space: pre;
 }
 
 .bo-hint {
   flex: none;
+  min-height: 30px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
+  padding: 4px 16px;
   border-top: 1px solid var(--line);
   background: var(--bg1);
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--ink3);
 }
 

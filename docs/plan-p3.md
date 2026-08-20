@@ -105,6 +105,20 @@
     bo-bar 落在壳 titlebar(app-region:drag,高 38px)矩形内,而 fixed overlay 盖住 titlebar
     不改变 Chromium drag 判定;修法=全屏 overlay 显式 no-drag(boxops 与审批 scrim 同修,与
     win-controls 同款模式);E2E 合成点击绕过 drag 判定测不出,地雷记录在 platforms.md
+  - **样式对齐与任意时刻接管(2026-08-20,细案见 [P3-ctx-ops-align.md](P3-ctx-ops-align.md))**:
+    ctx/boxops 与 prototype.html 逐项对齐——ctx 屏幕自然高度(去 min-height 220)、cs-term 命名
+    与 9.5px 数值、补 cs-hint 底部提示条(原型完全缺失的结构;文案按 caps.interactive 分流,
+    不放假「键盘接管」承诺)、光标对齐琥珀 8×15;操作台留出 titlebar/rail(原型 boxops 在 main 内
+    的语义——侧栏保留可点切视图)、bo-screen 去 margin 贴边铺满/overflow auto/pre;
+    **任意时刻接管**:`v1.system.listAgents` 返回项加 boxId(agent 专属 Box 的领域事实,注册即
+    create),ctx-screen 的归属从「最近 exec 块推导」改查 roster——不再依赖执行史(与原型
+    AGENT_BOX 静态映射同语义),IDLE 空缺屏也可点开操作台;顺带修审批 scrim z-index 60<80 被
+    操作台盖住的既有 bug(提到 90)。环境地雷:系统 commit 近耗尽时 Vitest 多 worker 崩溃
+    (ERR_IPC_CHANNEL_CLOSED/V8 Realloc 断言),--no-file-parallelism 单 worker 正常
+  - **对话流聚合(2026-08-20 用户裁定)**:「模型说的+模型做的」聚合进对话流——思考块(llm 增量,
+    全部轮次留痕)与 task 卡内嵌输出区($ 命令+输出一体,复用 BoxScreen)按时间序进 stream,
+    ctx 右栏纯化为一块显示器(与原型 is-single 同构);实况断线不补——重启后历史卡退化为
+    命令+状态,不造假(细案见 P3-ctx-ops-align.md 追加轮次)
 - [ ] 8. electron-builder:win nsis + portable(asar、图标、userData 迁移注意);打包产物真内核冒烟;`dist` 脚本替换占位
 - [ ] 9. 验收:真实后端 E2E 套件(`OPENBOT_E2E_BACKEND=wsl|docker|podman` 选择性跑,默认 mock 不变);**真实 Box 内「改项目→构建」演示(fixture 项目:patch→build→diff 回读)产出 diff**;三命令全绿
 - [x] 10. **PTY 终端远程控制(2026-08-20 用户裁定从 P4 提前,插队在 Step 8 打包前实施)**:操作台大屏从「纯显示」升级为终端级交互——用户亲手在 Box 内敲命令;agent 的 exec 路线(run/审批/预算)完全不涉及
