@@ -327,3 +327,28 @@ test('壳层收尾（P4 Step 1）：状态栏真数据 + 面包屑 + 你头像 +
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('Toast 全局通道（P4 Step 2）：快照成功轻提示出现并自动消退', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-toast-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // Box 视图触发快照（mock caps.snapshot=true）→ 成功 toast
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    await page.locator('.boxcard button', { hasText: '快照' }).first().click()
+    await expect(page.locator('.toast.success')).toContainText('已创建快照')
+
+    // 2.8s 自动消退（点击即消的备选路径由单测心智覆盖——E2E 只验自动闭环）
+    await expect(page.locator('.toast.success')).toHaveCount(0, { timeout: 6000 })
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

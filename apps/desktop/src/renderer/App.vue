@@ -15,6 +15,7 @@ import GraphView from './views/GraphView.vue'
 import SettingsView from './views/SettingsView.vue'
 import ApprovalModal from './components/ApprovalModal.vue'
 import BoxOps from './components/BoxOps.vue'
+import ToastHost from './components/ToastHost.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -192,6 +193,9 @@ onUnmounted(() => kernel.shutdown())
 
     <!-- Box 操作台（VMware 控制台式大屏覆盖层；ctx 屏幕与 Box 卡片均可打开） -->
     <BoxOps />
+
+    <!-- Toast 轻提示（P4 Step 2）：右下角全局动作反馈层 -->
+    <ToastHost />
   </div>
 </template>
 

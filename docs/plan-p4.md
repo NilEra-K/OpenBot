@@ -38,8 +38,12 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
     状态栏数据全为 store 投影（connected/lastSeq/providers×defaultProvider/sandbox.backendId/boxes.length），
     沙箱缺席项整条隐藏、LLM 未配置如实显示「未配置」；双击最大化排除表 .theme-toggle/.win-controls/.boot-error（原型同款）；
     About 版本 E2E 用正则 /v\d+\.\d+\.\d+/ 断言（版本随提交演进不腐烂测试）；4 用例 E2E 全绿
-- [ ] 2. **Toast 全局通道**：右下角轻提示组件（队列 / 2.8s 自动消退 / reduced-motion 兼容）+ 接入既有动作
+- [x] 2. **Toast 全局通道**：右下角轻提示组件（队列 / 2.8s 自动消退 / reduced-motion 兼容）+ 接入既有动作
   （快照成败 / provider 切换 / 设置保存 / 后续各步的动作反馈）；替代「操作成功无反馈」的静默现状
+  - 实施（2026-08-25）：`stores/toast.ts`（队列堆叠不互顶、按 kind 定 ttl——danger 4.2s 多留阅读）+
+    `ToastHost.vue`（右下角钉状态栏上方、aria-live 播报、点击即消）；接入四处——BoxesView/BoxOps 快照成败
+    （操作台内联注记退役）、设置页保存/设主力/删除/沙箱偏好（失败仍走就地错误——有表单上下文）；
+    reduced-motion 由 Step 1 全局媒体查询覆盖（toast-in 动画自动关）；E2E 快照触发→自动消退闭环
 - [ ] 3. **命令面板（Ctrl K）+ 标题栏 omnibox**：六组命令——快速派单（跳会话+聚焦输入框）/ 跳转 agent / 接管 Box /
   视图导航 / 动作（新建 agent、切换主题）；模糊过滤 + 键盘上下选择；**纯 renderer 消费现有 store，零内核改动**
 - [ ] 4. **@提及补全 + 消息高亮**：composer 输入 `@` 弹成员菜单（↑↓ 选择 / Enter·Tab 补全 / Esc 关闭 / 失焦收起）；
@@ -136,7 +140,7 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 | 状态栏 statusbar | ✅ 已实现（Step 1） |
 | 新建 agent 向导 | Step 5 |
 | 新建 Box 侧滑 | 记档：裁定 B 不做（等 box-catalog/多后端） |
-| Toast 轻提示 | Step 2 |
+| Toast 轻提示 | ✅ 已实现（Step 2） |
 
 ### 二、控制台
 

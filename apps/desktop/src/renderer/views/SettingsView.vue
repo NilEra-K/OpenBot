@@ -12,9 +12,11 @@ import { useKernelStore } from '../stores/kernel'
 import type { ProviderView, SandboxPref } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import type { ThemePref } from '../stores/ui'
+import { useToastStore } from '../stores/toast'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
+const toast = useToastStore()
 
 /** 应用版本（P4 Step 1）：main 经 preload 桥取 package.json version——不手写不过时 */
 const appVersion = ref<string | null>(null)
@@ -112,6 +114,7 @@ const save = async (): Promise<void> => {
       ...(form.apiKey.trim() !== '' ? { apiKey: form.apiKey.trim() } : {}),
       ...(form.proxyUrl.trim() !== '' ? { proxyUrl: form.proxyUrl.trim() } : {}),
     })
+    toast.push(`模型端点已保存：${form.name.trim()}`, 'success')
     formOpen.value = false
   } catch (err) {
     formError.value = err instanceof Error ? `${err.message}` : String(err)
@@ -122,7 +125,9 @@ const save = async (): Promise<void> => {
 
 const setDefault = (name: string): void => {
   confirmingRemove.value = null
-  void kernel.setDefaultProvider(name).catch((err: unknown) => {
+  void kernel.setDefaultProvider(name).then(() => {
+    toast.push(`主力模型已切换：${name}——管家与全部 agent 下轮对话生效`, 'success')
+  }).catch((err: unknown) => {
     formError.value = err instanceof Error ? err.message : String(err)
   })
 }
@@ -133,7 +138,9 @@ const removeProvider = (name: string): void => {
     return
   }
   confirmingRemove.value = null
-  void kernel.removeProvider(name).catch((err: unknown) => {
+  void kernel.removeProvider(name).then(() => {
+    toast.push(`已删除模型端点：${name}`, 'info')
+  }).catch((err: unknown) => {
     formError.value = err instanceof Error ? err.message : String(err)
   })
 }
@@ -197,6 +204,7 @@ const applySandbox = async (): Promise<void> => {
   try {
     await kernel.setSandbox(sandboxChoice.value)
     sandboxError.value = null
+    toast.push('沙箱偏好已保存——重启应用后生效', 'success')
   } catch (err) {
     sandboxChoice.value = prev // 写入失败回滚（呈现与 settings 真相一致）
     sandboxError.value = err instanceof Error ? err.message : String(err)

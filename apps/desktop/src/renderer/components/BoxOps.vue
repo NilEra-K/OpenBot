@@ -8,11 +8,13 @@
 import { computed, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
+import { useToastStore } from '../stores/toast'
 import BoxScreen from './BoxScreen.vue'
 import BoxTerm from './BoxTerm.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
+const toast = useToastStore()
 
 const boxId = computed(() => ui.boxOps)
 
@@ -25,18 +27,16 @@ const live = computed(() => screenBlocks.value.some((b) => b.state === 'live'))
 /** 交互终端（PTY）：caps 驱动——按钮/入口永不背离后端能力 */
 const canInteract = computed(() => kernel.caps?.interactive === true)
 const canSnapshot = computed(() => kernel.caps?.snapshot === true)
-const snapshotNote = ref<string | null>(null)
 const snapshotting = ref(false)
 
 const snapshot = async (): Promise<void> => {
   if (boxId.value === null || snapshotting.value) return
   snapshotting.value = true
-  snapshotNote.value = null
   try {
     const snapshotId = await kernel.snapshotBox(boxId.value)
-    snapshotNote.value = `已创建快照 ${snapshotId}`
+    toast.push(`已创建快照 ${snapshotId}（${boxId.value}）`, 'success')
   } catch (err) {
-    snapshotNote.value = `快照失败：${err instanceof Error ? err.message : String(err)}`
+    toast.push(`快照失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
   } finally {
     snapshotting.value = false
   }
@@ -55,7 +55,6 @@ const snapshot = async (): Promise<void> => {
       <span v-else class="chip"><span class="stat-dot" :class="{ working: live }"></span>{{ live ? '屏幕实况中' : '屏幕空闲' }}</span>
       <span class="bo-meta mono">{{ canInteract ? '终端远程控制 · PTY' : '终端画面 · 显示部分' }}</span>
       <div class="bo-actions">
-        <span v-if="snapshotNote" class="bo-meta">{{ snapshotNote }}</span>
         <button v-if="canSnapshot" class="btn-ghost" :disabled="snapshotting" @click="snapshot">
           {{ snapshotting ? '快照中…' : '创建快照' }}
         </button>

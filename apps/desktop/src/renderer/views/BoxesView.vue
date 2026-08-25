@@ -8,10 +8,12 @@
 import { computed, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
+import { useToastStore } from '../stores/toast'
 import { agentColor } from '../lib/agent-color'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
+const toast = useToastStore()
 
 const stateChip = (state: 'active' | 'sleeping' | 'snapshot'): { cls: string; label: string } => {
   switch (state) {
@@ -59,8 +61,11 @@ const snapshot = async (boxId: string): Promise<void> => {
   delete snapError.value[boxId]
   try {
     lastSnap.value[boxId] = await kernel.snapshotBox(boxId)
+    toast.push(`已创建快照 ${lastSnap.value[boxId]}（${boxId}）`, 'success')
   } catch (err) {
-    snapError.value[boxId] = err instanceof Error ? err.message : String(err)
+    const msg = err instanceof Error ? err.message : String(err)
+    snapError.value[boxId] = msg
+    toast.push(`快照失败：${msg}`, 'danger')
   } finally {
     const next = new Set(snapping.value)
     next.delete(boxId)
