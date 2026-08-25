@@ -4,7 +4,8 @@
  * 生命周期与操作台同进出：挂载起会话、卸载杀会话（不留后台 shell）。
  * 竞态解法：pty 事件按 boxId 过滤（非 shellId）——WS 事件可能先于 shellOpen 的 HTTP 响应到达，
  * 先订阅后 open，开场提示符不丢；同 Box 同一时刻只有一个终端实例，boxId 即唯一归属。
- * 一期固定尺寸 100×30：管道方案无 TIOCSWINSZ，不跟窗口 resize（bo-hint 诚实标注）。
+ * 尺寸：开场按 host 实测定 cols/rows（会话中不变——管道方案无 TIOCSWINSZ，不跟窗口 resize；
+ * 需改尺寸可 shell 内 stty 或重开操作台，bo-hint 诚实标注）。
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { Terminal } from '@xterm/xterm'
@@ -42,11 +43,32 @@ const recentExecText = (): string => {
 let term: Terminal | null = null
 let shellId: string | null = null
 let offPty: (() => void) | null = null
+/** 开场定下的会话尺寸（stty 注入与 xterm 一致） */
+let sized: { cols: number; rows: number } = { cols: 100, rows: 30 }
+
+/**
+ * 开场定尺寸（会话中不变）：先以基准 80×24 开屏量测单元格尺寸（.xterm-screen 是
+ * cols×rows 的精确像素盒），再按 host 可容空间算终值——resize 后才起会话，stty 注入的
+ * 即终值。钳制对齐 backend-wsl（cols 10~500 / rows 4~200），量测失败回退 100×30。
+ */
+const sizeToHost = (): { cols: number; rows: number } => {
+  const host = hostEl.value
+  const screen = host?.querySelector('.xterm-screen') as HTMLElement | null
+  if (!term || !host || !screen || term.cols === 0 || term.rows === 0) return { cols: 100, rows: 30 }
+  const cellW = screen.clientWidth / term.cols
+  const cellH = screen.clientHeight / term.rows
+  if (!(cellW > 0) || !(cellH > 0)) return { cols: 100, rows: 30 }
+  const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
+  return {
+    cols: clamp(Math.floor(host.clientWidth / cellW), 24, 500),
+    rows: clamp(Math.floor(host.clientHeight / cellH), 6, 200),
+  }
+}
 
 onMounted(() => {
   term = new Terminal({
-    cols: 100,
-    rows: 30,
+    cols: 80,
+    rows: 24,
     fontFamily: "'Cascadia Code', Consolas, ui-monospace, monospace",
     fontSize: 13,
     cursorBlink: true,
@@ -58,6 +80,8 @@ onMounted(() => {
     },
   })
   term.open(hostEl.value!)
+  sized = sizeToHost()
+  term.resize(sized.cols, sized.rows)
   // 开场回放先落屏（本地 write 即时；pty 输出经 WS 异步到达，天然接在回放之下）
   term.write(recentExecText())
   // 输出：pty 流 → term.write（按 boxId 过滤——见文件头竞态说明）
@@ -78,9 +102,9 @@ onMounted(() => {
       })
     }
   })
-  // 起会话（失败如实呈现——SHELL_UNSUPPORTED 等）
+  // 起会话（失败如实呈现——SHELL_UNSUPPORTED 等）；尺寸=开场定值（stty 注入与 xterm 屏一致）
   kernel
-    .shellOpen(props.boxId, { cols: 100, rows: 30 })
+    .shellOpen(props.boxId, sized)
     .then((id) => {
       shellId = id
       term?.focus()

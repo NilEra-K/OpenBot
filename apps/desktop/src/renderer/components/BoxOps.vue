@@ -68,7 +68,7 @@ const snapshot = async (): Promise<void> => {
     <div class="bo-hint">
       <span class="stat-dot working"></span>
       <template v-if="canInteract">
-        终端远程控制——键盘直送 Box 内 bash（vim/top 可用，Ctrl+C 同真终端）；终端尺寸固定 100×30（不随窗口变，需改尺寸可 shell 内 stty）
+        终端远程控制——键盘直送 Box 内 bash（vim/top 可用，Ctrl+C 同真终端）；尺寸按开启时窗口取定，会话中不变（需改尺寸可 shell 内 stty 或重开操作台）
       </template>
       <template v-else>
         实况显示——Box 内命令与输出直接呈现，不出本机；键盘接管（PTY 终端）与图形界面画面属后续版本

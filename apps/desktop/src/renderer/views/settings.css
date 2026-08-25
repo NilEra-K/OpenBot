@@ -311,6 +311,7 @@
 }
 
 .sandbox-pref {
+  position: relative; /* 绝对定位 radio 的包含块（缺此声明会逃逸到视口——穿透滚动裁剪制造幽灵根滚动条） */
   display: flex;
   flex-direction: column;
   gap: 3px;
