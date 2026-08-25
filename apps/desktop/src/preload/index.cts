@@ -25,4 +25,8 @@ contextBridge.exposeInMainWorld('openbot', {
     /** 拉取网关接入点（main 装配完成后才有值；装配失败返回 null） */
     info: () => ipcRenderer.invoke('openbot:gateway') as Promise<{ port: number; token: string } | null>,
   },
+  app: {
+    /** 应用版本（package.json version；About 页真值——不手写不过时） */
+    version: () => ipcRenderer.invoke('openbot:app-version') as Promise<string>,
+  },
 })

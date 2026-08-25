@@ -293,3 +293,37 @@ test('Box 仪表与宿主磁盘压力角标（Step 6：stats 轮询 → 事件 �
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('壳层收尾（P4 Step 1）：状态栏真数据 + 面包屑 + 你头像 + About 版本真值', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-shell-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 面包屑随视图：控制台 → 切 Box 后变「Box」
+    await expect(page.locator('.tb-crumb')).toHaveText('控制台')
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    await expect(page.locator('.tb-crumb')).toHaveText('Box')
+
+    // 状态栏：连接事实 + mock 沙箱事实 + 叙事行（真数据投影——不造数字）
+    await expect(page.locator('.statusbar')).toContainText('内核已连接 · seq')
+    await expect(page.locator('.statusbar')).toContainText('沙箱 模拟 ·')
+    await expect(page.locator('.statusbar')).toContainText('本地执行 · 0 云依赖')
+
+    // 你（本机主人）头像钉在侧栏底部
+    await expect(page.locator('.rail-user')).toHaveText('你')
+
+    // About 版本真值：package.json version 经桥到达（正则断言——版本号随提交演进不腐烂）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await expect(page.locator('.settings')).toContainText(/v\d+\.\d+\.\d+/)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

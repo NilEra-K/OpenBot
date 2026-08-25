@@ -3,7 +3,7 @@
  * App 壳骨架（Step 7）：titlebar（frameless 三键）+ 侧栏五视图 + 主区容器。
  * 视觉基调对齐 prototype.html 设计变量（Step 8–9 逐视图迁移完整样式）。
  */
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useKernelStore } from './stores/kernel'
 import { useUiStore } from './stores/ui'
 import { initThemeWatch } from './stores/ui'
@@ -59,6 +59,34 @@ const views: Array<{ id: ViewName; label: string; icon: string; component: unkno
   { id: 'settings', label: '设置', icon: 'sliders', component: SettingsView },
 ]
 
+// ---- P4 Step 1 壳层收尾：面包屑 / 双击最大化 / 状态栏（全部既有 store 投影，零内核改动） ----
+
+/** 面包屑：当前视图名（原型 tb-crumb 语义） */
+const currentViewLabel = computed(() => views.find((v) => v.id === ui.currentView)?.label ?? '')
+
+/** 双击标题栏最大化（Windows 惯例；交互子元素不触发——原型同款排除表） */
+const onTitlebarDblclick = (e: MouseEvent): void => {
+  if ((e.target as HTMLElement).closest('.theme-toggle, .win-controls, .boot-error')) return
+  toggleMaximize()
+}
+
+const BACKEND_LABELS: Record<string, string> = {
+  auto: '自动',
+  mock: '模拟',
+  wsl: 'WSL2',
+  docker: 'Docker',
+  podman: 'Podman',
+}
+
+/** 状态栏事实（真数据：连接/LLM/沙箱——缺席项如实隐藏或标注，不放假数字） */
+const llmLabel = computed(() => {
+  const p = kernel.providers.find((x) => x.name === kernel.defaultProvider)
+  return p ? `${p.name} · ${p.model}` : '未配置'
+})
+const sandboxLabel = computed(() =>
+  kernel.sandbox ? (BACKEND_LABELS[kernel.sandbox.backendId] ?? kernel.sandbox.backendId) : null,
+)
+
 /** 图标 path(prototype.html ICONS 同源;viewBox 0 0 24 24 线性图标) */
 const ICONS: Record<string, string> = {
   chat: '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
@@ -78,8 +106,9 @@ onUnmounted(() => kernel.shutdown())
 <template>
   <div class="app" :data-connected="kernel.connected">
     <!-- 自绘标题栏（frameless；窗口控制经 preload 桥） -->
-    <header class="titlebar">
+    <header class="titlebar" @dblclick="onTitlebarDblclick">
       <div class="brand">OpenBot</div>
+      <span class="tb-crumb">{{ currentViewLabel }}</span>
       <div v-if="kernel.bootError" class="boot-error" :title="kernel.bootError">内核未连接</div>
       <div class="titlebar-right">
         <!-- 主题快捷切换：实效夜间显示太阳（点击转日间），日间显示月亮（auto 下点击即转显式偏好） -->
@@ -136,11 +165,27 @@ onUnmounted(() => kernel.shutdown())
             :title="kernel.pressure.level === 'critical' ? '磁盘空间严重不足' : '磁盘空间偏低'"
           >!</span>
         </button>
+        <!-- 你（本机主人）：所有对话的起点（原型 rail-user） -->
+        <div class="rail-user" title="你（本机主人）">你</div>
       </nav>
       <main class="main">
         <component :is="(views.find((v) => v.id === ui.currentView)?.component as never)" />
       </main>
     </div>
+
+    <!-- 状态栏（P4 Step 1）：全部真数据投影——连接/seq、当前 LLM、沙箱后端与 Box 数；
+         「本地执行 · 0 云依赖」是定位叙事行（云依赖只剩 LLM API 是架构原文） -->
+    <footer class="statusbar">
+      <span class="sb-item">
+        <span class="sb-dot" :class="kernel.connected ? 'ok' : 'danger'"></span>
+        {{ kernel.connected ? `内核已连接 · seq ${kernel.lastSeq}` : '内核未连接' }}
+      </span>
+      <span class="sb-item">LLM {{ llmLabel }}</span>
+      <span v-if="sandboxLabel" class="sb-item">沙箱 {{ sandboxLabel }} · {{ kernel.boxes.length }} Box</span>
+      <span class="sb-sep"></span>
+      <span class="sb-claim">本地执行 · 0 云依赖</span>
+      <span class="sb-item">托盘常驻</span>
+    </footer>
 
     <!-- 审批弹窗（全局层：挂起审批的注意力捕获；流内 gate 卡保留对话流上下文） -->
     <ApprovalModal />
@@ -287,6 +332,19 @@ body {
   background: rgba(var(--danger-rgb), 0.15);
   color: var(--danger);
   font-size: 12px;
+}
+
+/* 面包屑（原型 tb-crumb：/ 视图名） */
+.tb-crumb {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--ink3);
+}
+
+.tb-crumb::before {
+  content: '/';
+  margin-right: 10px;
+  color: var(--line-strong);
 }
 
 .titlebar-right {
@@ -439,5 +497,74 @@ body {
   color: var(--muted);
   padding: 40px;
   text-align: center;
+}
+
+/* 你（本机主人）头像：钉在侧栏底部 */
+.rail-user {
+  width: 30px;
+  height: 30px;
+  margin-top: auto;
+  border-radius: 50%;
+  background: var(--bg3);
+  border: 1px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--ink2);
+}
+
+/* ---- 状态栏（原型 statusbar 语义、真数据投影） ---- */
+.statusbar {
+  flex: none;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 14px;
+  background: var(--bg0);
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--ink3);
+  user-select: none;
+}
+
+.statusbar .sb-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.statusbar .sb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink3);
+}
+
+.statusbar .sb-dot.ok {
+  background: var(--success);
+}
+
+.statusbar .sb-dot.danger {
+  background: var(--danger);
+}
+
+.statusbar .sb-sep {
+  flex: 1;
+}
+
+.statusbar .sb-claim {
+  color: var(--accent);
+}
+
+/* 无障碍：系统偏好减动效时全局降级（动画与过渡全关——打字机光标/脉冲/渐入等） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 </style>

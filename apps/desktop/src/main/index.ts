@@ -123,6 +123,9 @@ ipcMain.on('openbot:win', (_e, op: string) => {
 // 最大化状态初始查询（广播之外补拉——renderer 加载/重载后自行同步）
 ipcMain.handle('openbot:win-is-maximized', () => win?.isMaximized() ?? false)
 
+// 应用版本（P4 Step 1 About 真值）：来自 apps/desktop/package.json 的 version 字段（随提交 vX.Y.Z 同步）
+ipcMain.handle('openbot:app-version', () => app.getVersion())
+
 // 网关接入点：renderer 经 preload 异步拉取（port/token 只活在内存链路，不落盘）
 ipcMain.handle('openbot:gateway', () =>
   desktop ? { port: desktop.gateway.port, token: desktop.gateway.token } : null,

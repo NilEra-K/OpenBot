@@ -23,6 +23,7 @@ interface OpenbotGlobal {
     onMaximizeChange(cb: (maximized: boolean) => void): () => void
   }
   gateway: { info(): Promise<GatewayEndpoint | null> }
+  app: { version(): Promise<string> }
 }
 declare global {
   interface Window {

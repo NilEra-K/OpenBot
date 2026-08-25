@@ -30,9 +30,14 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 
 ## TODOLIST
 
-- [ ] 1. **壳层收尾**：状态栏（内核连接·seq / 当前 LLM / 沙箱后端·N Box / 本地执行·0 云依赖——**全部真数据**，
+- [x] 1. **壳层收尾**：状态栏（内核连接·seq / 当前 LLM / 沙箱后端·N Box / 本地执行·0 云依赖——**全部真数据**，
   无原型「local-exec 守护」假叙事）+ 双击标题栏最大化 + rail-user「你」头像 + 面包屑 crumb +
   `prefers-reduced-motion` 全局降级 + About 版本号改 `app.getVersion()` 真值（现「P3 开发版 v0.0.6+」已过时）
+  - 实施（2026-08-25）：版本真值链路 main `openbot:app-version`（app.getVersion）→ preload `app.version` →
+    renderer 类型；**apps/desktop/package.json version 0.0.0→0.0.17 对齐出货提交（后续随 vX.Y.Z 同步——提交检查项）**；
+    状态栏数据全为 store 投影（connected/lastSeq/providers×defaultProvider/sandbox.backendId/boxes.length），
+    沙箱缺席项整条隐藏、LLM 未配置如实显示「未配置」；双击最大化排除表 .theme-toggle/.win-controls/.boot-error（原型同款）；
+    About 版本 E2E 用正则 /v\d+\.\d+\.\d+/ 断言（版本随提交演进不腐烂测试）；4 用例 E2E 全绿
 - [ ] 2. **Toast 全局通道**：右下角轻提示组件（队列 / 2.8s 自动消退 / reduced-motion 兼容）+ 接入既有动作
   （快照成败 / provider 切换 / 设置保存 / 后续各步的动作反馈）；替代「操作成功无反馈」的静默现状
 - [ ] 3. **命令面板（Ctrl K）+ 标题栏 omnibox**：六组命令——快速派单（跳会话+聚焦输入框）/ 跳转 agent / 接管 Box /
@@ -128,7 +133,7 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 | 跨用户房间视图（roomcard/预算/退避/mirror） | 记档：P6（裁定 A 顺延；协议占位不动） |
 | 群聊 / 广播 / subagent（名册群组节/群聊流/sysnote/background lane 数据源） | 记档：P5+/backlog |
 | omnibox + Ctrl K 命令面板 | Step 3 |
-| 状态栏 statusbar | Step 1 |
+| 状态栏 statusbar | ✅ 已实现（Step 1） |
 | 新建 agent 向导 | Step 5 |
 | 新建 Box 侧滑 | 记档：裁定 B 不做（等 box-catalog/多后端） |
 | Toast 轻提示 | Step 2 |
@@ -183,15 +188,15 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 | 后端一键配置 | Step 11（降级引导，裁定 D） |
 | computer-use 屏幕操控 | 记档：后续版本 |
 | 权限策略分级开关 | 记档：后续版本（已有记档） |
-| About 版本号过时 | Step 1 |
+| About 版本号过时 | ✅ 已实现（Step 1） |
 
 ### 七、壳层小项
 
 | 差距项 | 处置 |
 |---|---|
-| 双击标题栏最大化 | Step 1 |
-| rail-user「你」头像 / 面包屑 crumb | Step 1 |
-| prefers-reduced-motion | Step 1 |
+| 双击标题栏最大化 | ✅ 已实现（Step 1） |
+| rail-user「你」头像 / 面包屑 crumb | ✅ 已实现（Step 1） |
+| prefers-reduced-motion | ✅ 已实现（Step 1） |
 
 ### 盘点时的已超出项（非差距，备忘）
 

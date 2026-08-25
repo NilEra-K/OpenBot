@@ -7,7 +7,7 @@
  *   后端选择是装配期决策不热切换）。docker/podman 未实现前只读呈现（不放假选项）。
  * - 权限策略：呈现 Manual 审批闸门现状——不放假开关（内核无对应存储）。
  */
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { ProviderView, SandboxPref } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
@@ -15,6 +15,15 @@ import type { ThemePref } from '../stores/ui'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
+
+/** 应用版本（P4 Step 1）：main 经 preload 桥取 package.json version——不手写不过时 */
+const appVersion = ref<string | null>(null)
+onMounted(() => {
+  void window.openbot?.app
+    ?.version()
+    .then((v: string) => (appVersion.value = v))
+    .catch(() => (appVersion.value = null)) // 桥缺失（浏览器 dev）——如实显示
+})
 
 // ---- 外观（呈现层偏好：localStorage 持久化，不进内核 settings——协议纯度） ----
 
@@ -352,7 +361,7 @@ const wslRelevant = computed(
 
       <!-- 关于 -->
       <div class="set-sec">关于</div>
-      <div class="kv"><span class="k">版本</span><span class="v mono">P3 开发版（v0.0.6+）</span></div>
+      <div class="kv"><span class="k">版本</span><span class="v mono">{{ appVersion ? `v${appVersion}` : '开发模式（无壳）' }}</span></div>
       <div class="kv"><span class="k">许可</span><span class="v">Apache-2.0 · 净室自研</span></div>
     </div>
   </section>
