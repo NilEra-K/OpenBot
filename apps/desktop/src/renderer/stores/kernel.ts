@@ -24,7 +24,13 @@ interface OpenbotGlobal {
     onMaximizeChange(cb: (maximized: boolean) => void): () => void
   }
   gateway: { info(): Promise<GatewayEndpoint | null> }
-  app: { version(): Promise<string> }
+  app: {
+    version(): Promise<string>
+    /** 数据路径（设置页数据区块）：userData / data / transcript 目录 */
+    paths(): Promise<{ userData: string; data: string; transcript: string }>
+    /** 打开数据文件夹（白名单限定 userData 内；返回错误消息，空串 = 成功） */
+    openPath(path: string): Promise<string>
+  }
 }
 declare global {
   interface Window {
@@ -115,6 +121,8 @@ export interface ProviderView {
   model: string
   hasKey: boolean
   proxyUrl?: string
+  /** 协议族（P4 Step 11）：缺省 openai-compat */
+  protocol?: 'openai-compat' | 'anthropic'
 }
 
 /** provider 表单输入（v1.settings.upsertProvider 载荷；apiKey 留空=保留原密文） */
@@ -124,6 +132,16 @@ export interface ProviderInput {
   model: string
   apiKey?: string
   proxyUrl?: string
+  protocol?: 'openai-compat' | 'anthropic'
+}
+
+/** LLM 生效事实（v1.settings.llmStatus；状态栏「当轮生效端点」投影） */
+export interface LlmStatus {
+  configured: boolean
+  /** 最近一轮成功响应实际走的通道；null = 尚无成功轮 */
+  activeLane: 'primary' | 'fallback' | null
+  primary: string | null
+  fallback: string | null
 }
 
 export type SandboxPref = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman'
@@ -195,6 +213,10 @@ export const useKernelStore = defineStore('kernel', {
     /** provider 档案清单（settings 视图；无 key 材料） */
     providers: [] as ProviderView[],
     defaultProvider: null as string | null,
+    /** 回退端点档案名（P4 Step 11；null = 未设置） */
+    fallbackProvider: null as string | null,
+    /** LLM 生效事实（状态栏投影；activeLane = 最近一轮成功响应实际走的通道） */
+    llmStatus: null as LlmStatus | null,
     /** 沙箱后端装配事实（settings 视图呈现） */
     sandbox: null as SandboxStatus | null,
     /** Box 资源统计（Step 6）：每盒最新值；字段缺席=后端不可测（WSL 只有磁盘） */
@@ -244,6 +266,7 @@ export const useKernelStore = defineStore('kernel', {
         this.stewardId = steward?.agentId ?? null
         this.approvalMode = (await client.call<{ mode: 'manual' | 'auto' }>('v1.approval.mode')).mode
         await this.refreshSettings()
+        await this.refreshLlmStatus()
         const boxes = await client.call<Array<{ boxId: string; spec: { image: string }; state: BoxCard['state']; createdAt: number }>>('v1.boxes.list')
         this.boxes = boxes.map((b) => ({ boxId: b.boxId, image: b.spec.image, state: b.state, createdAt: b.createdAt }))
         this.caps = await client.call<NonNullable<typeof this.caps>>('v1.boxes.caps')
@@ -360,9 +383,10 @@ export const useKernelStore = defineStore('kernel', {
     },
     /** 刷新 provider 配置（boot 与 settings 视图操作后调用） */
     async refreshSettings(): Promise<void> {
-      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null }>('v1.settings.list')
+      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null; fallbackProvider: string | null }>('v1.settings.list')
       this.providers = state.providers
       this.defaultProvider = state.defaultProvider
+      this.fallbackProvider = state.fallbackProvider
       this.providerConfigured = state.defaultProvider !== null
     },
     /** 新增/更新 provider（同名替换；apiKey 省略=保留原密文），成功后刷新配置态 */
@@ -377,6 +401,16 @@ export const useKernelStore = defineStore('kernel', {
     async removeProvider(name: string): Promise<void> {
       await this.call('v1.settings.removeProvider', { name })
       await this.refreshSettings()
+    },
+    /** 设置/清除回退端点（P4 Step 11；null = 清除；主力失败本轮降级、下轮自动回主力） */
+    async setFallbackProvider(name: string | null): Promise<void> {
+      await this.call('v1.settings.setFallback', { name })
+      await this.refreshSettings()
+      await this.refreshLlmStatus()
+    },
+    /** LLM 生效事实（activeLane 随每轮对话变化；App 层在消息落地后拉取） */
+    async refreshLlmStatus(): Promise<void> {
+      this.llmStatus = await this.call<LlmStatus>('v1.settings.llmStatus')
     },
     /** 刷新沙箱后端状态（boot 与 settings 视图进入时调用） */
     async refreshSandbox(): Promise<void> {

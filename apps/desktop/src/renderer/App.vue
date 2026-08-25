@@ -72,10 +72,16 @@ const currentViewLabel = computed(() => views.find((v) => v.id === ui.currentVie
 watch(
   () => kernel.messages.length,
   (len, prev) => {
+    let sawAgent = false
     for (let i = prev ?? 0; i < len; i++) {
       const m = kernel.messages[i]
-      if (m && m.kind === 'agent' && m.from !== ui.activeAgentId) ui.bumpUnread(m.from)
+      if (m && m.kind === 'agent') {
+        sawAgent = true
+        if (m.from !== ui.activeAgentId) ui.bumpUnread(m.from)
+      }
     }
+    // agent 回复落地 = 一轮 chat 刚结束——拉取当轮生效端点事实（回退降级 per-request，状态栏如实）
+    if (sawAgent) void kernel.refreshLlmStatus().catch(() => {})
   },
 )
 // 进入会话即清零（跨视图派单/relay 点击/名册点击统一走 activeAgentId）；档案模式是会话局部态，切会话回屏幕
@@ -113,10 +119,17 @@ const BACKEND_LABELS: Record<string, string> = {
   podman: 'Podman',
 }
 
-/** 状态栏事实（真数据：连接/LLM/沙箱——缺席项如实隐藏或标注，不放假数字） */
+/** 状态栏事实（真数据：连接/LLM/沙箱——缺席项如实隐藏或标注，不放假数字）。
+ *  LLM 行（P4 Step 11）：当轮实际走回退时如实标注；配置了回退未触发时标「回退就绪」 */
 const llmLabel = computed(() => {
   const p = kernel.providers.find((x) => x.name === kernel.defaultProvider)
-  return p ? `${p.name} · ${p.model}` : '未配置'
+  const base = p ? `${p.name} · ${p.model}` : '未配置'
+  const s = kernel.llmStatus
+  if (s?.activeLane === 'fallback' && s.fallback !== null) {
+    const fb = kernel.providers.find((x) => x.name === s.fallback)
+    return `${base}（当轮回退：${fb ? fb.model : s.fallback}）`
+  }
+  return kernel.fallbackProvider !== null ? `${base} · 回退就绪` : base
 })
 const sandboxLabel = computed(() =>
   kernel.sandbox ? (BACKEND_LABELS[kernel.sandbox.backendId] ?? kernel.sandbox.backendId) : null,

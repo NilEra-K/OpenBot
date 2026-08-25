@@ -78,4 +78,33 @@ describe('SettingsStore', () => {
     const s2 = new SettingsStore({ fs, root: 'data' })
     expect(await s2.load()).toEqual({ version: 1, providers: [] })
   })
+
+  it('protocol 字段（P4 Step 11）：upsert/resolve/list 透传；缺席 = openai-compat 兼容读取', async () => {
+    const { store } = makeStore()
+    await store.upsert({ name: 'claude', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5', protocol: 'anthropic' })
+    await store.upsert({ name: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' })
+    expect((await store.resolve('claude')).protocol).toBe('anthropic')
+    expect((await store.resolve('deepseek')).protocol).toBeUndefined() // 缺席不造默认值——装配层按缺省分支
+    const list = await store.list()
+    expect(list.find((p) => p.name === 'claude')?.protocol).toBe('anthropic')
+    expect(list.find((p) => p.name === 'deepseek')?.protocol).toBeUndefined()
+  })
+
+  it('fallback 档案位（P4 Step 11）：引用校验 / set-get / 清除 / remove 联动清空', async () => {
+    const { fs, store } = makeStore()
+    await store.upsert({ name: 'main', baseUrl: 'https://main/v1', model: 'm' })
+    await store.upsert({ name: 'backup', baseUrl: 'https://backup/v1', model: 'm' })
+    // 引用不存在 → 显式拒绝（悬空引用属配置错误）
+    await expect(store.setFallback('ghost')).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
+    await store.setFallback('backup')
+    expect(await store.getFallback()).toBe('backup')
+    // 清除：盘上不再有该键
+    await store.setFallback(null)
+    expect(await store.getFallback()).toBeNull()
+    expect(fs.snapshot()['data/settings.json'] ?? '').not.toContain('fallbackProvider')
+    // remove 档案时联动清空（不留悬空引用）
+    await store.setFallback('backup')
+    await store.remove('backup')
+    expect(await store.getFallback()).toBeNull()
+  })
 })

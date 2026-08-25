@@ -3,8 +3,8 @@
  * 加载 renderer（Vue 五视图，Step 7 起）；renderer 业务面只经环回网关（HTTP/SSE/WS），
  * 本文件是装配点（ARCHITECTURE.md §2 铁律 3 的装配例外）。
  */
-import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage } from 'electron'
-import { dirname, join } from 'node:path'
+import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { DesktopKernel } from './kernel.js'
 
@@ -80,6 +80,11 @@ function createWindow(): void {
       { label: '开发者工具', click: toggleDevTools },
     ]).popup()
   })
+  // 外链防御（P4 Step 11）：renderer 内 http(s) 链接一律转系统浏览器打开，永不嵌新窗口
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
   loadRenderer(win)
 }
 
@@ -125,6 +130,29 @@ ipcMain.handle('openbot:win-is-maximized', () => win?.isMaximized() ?? false)
 
 // 应用版本（P4 Step 1 About 真值）：来自 apps/desktop/package.json 的 version 字段（随提交 vX.Y.Z 同步）
 ipcMain.handle('openbot:app-version', () => app.getVersion())
+
+// 数据路径（P4 Step 11 设置页数据区块）：与 kernel 装配同源布局——<userData>/data（state root），
+// transcript 落 <data>/agents/<agentId>/transcript.jsonl（state 包布局约定）
+ipcMain.handle('openbot:paths', () => {
+  const userData = app.getPath('userData')
+  return {
+    userData,
+    data: join(userData, 'data'),
+    transcript: join(userData, 'data', 'agents'),
+  }
+})
+
+// 打开数据文件夹（P4 Step 11，裁定 E 一期只读）：白名单限定 userData 内——
+// 桥面永不开放任意路径（shell.openPath 会以用户权限打开资源管理器）
+ipcMain.handle('openbot:open-path', (_e, target: string) => {
+  const root = resolve(app.getPath('userData'))
+  const resolved = resolve(target)
+  // Windows 卷大小写不敏感：统一小写比较（盘符大小写随来源漂移）
+  if (!resolved.toLowerCase().startsWith(root.toLowerCase())) {
+    return Promise.resolve(`拒绝打开数据目录之外的路径：${target}`)
+  }
+  return shell.openPath(resolved)
+})
 
 // 网关接入点：renderer 经 preload 异步拉取（port/token 只活在内存链路，不落盘）
 ipcMain.handle('openbot:gateway', () =>

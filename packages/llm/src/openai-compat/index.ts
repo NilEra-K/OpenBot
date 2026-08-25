@@ -348,9 +348,10 @@ async function* iterateBody(
   }
 }
 
-/** 代理 dispatcher：仅 proxyUrl 配置时按需加载（undici 为 llm 唯一运行时依赖，纯 JS 无编译） */
+/** 代理 dispatcher：仅 proxyUrl 配置时按需加载（undici 为 llm 唯一运行时依赖，纯 JS 无编译）；
+ *  导出供 anthropic provider 共用（同一注入位与缓存——同代理不重复建连） */
 const dispatcherCache = new Map<string, unknown>()
-async function proxyDispatcher(proxyUrl: string): Promise<unknown> {
+export async function proxyDispatcher(proxyUrl: string): Promise<unknown> {
   const cached = dispatcherCache.get(proxyUrl)
   if (cached !== undefined) return cached
   const { ProxyAgent } = await import('undici')

@@ -55,9 +55,11 @@ interface ProviderForm {
   model: string
   apiKey: string
   proxyUrl: string
+  /** 协议族（P4 Step 11）：anthropic 走 messages API，缺省 openai-compat */
+  protocol: 'openai-compat' | 'anthropic'
 }
 
-const EMPTY_FORM: ProviderForm = { name: '', baseUrl: '', model: '', apiKey: '', proxyUrl: '' }
+const EMPTY_FORM: ProviderForm = { name: '', baseUrl: '', model: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat' }
 
 const formOpen = ref(false)
 const editingName = ref<string | null>(null)
@@ -92,6 +94,7 @@ const openEdit = (p: ProviderView): void => {
     model: p.model,
     apiKey: '', // 留空 = 保留原密文（服务端约定）
     proxyUrl: p.proxyUrl ?? '',
+    protocol: p.protocol ?? 'openai-compat',
   })
   formError.value = null
   formOpen.value = true
@@ -113,6 +116,7 @@ const save = async (): Promise<void> => {
       model: form.model.trim(),
       ...(form.apiKey.trim() !== '' ? { apiKey: form.apiKey.trim() } : {}),
       ...(form.proxyUrl.trim() !== '' ? { proxyUrl: form.proxyUrl.trim() } : {}),
+      protocol: form.protocol,
     })
     toast.push(`模型端点已保存：${form.name.trim()}`, 'success')
     formOpen.value = false
@@ -142,6 +146,42 @@ const removeProvider = (name: string): void => {
     toast.push(`已删除模型端点：${name}`, 'info')
   }).catch((err: unknown) => {
     formError.value = err instanceof Error ? err.message : String(err)
+  })
+}
+
+/** 设置/清除回退端点（P4 Step 11）：toggle——已是回退再点即清除；per-request 降级不粘滞 */
+const setFallback = (name: string): void => {
+  confirmingRemove.value = null
+  const next = kernel.fallbackProvider === name ? null : name
+  void kernel.setFallbackProvider(next).then(() => {
+    toast.push(
+      next === null ? '已清除回退端点' : `回退端点已设置：${next}——主力失败时本轮自动降级`,
+      'success',
+    )
+  }).catch((err: unknown) => {
+    formError.value = err instanceof Error ? err.message : String(err)
+  })
+}
+
+/** 协议段的 baseUrl 占位提示（两种协议的前缀习惯不同） */
+const urlPlaceholder = computed(() =>
+  form.protocol === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.deepseek.com/v1',
+)
+
+// ---- 数据区块（P4 Step 11，裁定 E 一期只读：路径展示 + 打开文件夹） ----
+
+const dataPaths = ref<{ userData: string; data: string; transcript: string } | null>(null)
+onMounted(() => {
+  void window.openbot?.app
+    ?.paths()
+    .then((p: { userData: string; data: string; transcript: string }) => (dataPaths.value = p))
+    .catch(() => (dataPaths.value = null)) // 桥缺失（浏览器 dev）——如实降级
+})
+
+/** 打开数据文件夹（main 白名单限定 userData 内；返回错误消息，空串 = 成功） */
+const openFolder = (path: string): void => {
+  void window.openbot?.app?.openPath(path).then((err: string) => {
+    if (err !== '' && err !== undefined) toast.push(`打开文件夹失败：${err}`, 'danger')
   })
 }
 
@@ -220,6 +260,12 @@ const wslRelevant = computed(
     (kernel.sandbox.preference === 'wsl' || kernel.sandbox.preference === 'auto') &&
     !kernel.sandbox.rootfsReady,
 )
+/** 一键配置降级引导（裁定 D）：WSL 探测不可用或镜像未就绪时给本地文档指引——不自动装系统级软件 */
+const wslHelpNeeded = computed(() => {
+  if (kernel.sandbox === null) return false
+  const wsl = kernel.sandbox.probes.find((p) => p.id === 'wsl')
+  return (wsl !== undefined && !wsl.available) || !kernel.sandbox.rootfsReady
+})
 </script>
 
 <template>
@@ -231,9 +277,10 @@ const wslRelevant = computed(
         <button class="btn btn-secondary btn-sm" @click="openCreate">＋ 添加模型</button>
       </div>
       <div class="set-sec-note">
-        接入 OpenAI 兼容端点（DeepSeek / GLM / Moonshot / 豆包 / Ollama / vLLM 等），可同时配置多个；
-        设为主力后对管家与全部 agent 下轮对话生效。API key 以系统加密（safeStorage）落盘，不出现在
-        transcript 与事件流里。当前主力：<b class="mono">{{ kernel.defaultProvider ?? '未配置（对话将失败）' }}</b>
+        接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个；
+        设为主力后对管家与全部 agent 下轮对话生效；可设一个回退端点——主力请求失败（网络/超时/过载）时本轮自动降级，
+        主力恢复后下轮自然切回。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。
+        当前主力：<b class="mono">{{ kernel.defaultProvider ?? '未配置（对话将失败）' }}</b>
       </div>
 
       <div v-for="p in kernel.providers" :key="p.name" class="cfg-row" :class="{ 'is-primary': p.name === kernel.defaultProvider }">
@@ -247,10 +294,15 @@ const wslRelevant = computed(
         <div class="cfg-actions">
           <button class="btn btn-ghost btn-sm" @click="openEdit(p)">编辑</button>
           <button v-if="p.name !== kernel.defaultProvider" class="btn btn-secondary btn-sm" @click="setDefault(p.name)">设为主力</button>
+          <button class="btn btn-ghost btn-sm" @click="setFallback(p.name)">
+            {{ kernel.fallbackProvider === p.name ? '取消回退' : '设为回退' }}
+          </button>
           <button class="btn btn-ghost btn-sm btn-danger" @click="removeProvider(p.name)">
             {{ confirmingRemove === p.name ? '确认删除？' : '删除' }}
           </button>
           <span v-if="p.name === kernel.defaultProvider" class="chip chip-accent">主力</span>
+          <span v-if="p.name === kernel.fallbackProvider" class="chip">回退</span>
+          <span v-if="p.protocol === 'anthropic'" class="chip">Anthropic</span>
           <span class="chip" :class="p.hasKey ? 'chip-success' : ''">{{ p.hasKey ? '已存 key' : '无 key' }}</span>
         </div>
       </div>
@@ -264,7 +316,20 @@ const wslRelevant = computed(
         </div>
         <div class="field">
           <label class="field-label" for="pfUrl">Base URL</label>
-          <input id="pfUrl" v-model="form.baseUrl" class="field-input mono" placeholder="https://api.deepseek.com/v1" autocomplete="off" spellcheck="false" />
+          <input id="pfUrl" v-model="form.baseUrl" class="field-input mono" :placeholder="urlPlaceholder" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="field">
+          <span class="field-label">协议</span>
+          <div class="proto-seg" role="radiogroup" aria-label="协议族">
+            <label class="proto-opt" :class="{ 'is-on': form.protocol === 'openai-compat' }">
+              <input type="radio" name="pf-proto" value="openai-compat" v-model="form.protocol" />
+              OpenAI 兼容
+            </label>
+            <label class="proto-opt" :class="{ 'is-on': form.protocol === 'anthropic' }">
+              <input type="radio" name="pf-proto" value="anthropic" v-model="form.protocol" />
+              Anthropic
+            </label>
+          </div>
         </div>
         <div class="field">
           <label class="field-label" for="pfModel">模型 ID</label>
@@ -302,6 +367,11 @@ const wslRelevant = computed(
         <p v-if="wslRelevant" class="sandbox-warn">
           WSL 基础镜像未就绪：请把 Ubuntu rootfs 压缩包（tar.gz）放到
           <span class="mono">{{ kernel.sandbox.rootfsPath }}</span>，或设环境变量 OPENBOT_WSL_ROOTFS 指向已有文件后重启。
+        </p>
+        <!-- 一键配置降级引导（裁定 D）：不自动装系统级软件，指引到仓库文档 -->
+        <p v-if="wslHelpNeeded" class="sandbox-warn">
+          一键安装暂不提供（自动安装系统级软件风险高于收益）：WSL2 启用与 rootfs 制作步骤见仓库文档
+          <span class="mono">docs/platforms.md</span>，完成后重启应用即可生效。
         </p>
 
         <div class="sandbox-prefs">
@@ -347,6 +417,21 @@ const wslRelevant = computed(
         当前为手工审批闸门（Manual）：agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，
         挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。
       </div>
+
+      <!-- 数据（P4 Step 11，裁定 E 一期只读：路径展示 + 打开文件夹；导出/清空属后续版本） -->
+      <div class="set-sec">数据</div>
+      <div class="set-sec-note">
+        对话与执行记录以 JSONL 追加落盘（append-only——只增不改，永不就地改写历史）；全部数据只在本机，
+        不上传。导出全部 / 清空 transcript 属后续版本。
+      </div>
+      <template v-if="dataPaths">
+        <div class="kv"><span class="k">数据目录</span><span class="v mono kv-path">{{ dataPaths.data }}</span></div>
+        <div class="kv"><span class="k">transcript</span><span class="v mono kv-path">{{ dataPaths.transcript }}</span></div>
+        <div class="form-actions">
+          <button class="btn btn-secondary btn-sm" @click="openFolder(dataPaths.userData)">打开数据文件夹</button>
+        </div>
+      </template>
+      <p v-else class="settings-empty">开发模式（无壳）——数据路径由桌面壳提供</p>
 
       <!-- 外观（呈现层偏好，即时生效；复用沙箱偏好卡的交互与样式） -->
       <div class="set-sec">外观</div>

@@ -20,19 +20,39 @@ import { startGateway } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import { NodeFs, SettingsStore } from '@openbot/state'
 import type { SandboxPreference } from '@openbot/state'
-import { LlmError, OpenAiCompatProvider } from '@openbot/llm'
+import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
+import type { ResolvedProvider } from '@openbot/state'
 import { ManualApprovalGate } from '@openbot/runner'
 import { MockBoxBackend, WslBoxBackend, probeAll, runProcess } from '@openbot/boxes'
 import type { BackendProbe, BoxBackend } from '@openbot/boxes'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
 
+/** 可回退错误类（P4 Step 11）：传输层/服务端过载——网络失败、超时、429、5xx；
+ *  配置类 4xx 换端点无济于事、用户中止绝不能重跑，都不回退 */
+function isRetriableLlmError(err: unknown): boolean {
+  if (!(err instanceof LlmError)) return false
+  if (err.code === LlmErrorCodes.LLM_REQUEST_FAILED || err.code === LlmErrorCodes.LLM_TIMEOUT) return true
+  const http = /^LLM_HTTP_(\d+)$/.exec(err.code)
+  if (!http) return false
+  const status = Number(http[1])
+  return status === 429 || status >= 500
+}
+
 export class SwitchableChatProvider implements ChatProvider {
   #current: ChatProvider | null = null
+  #fallback: ChatProvider | null = null
+  /** 最近一轮成功响应实际走的通道（状态栏「当轮生效端点」事实；null = 尚无成功轮） */
+  #activeLane: 'primary' | 'fallback' | null = null
 
   swap(next: ChatProvider): void {
     this.#current = next
+  }
+
+  /** 回退实现（null = 清除回退）；与主力独立热切换 */
+  swapFallback(next: ChatProvider | null): void {
+    this.#fallback = next
   }
 
   clear(): void {
@@ -43,12 +63,32 @@ export class SwitchableChatProvider implements ChatProvider {
     return this.#current !== null
   }
 
+  get activeLane(): 'primary' | 'fallback' | null {
+    return this.#activeLane
+  }
+
   async chat(request: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
     if (!this.#current) {
       // 稳定 code：UI 据此引导去 settings 配置 provider
       throw new LlmError('LLM_NO_PROVIDER', '尚未配置 LLM provider——请在设置视图配置后重试')
     }
-    return this.#current.chat(request, signal)
+    // onText 计数包装：主力流中途失败（已推送部分增量）时不回退——重跑会导致文本重复推送
+    let emitted = false
+    const wrapped: ChatRequest = request.onText
+      ? { ...request, onText: (delta) => { emitted = true; request.onText!(delta) } }
+      : request
+    try {
+      const response = await this.#current.chat(wrapped, signal)
+      this.#activeLane = 'primary'
+      return response
+    } catch (err) {
+      // 回退是 per-request 降级不粘滞：每轮仍先试主力（主力恢复无需显式切回）；
+      // 回退也失败时抛主力原错（根因诊断价值高于回退侧表象）
+      if (!this.#fallback || emitted || signal?.aborted || !isRetriableLlmError(err)) throw err
+      const response = await this.#fallback.chat(request, signal)
+      this.#activeLane = 'fallback'
+      return response
+    }
   }
 }
 
@@ -84,7 +124,11 @@ const providerInputSchema = z.object({
   proxyUrl: z.string().optional(),
   temperature: z.number().optional(),
   timeoutMs: z.number().int().positive().optional(),
+  /** 协议族（P4 Step 11）：缺省 openai-compat（旧档案读取端兼容） */
+  protocol: z.enum(['openai-compat', 'anthropic']).optional(),
 })
+/** 回退端点设置（P4 Step 11）：null = 清除回退 */
+const setFallbackSchema = z.object({ name: z.string().min(1).nullable() })
 const nameSchema = z.object({ name: z.string().min(1) })
 const resolveSchema = z.object({
   nonce: z.string().min(1),
@@ -207,35 +251,48 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     })(),
   })
 
-  /** settings 变更后热切换 provider（明文 key 只在本进程内存中存在） */
+  /** 档案 → provider 实现（P4 Step 11）：protocol 分支 anthropic（messages API）/ openai-compat 缺省 */
+  const buildProvider = (resolved: ResolvedProvider): ChatProvider => {
+    const config = {
+      baseUrl: resolved.baseUrl,
+      model: resolved.model,
+      ...(resolved.apiKey ? { apiKey: resolved.apiKey } : {}),
+      ...(resolved.headers ? { headers: resolved.headers } : {}),
+      ...(resolved.proxyUrl ? { proxyUrl: resolved.proxyUrl } : {}),
+      ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+      ...(resolved.timeoutMs !== undefined ? { timeoutMs: resolved.timeoutMs } : {}),
+    }
+    return resolved.protocol === 'anthropic'
+      ? new AnthropicProvider({ config })
+      : new OpenAiCompatProvider({ config })
+  }
+
+  /** settings 变更后热切换 provider 与回退实现（明文 key 只在本进程内存中存在） */
   const applyProvider = async (): Promise<void> => {
     try {
-      const resolved = await settings.resolve()
-      provider.swap(
-        new OpenAiCompatProvider({
-          config: {
-            baseUrl: resolved.baseUrl,
-            model: resolved.model,
-            ...(resolved.apiKey ? { apiKey: resolved.apiKey } : {}),
-            ...(resolved.headers ? { headers: resolved.headers } : {}),
-            ...(resolved.proxyUrl ? { proxyUrl: resolved.proxyUrl } : {}),
-            ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-            ...(resolved.timeoutMs !== undefined ? { timeoutMs: resolved.timeoutMs } : {}),
-          },
-        }),
-      )
+      provider.swap(buildProvider(await settings.resolve()))
     } catch {
       provider.clear() // 无默认 provider / 解析失败 → 空缺态（chat 抛 LLM_NO_PROVIDER，UI 引导配置）
+    }
+    try {
+      const fallbackName = await settings.getFallback()
+      provider.swapFallback(fallbackName === null ? null : buildProvider(await settings.resolve(fallbackName)))
+    } catch {
+      provider.swapFallback(null) // 回退档案解析失败 → 无回退（主力路径不受影响）
     }
   }
 
   // ---- 命令面扩展（壳装配职责：CLI/E2E 用 Auto 闸门时不需要这些命令） ----
   kernel.transport
     .register('v1.settings.list', async () => {
-      // 展示清单（无 key 材料）+ 当前默认（renderer 空缺态判断）
+      // 展示清单（无 key 材料）+ 当前默认与回退（renderer 空缺态判断）
       const providers = await settings.list()
       const current = await settings.load()
-      return { providers, defaultProvider: current.defaultProvider ?? null }
+      return {
+        providers,
+        defaultProvider: current.defaultProvider ?? null,
+        fallbackProvider: current.fallbackProvider ?? null,
+      }
     })
     .register('v1.settings.upsertProvider', async (payload) => {
       const view = await settings.upsert(providerInputSchema.parse(payload))
@@ -252,6 +309,19 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await applyProvider()
       return { ok: true }
     }, nameSchema)
+    // 回退端点（P4 Step 11）：引用校验在 settings 层；null = 清除；热切换立即生效
+    .register('v1.settings.setFallback', async (payload) => {
+      await settings.setFallback(setFallbackSchema.parse(payload).name)
+      await applyProvider()
+      return { ok: true }
+    }, setFallbackSchema)
+    // LLM 生效事实（状态栏「当轮生效端点」）：activeLane = 最近一轮成功响应实际走的通道
+    .register('v1.settings.llmStatus', async () => ({
+      configured: provider.configured,
+      activeLane: provider.activeLane,
+      primary: (await settings.load()).defaultProvider ?? null,
+      fallback: await settings.getFallback(),
+    }))
     .register('v1.approval.resolve', async (payload) => {
       const { nonce, decision } = resolveSchema.parse(payload)
       return { approved: await approvalGate.resolve(nonce, decision) }

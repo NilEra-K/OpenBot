@@ -799,3 +799,62 @@ test('演示值清扫（P4 Step 10）：run-progress 全宽流光无假进度 + 
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降级 → 回复到达 + 状态栏当轮回退 + 路径在场', async () => {
+  const mock = await startMockOpenAi([
+    // 回退端点单步文本终答（主力连不上，请求只会在回退侧出现）
+    { match: (l) => l.role === 'user', text: '回退端点回复' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-fallback-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— 数据区块（裁定 E 一期只读）：路径指向本 userData、打开按钮在场（不点击——会真开资源管理器） ——
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await expect(page.locator('.set-sec', { hasText: '数据' })).toBeVisible()
+    await expect(page.locator('.kv', { hasText: '数据目录' })).toContainText('data')
+    await expect(page.locator('.kv', { hasText: 'transcript' })).toContainText('agents')
+    await expect(page.getByRole('button', { name: '打开数据文件夹' })).toBeVisible()
+
+    // —— 配置两端点：主力 = 必然连接失败端口；回退 = E2E mock ——
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('坏端点')
+    await page.locator('#pfUrl').fill('http://127.0.0.1:9/v1')
+    await page.locator('#pfModel').fill('x')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    // 协议分段（P4 Step 11）：切 Anthropic 再切回——表单协议面可交互（wire 层由 anthropic 单测覆盖）
+    await page.locator('.proto-opt', { hasText: 'Anthropic' }).click()
+    await expect(page.locator('.proto-opt.is-on', { hasText: 'Anthropic' })).toBeVisible()
+    await page.locator('.proto-opt', { hasText: 'OpenAI 兼容' }).click()
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.locator('.cfg-row', { hasText: '坏端点' })).toBeVisible()
+
+    await page.locator('.cfg-row', { hasText: '坏端点' }).locator('.btn', { hasText: '设为主力' }).click()
+    await page.locator('.cfg-row', { hasText: 'E2E mock' }).locator('.btn', { hasText: '设为回退' }).click()
+    await expect(page.locator('.cfg-row', { hasText: 'E2E mock' }).locator('.chip', { hasText: '回退' })).toBeVisible()
+
+    // —— 发消息：主力连接拒绝 → 本轮自动降级 → 回退端点回复到达 ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.composer-box input').fill('走回退')
+    await page.locator('.composer-box input').press('Enter')
+    await expect(page.locator('.m-text', { hasText: '回退端点回复' }).first()).toBeVisible({ timeout: 30_000 })
+
+    // 状态栏如实（P4 Step 11）：当轮生效端点 = 回退
+    await expect(page.locator('.statusbar')).toContainText('当轮回退', { timeout: 10_000 })
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

@@ -377,3 +377,46 @@
 .kv-sub .v {
   font-size: 11.5px;
 }
+
+/* ---- 协议族分段（P4 Step 11 表单；紧凑单行版偏好卡） ---- */
+
+.proto-seg {
+  display: flex;
+  gap: 8px;
+}
+
+.proto-opt {
+  position: relative; /* radio 包含块（防逃逸——sandbox-pref 同款教训） */
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--bg1);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.proto-opt:hover {
+  background: var(--bg2);
+}
+
+.proto-opt.is-on {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: linear-gradient(0deg, var(--accent-weak), var(--accent-weak)), var(--bg1);
+}
+
+.proto-opt input[type='radio'] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- 数据区块路径值（P4 Step 11）：长路径折行 + 可选中复制 ---- */
+
+.kv-path {
+  word-break: break-all;
+  user-select: text;
+  white-space: normal;
+  max-width: 70%;
+}

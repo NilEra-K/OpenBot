@@ -12,6 +12,9 @@ export const SettingsErrorCodes = {
   SETTINGS_NO_DEFAULT_PROVIDER: 'SETTINGS_NO_DEFAULT_PROVIDER',
 } as const
 
+/** 协议族：openai-compat（chat completions 兼容面）/ anthropic（messages API）；缺省前者（旧档案读取端兼容） */
+export type ProviderProtocol = 'openai-compat' | 'anthropic'
+
 /** 存储形状：apiKey 恒为密文 */
 export interface StoredProviderProfile {
   name: string
@@ -23,6 +26,8 @@ export interface StoredProviderProfile {
   proxyUrl?: string
   temperature?: number
   timeoutMs?: number
+  /** 协议族（P4 Step 11）；缺省 openai-compat */
+  protocol?: ProviderProtocol
 }
 
 /** 沙箱后端偏好：auto = 按探测可用性择优（wsl > docker > podman > mock），不可用如实回退 */
@@ -34,6 +39,8 @@ export interface AppSettings {
   providers: StoredProviderProfile[]
   /** 沙箱后端偏好；缺省 auto（可选字段：旧文件读取端兼容，version 不动） */
   sandbox?: SandboxPreference
+  /** 全局回退端点（P4 Step 11）：引用 providers 内档案名；主力请求失败时本轮降级，下轮自动回主力（不粘滞） */
+  fallbackProvider?: string
 }
 
 /** 展示形状：给 renderer/命令面，绝无 key 材料 */
@@ -43,6 +50,7 @@ export interface ProviderProfileView {
   model: string
   hasKey: boolean
   proxyUrl?: string
+  protocol?: ProviderProtocol
 }
 
 /** 解析形状：装配 provider 用，apiKey 为明文 */
@@ -55,6 +63,7 @@ export interface ResolvedProvider {
   proxyUrl?: string
   temperature?: number
   timeoutMs?: number
+  protocol?: ProviderProtocol
 }
 
 export interface ProviderInput {
@@ -67,6 +76,7 @@ export interface ProviderInput {
   proxyUrl?: string
   temperature?: number
   timeoutMs?: number
+  protocol?: ProviderProtocol
 }
 
 export interface SettingsStoreOptions {
@@ -109,6 +119,7 @@ export class SettingsStore {
       model: p.model,
       hasKey: p.apiKey !== undefined && p.apiKey !== '',
       ...(p.proxyUrl !== undefined ? { proxyUrl: p.proxyUrl } : {}),
+      ...(p.protocol !== undefined ? { protocol: p.protocol } : {}),
     }))
   }
 
@@ -132,6 +143,7 @@ export class SettingsStore {
       ...(profile.proxyUrl ? { proxyUrl: profile.proxyUrl } : {}),
       ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
       ...(profile.timeoutMs !== undefined ? { timeoutMs: profile.timeoutMs } : {}),
+      ...(profile.protocol !== undefined ? { protocol: profile.protocol } : {}),
     }
   }
 
@@ -152,11 +164,18 @@ export class SettingsStore {
       ...(input.proxyUrl ? { proxyUrl: input.proxyUrl } : {}),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.protocol !== undefined ? { protocol: input.protocol } : {}),
     }
     const providers = settings.providers.filter((p) => p.name !== input.name)
     providers.push(profile)
     await this.#save({ ...settings, providers })
-    return { name: profile.name, baseUrl: profile.baseUrl, model: profile.model, hasKey: apiKey !== undefined }
+    return {
+      name: profile.name,
+      baseUrl: profile.baseUrl,
+      model: profile.model,
+      hasKey: apiKey !== undefined,
+      ...(profile.protocol !== undefined ? { protocol: profile.protocol } : {}),
+    }
   }
 
   async remove(name: string): Promise<void> {
@@ -164,7 +183,10 @@ export class SettingsStore {
     const providers = settings.providers.filter((p) => p.name !== name)
     const defaultProvider =
       settings.defaultProvider === name ? undefined : settings.defaultProvider
-    await this.#save({ ...settings, providers, defaultProvider })
+    // 回退档案随删除联动清空（悬空引用会让装配层空转）；undefined 键序列化时自然消失
+    const fallbackProvider =
+      settings.fallbackProvider === name ? undefined : settings.fallbackProvider
+    await this.#save({ ...settings, providers, defaultProvider, fallbackProvider })
   }
 
   async setDefault(name: string): Promise<void> {
@@ -186,6 +208,25 @@ export class SettingsStore {
     await this.#save({ ...settings, sandbox: pref })
   }
 
+  /** 回退端点档案名（null = 清除）；引用不存在的档案时拒绝（悬空引用属配置错误，显式失败） */
+  async setFallback(name: string | null): Promise<void> {
+    const settings = await this.load()
+    if (name !== null && !settings.providers.some((p) => p.name === name)) {
+      throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NOT_FOUND, `provider 不存在：${name}`)
+    }
+    if (name === null) {
+      const { fallbackProvider: _drop, ...rest } = settings
+      await this.#save(rest)
+      return
+    }
+    await this.#save({ ...settings, fallbackProvider: name })
+  }
+
+  async getFallback(): Promise<string | null> {
+    const settings = await this.load()
+    return settings.fallbackProvider ?? null
+  }
+
   async #save(settings: AppSettings): Promise<void> {
     this.#cache = structuredClone(settings)
     await this.#fs.write(this.#path, `${JSON.stringify(settings, null, 2)}\n`)
@@ -203,6 +244,7 @@ function parseLoose(raw: string | null): AppSettings {
         providers: parsed.providers,
         ...(parsed.defaultProvider !== undefined ? { defaultProvider: parsed.defaultProvider } : {}),
         ...(parsed.sandbox !== undefined ? { sandbox: parsed.sandbox } : {}),
+        ...(parsed.fallbackProvider !== undefined ? { fallbackProvider: parsed.fallbackProvider } : {}),
       }
     }
   } catch {

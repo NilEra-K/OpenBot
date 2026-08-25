@@ -140,10 +140,26 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
     收内容宽只留 label+数值、余宽让给 CPU 真比例条（百分比自带 0-100 语义，条保留）；`.gauge-fill.mem/.disk`
     死样式清扫；warn 色档记档等资源限额后端；E2E 新用例（审批挂起制造稳定 running 窗口：流光 i 与轨道
     boundingBox 同宽断言 + 内存/磁盘 `.gauge-bar` 计数 0 + CPU fill style 含 width 12%——mock 确定值）
-- [ ] 11. **设置补齐**：数据区块（transcript 路径盒 + 「打开文件夹」经 desktop bridge `shell.openPath`，裁定 E）+
+- [x] 11. **设置补齐**：数据区块（transcript 路径盒 + 「打开文件夹」经 desktop bridge `shell.openPath`，裁定 E）+
   断网回退端点（settings 增全局 fallback 档案位；llm 装配层请求失败→本轮切回退端点、下轮自动回切主力——回退是
   per-request 行为不做粘滞；状态栏如实显示当轮生效端点）+ Anthropic 协议 provider（llm 包增 messages API 适配，
   fetch 注入同构可测；SSE 事件流与 tool_calls 映射对齐 openai-compat 的注入测试哲学）+ 一键配置降级引导（裁定 D）
+  - 实施（2026-08-25）：anthropic provider 完整落地（messages API：x-api-key + anthropic-version 头、
+    max_tokens 必填缺省 8192、system 顶层字段、tool_use/tool_result content blocks 双向映射、SSE
+    content_block_delta（text_delta / input_json_delta）增量聚合、baseUrl 带/不带 /v1 双形态容错、
+    proxyDispatcher 与 openai-compat 共用导出）+ 注入单测 9 例（同 openai-compat 测试哲学：脚本化 fetch
+    断言请求体/错误映射/流式增量）；settings 增 `protocol?`（缺省 openai-compat——旧档案读取端兼容）与
+    `fallbackProvider?`（引用校验拒绝悬空名、remove 联动清空）；回退装配在 SwitchableChatProvider：
+    可回退码 = LLM_REQUEST_FAILED/LLM_TIMEOUT/LLM_HTTP_429/5xx（配置类 4xx 换端点无济于事、用户中止绝不重跑）、
+    **onText 已发文本后失败不回退**（重跑会重复推送增量）、per-request 不粘滞（每轮先试主力，恢复无需切回）、
+    回退失败抛主力原错（根因诊断价值）；activeLane 事实经新只读命令 `v1.settings.llmStatus` 暴露——
+    App 层 agent 回复落地后拉取（boot 也拉一次）；命令面 `v1.settings.setFallback`（null=清除）+ list 返回扩
+    fallbackProvider；数据区块（裁定 E 一期只读）：preload 桥 `app.paths()/app.openPath()`（main 白名单限定
+    userData 内 + Windows 卷大小写不敏感比较；不开放任意路径）+ setWindowOpenHandler 外链一律转系统浏览器
+    （renderer 永不嵌窗口）；一键配置降级引导（裁定 D）：本地文档指引 `docs/platforms.md`（无官网 URL——
+    不放假外链，2026-08-25 用户裁定）；状态栏 LLM 行：当轮回退如实标注「（当轮回退：model）」、配置未触发标
+    「回退就绪」；E2E 新用例（坏主力 http://127.0.0.1:9 快速连接拒绝 → 回退 mock 回复到达 + 状态栏当轮回退 +
+    数据区块路径与按钮在场 + 协议分段交互），14 用例全绿；单测 227 全绿
 - [ ] 12. **Boxes/图谱小项 + 收官**：Box 卡「某某工作中」归属 chip（roster.boxId × runs 投影推导）+ box-claim
   安全叙事条（shield·「Box 即本机云电脑…」）+ 图谱节点状态点（runs 投影：working/idle）/ hover 退隐 / 节点详情 kv
   补状态与模型（模型=继承全局，如实）+ **原型逐视图复查表**（附录 A 全项核对归档进本文档）+ 文档同步
@@ -256,10 +272,10 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 
 | 差距项 | 处置 |
 |---|---|
-| 数据区块（路径/打开文件夹/导出/清空） | Step 11（导出/清空→记档后置，裁定 E） |
-| 断网回退端点 | Step 11 |
-| Anthropic 协议 | Step 11 |
-| 后端一键配置 | Step 11（降级引导，裁定 D） |
+| 数据区块（路径/打开文件夹/导出/清空） | ✅ 已实现（Step 11；导出/清空→记档后置，裁定 E） |
+| 断网回退端点 | ✅ 已实现（Step 11：per-request 降级不粘滞） |
+| Anthropic 协议 | ✅ 已实现（Step 11：messages API 适配 + 注入单测 9 例） |
+| 后端一键配置 | ✅ 已实现（Step 11：降级本地文档引导，裁定 D） |
 | computer-use 屏幕操控 | 记档：后续版本 |
 | 权限策略分级开关 | 记档：后续版本（已有记档） |
 | About 版本号过时 | ✅ 已实现（Step 1） |
