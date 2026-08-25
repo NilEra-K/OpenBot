@@ -7,7 +7,7 @@
  * 按时间序聚合在对话流，右栏 ctx 纯化为一块显示器。
  * 空缺态：管家缺失 / provider 未配置，均给出去向提示（协议纯度：只呈现事实与引导，不发 UI 指令）。
  */
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { renderMarkdown } from '../lib/markdown'
@@ -234,6 +234,22 @@ watch(
   followIfNearBottom,
 )
 watch(() => kernel.runs.length, followIfNearBottom)
+
+// 快速派单落点：命令面板请求聚焦输入框——标志位由本组件消费（watcher 处理在场切换；
+// 从其他视图派单回 console 时本组件重挂载、watcher 错过事件，onMounted 兜底检查）
+const consumeComposerFocus = (): void => {
+  ui.composerFocus = false
+  void nextTick(() => draftEl.value?.focus())
+}
+watch(
+  () => ui.composerFocus,
+  (want) => {
+    if (want) consumeComposerFocus()
+  },
+)
+onMounted(() => {
+  if (ui.composerFocus) consumeComposerFocus()
+})
 
 // 会话历史懒加载：切换会话或连接就绪时拉一次 transcript（内核重启后的持久真相；已覆盖时幂等跳过）
 watch(

@@ -16,6 +16,7 @@ import SettingsView from './views/SettingsView.vue'
 import ApprovalModal from './components/ApprovalModal.vue'
 import BoxOps from './components/BoxOps.vue'
 import ToastHost from './components/ToastHost.vue'
+import CommandPalette from './components/CommandPalette.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -67,9 +68,21 @@ const currentViewLabel = computed(() => views.find((v) => v.id === ui.currentVie
 
 /** 双击标题栏最大化（Windows 惯例；交互子元素不触发——原型同款排除表） */
 const onTitlebarDblclick = (e: MouseEvent): void => {
-  if ((e.target as HTMLElement).closest('.theme-toggle, .win-controls, .boot-error')) return
+  if ((e.target as HTMLElement).closest('.theme-toggle, .win-controls, .boot-error, .omnibox')) return
   toggleMaximize()
 }
+
+/** Ctrl K 唤起命令面板（P4 Step 3）：操作台 PTY 聚焦时按键直送 Box 不抢键——
+ *  activeElement 在 .boxops 内即跳过（原型「接管模式下按键全部送入 Box」同款边界） */
+const onGlobalKeydown = (e: KeyboardEvent): void => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    if (document.activeElement?.closest('.boxops') !== null) return
+    e.preventDefault()
+    ui.togglePalette()
+  }
+}
+onMounted(() => document.addEventListener('keydown', onGlobalKeydown))
+onUnmounted(() => document.removeEventListener('keydown', onGlobalKeydown))
 
 const BACKEND_LABELS: Record<string, string> = {
   auto: '自动',
@@ -111,6 +124,12 @@ onUnmounted(() => kernel.shutdown())
       <div class="brand">OpenBot</div>
       <span class="tb-crumb">{{ currentViewLabel }}</span>
       <div v-if="kernel.bootError" class="boot-error" :title="kernel.bootError">内核未连接</div>
+      <!-- omnibox：命令面板入口（Ctrl K 同快捷键） -->
+      <button class="omnibox" type="button" title="命令面板（Ctrl K）" @click="ui.openPalette()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.2-4.2" /></svg>
+        <span class="omnibox-text">搜索 agent、任务、Box、命令</span>
+        <kbd>Ctrl K</kbd>
+      </button>
       <div class="titlebar-right">
         <!-- 主题快捷切换：实效夜间显示太阳（点击转日间），日间显示月亮（auto 下点击即转显式偏好） -->
         <button
@@ -196,6 +215,9 @@ onUnmounted(() => kernel.shutdown())
 
     <!-- Toast 轻提示（P4 Step 2）：右下角全局动作反馈层 -->
     <ToastHost />
+
+    <!-- 命令面板（P4 Step 3）：Ctrl K / omnibox 唤起 -->
+    <CommandPalette />
   </div>
 </template>
 
@@ -351,8 +373,50 @@ body {
   color: var(--line-strong);
 }
 
-.titlebar-right {
+/* omnibox（原型同款：标题栏搜索入口 → 命令面板） */
+.omnibox {
+  flex: 0 1 400px;
+  min-width: 0;
+  height: 26px;
   margin-left: auto;
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg3);
+  color: var(--ink3);
+  font-size: 12px;
+  cursor: text;
+  -webkit-app-region: no-drag;
+  transition: border-color 160ms var(--ease);
+}
+
+.omnibox:hover {
+  border-color: var(--line-strong);
+}
+
+.omnibox-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.omnibox kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 0 5px;
+  color: var(--ink3);
+}
+
+.titlebar-right {
   display: flex;
   align-items: center;
   height: 100%;

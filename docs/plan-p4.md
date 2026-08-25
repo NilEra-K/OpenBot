@@ -44,8 +44,15 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
     `ToastHost.vue`（右下角钉状态栏上方、aria-live 播报、点击即消）；接入四处——BoxesView/BoxOps 快照成败
     （操作台内联注记退役）、设置页保存/设主力/删除/沙箱偏好（失败仍走就地错误——有表单上下文）；
     reduced-motion 由 Step 1 全局媒体查询覆盖（toast-in 动画自动关）；E2E 快照触发→自动消退闭环
-- [ ] 3. **命令面板（Ctrl K）+ 标题栏 omnibox**：六组命令——快速派单（跳会话+聚焦输入框）/ 跳转 agent / 接管 Box /
+- [x] 3. **命令面板（Ctrl K）+ 标题栏 omnibox**：六组命令——快速派单（跳会话+聚焦输入框）/ 跳转 agent / 接管 Box /
   视图导航 / 动作（新建 agent、切换主题）；模糊过滤 + 键盘上下选择；**纯 renderer 消费现有 store，零内核改动**
+  - 实施（2026-08-25）：`CommandPalette.vue`（空白分词全命中过滤、分组头、↑↓/Enter/Esc、hover 即选、Esc
+    stopPropagation 不惊动图谱退出语义）+ ui store paletteOpen/composerFocus + App omnibox（titlebar-right 去
+    margin-left:auto 让 omnibox 真居中，原型同款布局）+ 全局 Ctrl K 监听（**activeElement 在 .boxops 内即跳过——
+    PTY 聚焦按键直送 Box**，E2E 断言该边界）；命令目录事实驱动（roster/boxes 空则组消失；「新建 agent」留待
+    Step 5 向导接入不放假项）；**实测坑：从其他视图派单回 console 时 ConsoleView 重挂载、watcher 错过聚焦
+    事件——标志位由 onMounted 兜底消费**；环境地雷复发：系统 commit 紧张时 Vitest 多 worker 崩
+    （--no-file-parallelism 规避）与 E2E 偶发 GPU state 抖动（重跑即过）
 - [ ] 4. **@提及补全 + 消息高亮**：composer 输入 `@` 弹成员菜单（↑↓ 选择 / Enter·Tab 补全 / Esc 关闭 / 失焦收起）；
   消息文本 mentionify（@名字 高亮 chip 样式）；@全员按裁定 C 记档 P5（菜单不放假项）
 - [ ] 5. **新建 agent 全链路**：命令面 `v1.system.registerAgent`（zod：name/role/color；注册事实经既有 `v1.system.roster`
@@ -136,7 +143,7 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 |---|---|
 | 跨用户房间视图（roomcard/预算/退避/mirror） | 记档：P6（裁定 A 顺延；协议占位不动） |
 | 群聊 / 广播 / subagent（名册群组节/群聊流/sysnote/background lane 数据源） | 记档：P5+/backlog |
-| omnibox + Ctrl K 命令面板 | Step 3 |
+| omnibox + Ctrl K 命令面板 | ✅ 已实现（Step 3） |
 | 状态栏 statusbar | ✅ 已实现（Step 1） |
 | 新建 agent 向导 | Step 5 |
 | 新建 Box 侧滑 | 记档：裁定 B 不做（等 box-catalog/多后端） |

@@ -51,10 +51,28 @@ export const useUiStore = defineStore('ui', {
     theme: readStoredTheme() as ThemePref,
     /** 实效主题（auto 的解析结果；驱动 <html data-theme> 与标题栏切换图标） */
     effectiveTheme: resolveTheme(readStoredTheme()) as 'dark' | 'light',
+    /** 命令面板（P4 Step 3）：Ctrl K / 标题栏 omnibox 唤起 */
+    paletteOpen: false,
+    /** composer 聚焦请求（「快速派单」跨组件聚焦没有句柄——标志位由 ConsoleView 消费：
+     *  视图重挂载场景（从其他视图派单回 console）watcher 错过事件，挂载时兜底检查） */
+    composerFocus: false,
   }),
   actions: {
     switchView(view: ViewName) {
       this.currentView = view
+    },
+    openPalette() {
+      this.paletteOpen = true
+    },
+    closePalette() {
+      this.paletteOpen = false
+    },
+    togglePalette() {
+      this.paletteOpen = !this.paletteOpen
+    },
+    /** 快速派单落点：ConsoleView 消费标志并聚焦输入框（重挂载由 onMounted 兜底） */
+    focusComposer() {
+      this.composerFocus = true
     },
     openBoxOps(boxId: string) {
       this.boxOps = boxId

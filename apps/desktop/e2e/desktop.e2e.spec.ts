@@ -352,3 +352,49 @@ test('Toast 全局通道（P4 Step 2）：快照成功轻提示出现并自动�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('命令面板（P4 Step 3）：Ctrl K 过滤导航 + omnibox 入口 + 快速派单聚焦 + PTY 聚焦不抢键', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-palette-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // Ctrl K 唤起 → 过滤「设置」→ Enter 导航（crumb 断言）
+    await page.keyboard.press('Control+k')
+    await expect(page.locator('.pal-card')).toBeVisible()
+    await page.locator('.pal-input').fill('设置')
+    await page.locator('.pal-input').press('Enter')
+    await expect(page.locator('.tb-crumb')).toHaveText('设置')
+
+    // omnibox 点击唤起 → Esc 关闭
+    await page.locator('.omnibox').click()
+    await expect(page.locator('.pal-card')).toBeVisible()
+    await page.locator('.pal-input').press('Escape')
+    await expect(page.locator('.pal-card')).toHaveCount(0)
+
+    // 快速派单：过滤「派单」→ Enter → 控制台 + composer 聚焦
+    await page.keyboard.press('Control+k')
+    await page.locator('.pal-input').fill('派单')
+    await page.locator('.pal-input').press('Enter')
+    await expect(page.locator('.tb-crumb')).toHaveText('控制台')
+    await expect(page.locator('.composer-box input')).toBeFocused()
+
+    // 抢键边界：操作台 xterm 聚焦时 Ctrl K 直送 Box——面板不弹（plan-p4 设计要点）
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    await page.locator('.boxcard button', { hasText: '操作台' }).first().click()
+    const xterm = page.locator('.boxops .xterm')
+    await expect(xterm).toBeVisible({ timeout: 15_000 })
+    await xterm.click()
+    await page.keyboard.press('Control+k')
+    await expect(page.locator('.pal-card')).toHaveCount(0)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
