@@ -143,6 +143,11 @@
   flex: 1;
 }
 
+/* 纯数值维度（无上限事实，Step 10）：收内容宽，余宽留给 CPU 真比例条 */
+.gauge--plain {
+  flex: none;
+}
+
 .gauge-k {
   font-size: 10.5px;
   color: var(--ink3);
@@ -164,14 +169,6 @@
   border-radius: 2px;
   background: var(--accent);
   transition: width 400ms var(--ease);
-}
-
-.gauge-fill.mem {
-  background: var(--success);
-}
-
-.gauge-fill.disk {
-  background: rgba(var(--accent-rgb), 0.65);
 }
 
 .gauge-v {

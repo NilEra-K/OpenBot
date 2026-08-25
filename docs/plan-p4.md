@@ -130,9 +130,16 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
     协议层兜底）；UI：快照链 chips（最近 5，全局事实就近回滚——卡上交互作用于该卡 Box）+ 点击展开详情
     （时间/大小）+ 二段确认条（警示文案 + 确认/取消）；kernel store snapshots 链 + boot/快照/回滚三处刷新；
     单测 3 例 + E2E 全闭环（链序/详情/取消路径/确认回滚 toast/链保持）
-- [ ] 10. **演示值清扫（不造假纪律修复）**：run-progress 去固定 64%（改 indeterminate 流光——run 无进度事实，如实）；
+- [x] 10. **演示值清扫（不造假纪律修复）**：run-progress 去固定 64%（改 indeterminate 流光——run 无进度事实，如实）；
   boxes gauge 假刻度基数清除——**无上限事实的维度（内存/磁盘）只留数值+label 不画比例条**，CPU 百分比保留真比例条；
   仪表 warn 色档只对有真上限的维度生效（一期无——等资源限额后端）
+  - 实施（2026-08-25）：run-progress 旧实现「64% 宽条 + translateX 滑动」——动画在时是 indeterminate 观感，
+    但 reduced-motion 全局关动画后退化为静态 64% 条（「进度 64%」假几何的实锤）；改全宽渐变光带
+    （transparent→accent→transparent）linear 匀速扫过——几何上不存在「进度停在 X%」，reduced-motion 退化态
+    再降 opacity 0.4 成低幅静置微光；boxes 仪表内存/磁盘去假刻度基数（/4096、/65536）——`gauge--plain`
+    收内容宽只留 label+数值、余宽让给 CPU 真比例条（百分比自带 0-100 语义，条保留）；`.gauge-fill.mem/.disk`
+    死样式清扫；warn 色档记档等资源限额后端；E2E 新用例（审批挂起制造稳定 running 窗口：流光 i 与轨道
+    boundingBox 同宽断言 + 内存/磁盘 `.gauge-bar` 计数 0 + CPU fill style 含 width 12%——mock 确定值）
 - [ ] 11. **设置补齐**：数据区块（transcript 路径盒 + 「打开文件夹」经 desktop bridge `shell.openPath`，裁定 E）+
   断网回退端点（settings 增全局 fallback 档案位；llm 装配层请求失败→本轮切回退端点、下轮自动回切主力——回退是
   per-request 行为不做粘滞；状态栏如实显示当轮生效端点）+ Anthropic 协议 provider（llm 包增 messages API 适配，
@@ -226,7 +233,7 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 | per-Box 磁盘配额/资源限额 | 记档：随 OCI 后端与 box-catalog（与裁定 B 同族） |
 | Box 卡归属 chip「某某工作中」 | Step 12 |
 | box-claim 安全叙事条 | Step 12 |
-| 仪表形态（三列 meters/warn 色档） | Step 10（无真上限只留数值；色档等资源限额后端） |
+| 仪表形态（三列 meters/warn 色档） | ✅ 已实现（Step 10：内存/磁盘只报数值，CPU 真比例条；色档等资源限额后端） |
 | ctx 屏 is-asleep 灰化 | ✅ 已实现（Step 8） |
 
 ### 四、图谱视图
@@ -242,7 +249,7 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 
 | 差距项 | 处置 |
 |---|---|
-| run-progress 固定 64% 假进度 | Step 10 |
+| run-progress 固定 64% 假进度 | ✅ 已实现（Step 10：indeterminate 流光） |
 | background lane 数据源 | 记档：automations/subagent backlog |
 
 ### 六、设置视图

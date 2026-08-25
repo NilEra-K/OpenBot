@@ -738,3 +738,64 @@ test('快照链与回滚（P4 Step 9）：chips 链 + 点击详情 + 二段确�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('演示值清扫（P4 Step 10）：run-progress 全宽流光无假进度 + 内存/磁盘仪表只报数值', async () => {
+  const mock = await startMockOpenAi([
+    // 单步：host_fetch 触发审批闸门 → run 稳定挂 running（流光断言的稳定活跃窗口）
+    { match: (l) => l.role === 'user', toolCalls: [{ id: 'c1', name: 'host_fetch', args: { url: 'https://example.com/' } }] },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-honest-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider（真走 settings 命令面与 safeStorage 链路）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // 发消息 → 审批挂起（run 停在 running）；「稍后处理」收掉模态再切视图
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.composer-box input').fill('抓个网页')
+    await page.locator('.composer-box input').press('Enter')
+    const modal = page.locator('.approval-modal', { hasText: 'host_fetch' })
+    await expect(modal).toBeVisible({ timeout: 30_000 })
+    await modal.getByRole('button', { name: '稍后处理' }).click()
+
+    // run-progress：indeterminate 流光——光带与轨道同宽（translateX 扫动不改宽度）；
+    // 旧实现固定 64% 宽条在 reduced-motion 关动画后呈现「进度 64%」假几何，清扫
+    await page.getByRole('button', { name: '排程', exact: true }).click()
+    const track = page.locator('.run-progress').first()
+    await expect(track).toBeVisible({ timeout: 15_000 })
+    const tw = (await track.boundingBox())!.width
+    const iw = (await track.locator('i').boundingBox())!.width
+    expect(Math.abs(tw - iw)).toBeLessThanOrEqual(1)
+
+    // 仪表：内存/磁盘无上限事实——不画比例条只报数值；CPU 百分比保留真比例（mock 确定值 12%）
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    const memGauge = page.locator('.boxcard .gauge', { hasText: '内存' })
+    const diskGauge = page.locator('.boxcard .gauge', { hasText: '磁盘' })
+    await expect(memGauge).toBeVisible({ timeout: 15_000 })
+    await expect(memGauge.locator('.gauge-bar')).toHaveCount(0)
+    await expect(diskGauge.locator('.gauge-bar')).toHaveCount(0)
+    await expect(memGauge.locator('.gauge-v')).toContainText(/MB|GB/)
+    await expect(diskGauge.locator('.gauge-v')).toContainText(/MB|GB/)
+    const cpuFill = page.locator('.boxcard .gauge', { hasText: 'CPU' }).locator('.gauge-fill')
+    await expect(cpuFill).toBeVisible()
+    await expect(cpuFill).toHaveAttribute('style', /width:\s*12%/)
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

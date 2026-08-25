@@ -163,15 +163,15 @@
   overflow: hidden;
 }
 
-/* 与原型同几何（3px 轨 / 64% 宽 accent 条）；保留滑动动画——真实运行无进度可报，
-   不确定态用动画指示，比静态 64% 更诚实 */
+/* run 无进度事实可报——indeterminate 流光（Step 10 演示值清扫）：全宽渐变光带匀速扫过，
+   不存在「进度停在 X%」几何；reduced-motion 全局关动画后退化为低幅静置微光（下方媒体查询再降透明度） */
 .run-progress i {
   display: block;
   height: 100%;
-  width: 64%;
+  width: 100%;
   border-radius: 2px;
-  background: var(--accent);
-  animation: run-slide 1.6s var(--ease) infinite;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: run-slide 1.6s linear infinite;
 }
 
 @keyframes run-slide {
@@ -180,7 +180,13 @@
   }
 
   100% {
-    transform: translateX(350%);
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-progress i {
+    opacity: 0.4;
   }
 }
 

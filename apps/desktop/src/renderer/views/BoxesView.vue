@@ -200,21 +200,20 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
             </div>
           </div>
 
-          <!-- 资源仪表（Step 6）：字段在场才渲染（缺席=不可测，不造假）；条宽按值比例 -->
+          <!-- 资源仪表（Step 6）：字段在场才渲染（缺席=不可测，不造假）。CPU 百分比自带 0-100 真比例画条；
+               内存/磁盘无上限事实——只报数值不画比例条（Step 10 演示值清扫：去假刻度基数；warn 色档等资源限额后端） -->
           <div v-if="kernel.boxStats[box.boxId]" class="box-gauges">
             <div v-if="kernel.boxStats[box.boxId]!.cpuPercent !== undefined" class="gauge">
               <span class="gauge-k">CPU</span>
               <span class="gauge-bar"><span class="gauge-fill" :style="{ width: `${Math.min(100, kernel.boxStats[box.boxId]!.cpuPercent!)}%` }"></span></span>
               <span class="gauge-v mono">{{ Math.round(kernel.boxStats[box.boxId]!.cpuPercent!) }}%</span>
             </div>
-            <div v-if="kernel.boxStats[box.boxId]!.memoryMb !== undefined" class="gauge">
+            <div v-if="kernel.boxStats[box.boxId]!.memoryMb !== undefined" class="gauge gauge--plain">
               <span class="gauge-k">内存</span>
-              <span class="gauge-bar"><span class="gauge-fill mem" :style="{ width: `${Math.min(100, (kernel.boxStats[box.boxId]!.memoryMb! / 4096) * 100)}%` }"></span></span>
               <span class="gauge-v mono">{{ fmtMb(kernel.boxStats[box.boxId]!.memoryMb!) }}</span>
             </div>
-            <div v-if="kernel.boxStats[box.boxId]!.diskMb !== undefined" class="gauge">
+            <div v-if="kernel.boxStats[box.boxId]!.diskMb !== undefined" class="gauge gauge--plain">
               <span class="gauge-k">磁盘</span>
-              <span class="gauge-bar"><span class="gauge-fill disk" :style="{ width: `${Math.min(100, (kernel.boxStats[box.boxId]!.diskMb! / 65536) * 100)}%` }"></span></span>
               <span class="gauge-v mono">{{ fmtMb(kernel.boxStats[box.boxId]!.diskMb!) }}</span>
             </div>
           </div>
