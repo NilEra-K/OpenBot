@@ -53,8 +53,19 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
     Step 5 向导接入不放假项）；**实测坑：从其他视图派单回 console 时 ConsoleView 重挂载、watcher 错过聚焦
     事件——标志位由 onMounted 兜底消费**；环境地雷复发：系统 commit 紧张时 Vitest 多 worker 崩
     （--no-file-parallelism 规避）与 E2E 偶发 GPU state 抖动（重跑即过）
-- [ ] 4. **@提及补全 + 消息高亮**：composer 输入 `@` 弹成员菜单（↑↓ 选择 / Enter·Tab 补全 / Esc 关闭 / 失焦收起）；
+- [x] 4. **@提及补全 + 消息高亮**：composer 输入 `@` 弹成员菜单（↑↓ 选择 / Enter·Tab 补全 / Esc 关闭 / 失焦收起）；
   消息文本 mentionify（@名字 高亮 chip 样式）；@全员按裁定 C 记档 P5（菜单不放假项）
+  - 实施（2026-08-25）：`MentionMenu.vue`（listbox 语义、点击上报；挂 .composer 下向上弹出——left/right 18px
+    对齐内容区，原型同款挂载点）+ `lib/mention.ts` mentionify（先转义再注入，名册外不误伤）+ markdown inline
+    规则（token 层注入 span，backticks 后不误伤行内代码；DOMPurify 白名单放行 span/class）+ 用户消息与
+    A2A 中继行走纯文本路径、agent 回复走 md 路径（renderMarkdown 传入名册命中面）；单提及路由：唯一提及
+    且非当前会话对象 → 消息发该 agent 并跟随跳转（多提及=广播语义随 P5，裁定 C）
+  - 实测坑×2：①原型 mmPick 拼接重复 @（slice 已含 @ 再拼 '@'+name → `@@名字`）——迁移时连 bug 一起搬了，
+    E2E 前自查发现修正（原型演示脚本的 bug 不照搬，已记档）；②@ 前置字符判定「空白后才命中」挡掉中文高频
+    写法「，@名字」（E2E 实测抓到）——触发/inline/mentionify/路由提取四处统一为「前一字符非
+    [一-龥A-Za-z0-9] 即命中」（中文标点后命中、字母数字前不命中防邮箱 a@b.com）；E2E 七断言：
+    弹菜单双名册（档案名/缺席回退 id）→ 前缀过滤 → Enter 补全（含尾随空格不重复 @）→ Esc/失焦收起 →
+    路由跳转 sh-name → 用户消息 chip（mentionify 路径）→ agent 回复 chip（md inline 路径）
 - [ ] 5. **新建 agent 全链路**：命令面 `v1.system.registerAgent`（zod：name/role/color；注册事实经既有 `v1.system.roster`
   快照事件下发，零新事件族）→ 装配 `addAgent` 暴露 + agent-store 扩 `color?` 字段（读取端兼容：缺席回退哈希派生色，
   版本号+兼容读取，不做迁移）→ 名册「+ 新建 agent」入口 + 向导 UI（身份/身份色 → 角色分段 → 复核；模型/沙箱项按
@@ -153,7 +164,7 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 
 | 差距项 | 处置 |
 |---|---|
-| @提及补全菜单 + 消息内 @高亮 | Step 4（@全员→记档 P5，裁定 C） |
+| @提及补全菜单 + 消息内 @高亮 | ✅ 已实现（Step 4；@全员→记档 P5，裁定 C） |
 | ctx Settings 档案模式（档案/记忆/协作/自动化） | Step 7（记忆/自动化=记档空缺态） |
 | stream-head 操作区（通知/会话信息/ctx 开关/设置入口） | Step 6 |
 | 名册未读徽标 | Step 6 |

@@ -185,6 +185,17 @@
   border-radius: 12px 4px 12px 12px;
 }
 
+/* @提及 chip（P4 Step 4，原型 .mention 同款）：v-html 注入内容须经 :deep 命中——
+   覆盖三处：用户消息 / relay 中继行 / agent 回复 md 块（后者的 .m-text 同名前缀已覆盖） */
+.m-text :deep(.mention),
+.relay :deep(.mention) {
+  background: var(--accent-weak);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 0 3px;
+  font-weight: 550;
+}
+
 /* markdown 渲染块（agent 回复） */
 .m-text.md {
   white-space: normal;
@@ -537,6 +548,8 @@
 
 /* ---- 输入区 ---- */
 .composer {
+  /* 提及菜单的定位上下文（absolute 挂本元素下，left/right 18px 对齐内容区） */
+  position: relative;
   flex: none;
   padding: 10px 18px 14px;
 }

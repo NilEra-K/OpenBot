@@ -398,3 +398,78 @@ test('命令面板（P4 Step 3）：Ctrl K 过滤导航 + omnibox 入口 + 快�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('@提及（P4 Step 4）：补全菜单键盘流 + 单提及路由 + 消息高亮', async () => {
+  // worker1 对用户消息回文本（带 @管家——覆盖 agent 回复 md 路径的名册命中高亮）
+  const mock = await startMockOpenAi([
+    { match: (l) => l.role === 'user' && !l.content.startsWith('[A2A'), text: '收到，@管家 已记录' },
+  ])
+
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-mention-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_EXTRA_AGENTS: 'worker1',
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— settings：配 provider（发送链路前置） ——
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // —— 菜单弹出与过滤：@ 弹全员（管家=档案名 / worker1=name 缺席回退 id）；@w 只剩 worker1 ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    const input = page.locator('.composer-box input')
+    await expect(page.locator('.sh-name')).toHaveText('管家')
+    await input.fill('@')
+    const menu = page.locator('.mention-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu.locator('.m-item')).toHaveCount(2)
+    await input.fill('@w')
+    await expect(menu.locator('.m-item')).toHaveCount(1)
+    await expect(menu.locator('.mm-name')).toHaveText('@worker1')
+
+    // —— Enter 补全：@ 前缀替换为完整名 + 尾随空格（原型语义；不重复 @） ——
+    await input.press('Enter')
+    await expect(menu).toHaveCount(0)
+    await expect(input).toHaveValue('@worker1 ')
+
+    // —— Esc 关闭（菜单开时 Enter 是补全不是发送——上面已覆盖）；失焦收起 ——
+    await input.fill('@')
+    await expect(menu).toBeVisible()
+    await input.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(input).toHaveValue('@')
+    await input.fill('@')
+    await expect(menu).toBeVisible()
+    await page.locator('.stream-head').click()
+    await expect(menu).toHaveCount(0, { timeout: 3_000 })
+
+    // —— 单提及路由：唯一提及非当前会话对象 → 消息发 worker1 并跟随跳转 ——
+    await input.fill('@worker1 收到请回话')
+    await input.press('Enter')
+    await expect(page.locator('.sh-name')).toHaveText('worker1')
+    // 用户消息气泡内 @worker1 高亮 chip（mentionify 纯文本路径）
+    const userChip = page.locator('.m.user .m-text .mention')
+    await expect(userChip).toHaveText('@worker1', { timeout: 15_000 })
+    // agent 回复 md 路径：@管家 命中名册档案名
+    await expect(page.locator('.m-text.md .mention')).toHaveText('@管家', { timeout: 15_000 })
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

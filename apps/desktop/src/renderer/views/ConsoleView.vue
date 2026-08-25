@@ -11,10 +11,13 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { renderMarkdown } from '../lib/markdown'
+import { mentionify } from '../lib/mention'
 import { agentColor } from '../lib/agent-color'
 import RosterPanel from '../components/RosterPanel.vue'
 import CtxPanel from '../components/CtxPanel.vue'
 import BoxScreen from '../components/BoxScreen.vue'
+import MentionMenu from '../components/MentionMenu.vue'
+import type { MentionItem } from '../components/MentionMenu.vue'
 import type { LiveStreamBlock } from '../stores/kernel'
 
 const kernel = useKernelStore()
@@ -262,13 +265,115 @@ watch(
 
 /** 发送（乐观更新在 store；失败态由流内重试按钮处理） */
 const sending = ref(false)
+
+// ---- @提及（P4 Step 4）：补全菜单 + 单提及路由 + 名册命中高亮 ----
+
+/** 名册命中面（名字与 agentId 都可命中——新 agent name 缺席时 id 即名字） */
+const mentionNames = computed(
+  () => new Set(kernel.roster.flatMap((a) => (a.name ? [a.name, a.agentId] : [a.agentId]))),
+)
+
+const mention = ref<{ open: boolean; start: number; items: MentionItem[]; sel: number }>({
+  open: false,
+  start: -1,
+  items: [],
+  sel: 0,
+})
+
+const closeMention = (): void => {
+  mention.value = { open: false, start: -1, items: [], sel: 0 }
+}
+
+/** 输入驱动：光标前缀匹配 `@名字前缀` 即弹菜单（读 DOM 值——v-model 与显式监听的更新时序不保证） */
+const onComposerInput = (): void => {
+  const el = draftEl.value
+  if (!el) return
+  const caret = el.selectionStart ?? el.value.length
+  const m = el.value.slice(0, caret).match(/(?:^|[^一-龥A-Za-z0-9])@([一-龥A-Za-z0-9]*)$/)
+  if (!m) {
+    closeMention()
+    return
+  }
+  const q = m[1]!.toLowerCase()
+  const items = kernel.roster
+    .map((a) => ({ agentId: a.agentId, name: a.name ?? a.agentId, sub: a.role === 'steward' ? '管家' : 'worker' }))
+    .filter((it) => it.name.toLowerCase().startsWith(q) || it.agentId.toLowerCase().startsWith(q))
+  if (items.length === 0) {
+    closeMention()
+    return
+  }
+  mention.value = { open: true, start: caret - m[1]!.length, items, sel: 0 }
+}
+
+/** 键盘流：菜单开时先行消费（↑↓/Enter/Tab/Esc），不冒泡到发送——原型同款 */
+const onComposerKeydown = (e: KeyboardEvent): void => {
+  if (mention.value.open) {
+    const n = mention.value.items.length
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      mention.value.sel = (mention.value.sel + (e.key === 'ArrowDown' ? 1 : -1) + n) % n
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      pickMention(mention.value.sel)
+    } else if (e.key === 'Escape') {
+      e.stopPropagation()
+      closeMention()
+    }
+    return
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    void send()
+  }
+}
+
+/** 失焦收起（延迟一拍——给菜单 mousedown 的点击留出路径） */
+const onComposerBlur = (): void => {
+  window.setTimeout(closeMention, 120)
+}
+
+const pickMention = (i: number): void => {
+  const mn = mention.value
+  const it = mn.items[i]
+  const el = draftEl.value
+  if (!it || !el) return
+  const caret = el.selectionStart ?? el.value.length
+  // slice(0, mn.start) 已含 @ 字符（start 指向名字前缀首字符），不再补 @——
+  // 原型 mmPick 此处重复拼 @ 是演示脚本的 bug，不照搬
+  ui.draft = `${ui.draft.slice(0, mn.start)}${it.name} ${ui.draft.slice(caret)}`
+  closeMention()
+  const pos = mn.start + it.name.length + 1
+  void nextTick(() => {
+    el.focus()
+    el.setSelectionRange(pos, pos)
+  })
+}
+
+/** 文本中提及的名册 agent（去重；名字与 id 双命中面；前置非名字字符——与高亮同一判定防邮箱误路由） */
+const mentionedAgents = (text: string): string[] => {
+  const found = new Set<string>()
+  for (const m of text.matchAll(/(?:^|[^一-龥A-Za-z0-9])@([一-龥A-Za-z0-9]+)/g)) {
+    const hit = kernel.roster.find((a) => (a.name ?? a.agentId) === m[1] || a.agentId === m[1])
+    if (hit) found.add(hit.agentId)
+  }
+  return [...found]
+}
+
 const send = async (): Promise<void> => {
   const text = ui.draft.trim()
   if (text === '' || sending.value) return
+  // 单提及路由（裁定 C 的 P4 侧）：唯一提及且非当前会话对象 → 消息发给该 agent 并
+  // 跟随跳转（消息落进目标会话流，不发完失联）；多提及=广播语义，随 P5 广播协议
+  let to = ui.activeAgentId
+  const targets = mentionedAgents(text)
+  if (targets.length === 1 && targets[0] !== ui.activeAgentId) {
+    to = targets[0]
+    ui.activeAgentId = to
+  }
   ui.draft = ''
   sending.value = true
   try {
-    await kernel.sendUserMessage(ui.activeAgentId, text)
+    await kernel.sendUserMessage(to, text)
   } catch {
     // 失败已标记在消息条目上（流内显示重试）——不弹全局错误
   } finally {
@@ -327,7 +432,7 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
                   <span v-if="kernel.messages[unit.msgIndex!]!.pending" class="m-state">发送中…</span>
                   <button v-else-if="kernel.messages[unit.msgIndex!]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
                 </div>
-                <div class="m-text">{{ kernel.messages[unit.msgIndex!]!.text }}</div>
+                <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
               </div>
             </div>
 
@@ -337,7 +442,7 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
                 <b :style="{ color: agentColor(kernel.messages[unit.msgIndex!]!.from) }">{{ kernel.messages[unit.msgIndex!]!.from }}</b>
                 →
                 <b :style="{ color: agentColor(kernel.messages[unit.msgIndex!]!.to) }">{{ kernel.messages[unit.msgIndex!]!.to }}</b>
-                · {{ kernel.messages[unit.msgIndex!]!.text }}
+                · <span v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></span>
               </span>
               <span class="m-time">{{ fmtTime(unit.at) }}</span>
             </button>
@@ -403,7 +508,7 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
                 </template>
 
                 <!-- 最终文本（markdown）；进行中且尚无任何输出块 → 三个点占位（首 token 到达即被实况取代） -->
-                <div v-if="unit.msgIndex !== undefined" class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text)"></div>
+                <div v-if="unit.msgIndex !== undefined" class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
                 <div v-else-if="unit.kind === 'pending' && unit.parts.length === 0" class="m-text typing" aria-label="正在生成回复">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                 </div>
@@ -428,6 +533,13 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
       </div>
 
       <div class="composer">
+        <!-- @提及菜单（原型挂 .composer 下，向上弹出——left/right 18px 对齐 composer 内容区） -->
+        <MentionMenu
+          v-if="mention.open"
+          :items="mention.items"
+          :sel="mention.sel"
+          @pick="pickMention"
+        />
         <div class="composer-inner">
           <div class="composer-box" :class="{ disabled: !kernel.connected }">
             <input
@@ -436,7 +548,9 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
               :placeholder="`对 ${activeAgent?.name ?? ui.activeAgentId} 说…（Enter 发送）`"
               :disabled="!kernel.connected"
               autocomplete="off"
-              @keydown.enter.prevent="send"
+              @input="onComposerInput"
+              @blur="onComposerBlur"
+              @keydown="onComposerKeydown"
             />
             <!-- 双态：run 进行中且未打字 → 中止（固定位置不受对话流滚动影响；打字中保留发送=steer 能力） -->
             <button
