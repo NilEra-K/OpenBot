@@ -60,6 +60,9 @@ function createWindow(): void {
       win?.hide()
     }
   })
+  // 最大化状态广播（renderer 三键图标随状态切换：最大化/还原）
+  win.on('maximize', () => win?.webContents.send('openbot:win-maximized', true))
+  win.on('unmaximize', () => win?.webContents.send('openbot:win-maximized', false))
   win.webContents.on('before-input-event', (_e, input) => {
     if (input.type !== 'keyDown') return
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) toggleDevTools()
@@ -116,6 +119,9 @@ ipcMain.on('openbot:win', (_e, op: string) => {
   else if (op === 'toggleMaximize') win.isMaximized() ? win.unmaximize() : win.maximize()
   else if (op === 'close') win.close()
 })
+
+// 最大化状态初始查询（广播之外补拉——renderer 加载/重载后自行同步）
+ipcMain.handle('openbot:win-is-maximized', () => win?.isMaximized() ?? false)
 
 // 网关接入点：renderer 经 preload 异步拉取（port/token 只活在内存链路，不落盘）
 ipcMain.handle('openbot:gateway', () =>

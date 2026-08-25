@@ -46,7 +46,10 @@ const snapshot = async (): Promise<void> => {
 <template>
   <div v-if="boxId !== null" class="boxops" role="dialog" aria-label="Box 操作台">
     <div class="bo-bar">
-      <button class="btn-ghost bo-back" title="返回" aria-label="返回" @click="ui.closeBoxOps()">←</button>
+      <!-- 返回=裸图标按钮（bo-back 自带 hover 底色；不挂 btn-ghost——其边框声明在后会压掉 border:none） -->
+      <button class="bo-back" title="返回" aria-label="返回" @click="ui.closeBoxOps()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg>
+      </button>
       <span class="bo-title mono">{{ boxId }}</span>
       <span v-if="canInteract" class="chip"><span class="stat-dot working"></span>交互终端</span>
       <span v-else class="chip"><span class="stat-dot" :class="{ working: live }"></span>{{ live ? '屏幕实况中' : '屏幕空闲' }}</span>

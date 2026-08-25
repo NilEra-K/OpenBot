@@ -1,5 +1,5 @@
 /* ctx 面板（prototype.html 迁移：一块显示器——原型 is-single 单屏模式同构）。
-   对齐原型 466–534 行：padding 顶部为 0（屏幕自补 16px 顶距），自然高度不撑满。
+   对齐原型 466–534 行：padding 顶部为 0（屏幕自补 16px 顶距），屏幕 4:3 比例锁定、内容内滚。
    思考过程在对话流内呈现（ConsoleView 思考块），此处纯化为屏幕。 */
 
 .ctx {
@@ -17,6 +17,11 @@
   cursor: pointer;
   background: #080a0b;
   margin-top: 16px; /* 原型 .ctx.is-single .ctx-screen 的屏幕顶距 */
+  /* 显示器比例锁定：宽随栏、高按 4:3——内容再长都收在屏幕内滚，不撑宽容器 */
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 4 / 3;
+  min-width: 0;
   transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
 }
 
@@ -84,8 +89,11 @@
   }
 }
 
-/* 屏幕主体（原型 .cs-term 同名同类）：自然高度，顶部对齐不撑满 */
+/* 屏幕主体（原型 .cs-term 同名同类）：吃掉剩余高度（比例锁定的下半屏），滚动收进内层 box-term */
 .cs-term {
+  flex: 1;
+  min-height: 0;
+  display: flex;
   padding: 9px 10px;
   font-size: 9.5px;
   line-height: 1.8;
@@ -96,12 +104,17 @@
   color: #73ce95;
 }
 
-/* 预览屏的实况上限：单块输出过长防面板顶穿（原型静态演示无此需求；贴底跟随随之生效） */
+/* 屏幕滚动收口：box-term 撑满 cs-term、双向内滚（长行横向滚不撑宽卡片；
+   原单块 max-height 340 上限被比例锁定取代） */
 .ctx :deep(.box-term) {
-  max-height: 340px;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .ctx-idle {
+  margin: auto; /* 居中于锁定的屏幕区域 */
   color: #8a938e;
   font-size: 10.5px;
   line-height: 1.8;

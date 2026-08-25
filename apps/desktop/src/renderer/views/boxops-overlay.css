@@ -34,7 +34,9 @@
   border-radius: 7px;
   background: transparent;
   color: var(--ink2);
-  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 

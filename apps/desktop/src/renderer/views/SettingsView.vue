@@ -10,8 +10,31 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { ProviderView, SandboxPref } from '../stores/kernel'
+import { useUiStore } from '../stores/ui'
+import type { ThemePref } from '../stores/ui'
 
 const kernel = useKernelStore()
+const ui = useUiStore()
+
+// ---- 外观（呈现层偏好：localStorage 持久化，不进内核 settings——协议纯度） ----
+
+interface ThemeOption {
+  value: ThemePref
+  label: string
+  note: string
+}
+
+const THEME_OPTIONS: ThemeOption[] = [
+  { value: 'auto', label: '跟随系统', note: '随 Windows 主题自动切换' },
+  { value: 'dark', label: '夜间', note: '默认深色界面' },
+  { value: 'light', label: '日间', note: '亮色界面（终端屏幕保持深色）' },
+]
+
+/** 单选直写 store（即时生效；setTheme 内含持久化与 <html data-theme> 同步） */
+const themeChoice = computed({
+  get: () => ui.theme,
+  set: (v: ThemePref) => ui.setTheme(v),
+})
 
 // ---- provider 表单（添加/编辑共用；编辑时 name 锁定——name 是档案键，改名=新建） ----
 
@@ -306,6 +329,25 @@ const wslRelevant = computed(
       <div class="set-sec-note">
         当前为手工审批闸门（Manual）：agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，
         挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。
+      </div>
+
+      <!-- 外观（呈现层偏好，即时生效；复用沙箱偏好卡的交互与样式） -->
+      <div class="set-sec">外观</div>
+      <div class="set-sec-note">
+        日间/夜间主题即时生效，「跟随系统」随 Windows 主题自动切换；标题栏的太阳/月亮按钮可随时快捷切换。
+        此偏好只存本机（浏览器存储），不进内核设置。
+      </div>
+      <div class="sandbox-prefs">
+        <label
+          v-for="opt in THEME_OPTIONS"
+          :key="opt.value"
+          class="sandbox-pref"
+          :class="{ 'is-on': ui.theme === opt.value }"
+        >
+          <input type="radio" name="theme-pref" class="sandbox-pref-radio" :value="opt.value" v-model="themeChoice" />
+          <span class="sandbox-pref-label">{{ opt.label }}</span>
+          <span class="sandbox-pref-note">{{ opt.note }}</span>
+        </label>
       </div>
 
       <!-- 关于 -->

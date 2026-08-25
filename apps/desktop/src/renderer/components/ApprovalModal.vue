@@ -107,7 +107,7 @@ watch(
   width: 440px;
   max-width: calc(100vw - 48px);
   background: var(--bg1);
-  border: 1px solid rgba(238, 177, 84, 0.4);
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
   border-radius: 14px;
   padding: 18px 20px 16px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);

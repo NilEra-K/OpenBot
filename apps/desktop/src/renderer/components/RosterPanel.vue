@@ -188,7 +188,7 @@ const subOf = (agent: RosterEntry): string => {
 }
 
 .chip-accent {
-  border-color: rgba(238, 177, 84, 0.35);
+  border-color: rgba(var(--accent-rgb), 0.35);
   color: var(--accent);
   background: var(--accent-weak);
 }

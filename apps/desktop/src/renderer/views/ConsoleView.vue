@@ -422,7 +422,24 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
               autocomplete="off"
               @keydown.enter.prevent="send"
             />
-            <button class="cb-send" :disabled="!kernel.connected || ui.draft.trim() === '' || sending" title="发送（Enter）" @click="send">发送</button>
+            <!-- 双态：run 进行中且未打字 → 中止（固定位置不受对话流滚动影响；打字中保留发送=steer 能力） -->
+            <button
+              v-if="!activeRun || ui.draft.trim() !== ''"
+              class="cb-send"
+              :disabled="!kernel.connected || ui.draft.trim() === '' || sending"
+              title="发送（Enter）"
+              @click="send"
+            >发送</button>
+            <button
+              v-else
+              class="cb-send cb-stop"
+              :disabled="cancellingRunId === activeRun.runId"
+              :title="cancellingRunId === activeRun.runId ? '正在中止…' : '中止当前 run'"
+              @click="cancelActive"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>
+              {{ cancellingRunId === activeRun.runId ? '正在中止…' : '中止' }}
+            </button>
           </div>
         </div>
       </div>

@@ -16,7 +16,7 @@
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(ellipse 60% 55% at 50% 48%, rgba(238, 177, 84, 0.045), transparent 70%),
+    radial-gradient(ellipse 60% 55% at 50% 48%, rgba(var(--accent-rgb), 0.045), transparent 70%),
     var(--bg0);
 }
 
@@ -84,7 +84,7 @@
 }
 
 .gdisc {
-  stroke: rgba(255, 255, 255, 0.25);
+  stroke: var(--line-strong);
   stroke-width: 1.5;
 }
 
@@ -320,7 +320,7 @@
 
 .btn-secondary {
   background: var(--bg2);
-  border-color: rgba(238, 177, 84, 0.28);
+  border-color: rgba(var(--accent-rgb), 0.28);
   color: var(--accent);
 }
 

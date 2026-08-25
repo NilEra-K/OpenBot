@@ -15,6 +15,7 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
+  border-right: 1px solid var(--line); /* 与 ctx 的分界线（prototype.html .streamcol 同款，此前漏迁移） */
 }
 
 .stream-head {
@@ -521,7 +522,7 @@
 }
 
 .btn-primary:hover {
-  background: #f5c071;
+  background: var(--accent-strong);
 }
 
 .btn-danger-ghost {
@@ -596,7 +597,20 @@
 }
 
 .cb-send:not(:disabled):hover {
-  background: #f5c071;
+  background: var(--accent-strong);
+}
+
+/* 中止态（run 进行中且未打字）：danger 色系（与排程 aborted 卡同族）；实心方块图标 */
+.cb-send.cb-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--danger);
+  color: #fff;
+}
+
+.cb-send.cb-stop:not(:disabled):hover {
+  background: var(--danger-strong);
 }
 
 /* 日期分隔 */

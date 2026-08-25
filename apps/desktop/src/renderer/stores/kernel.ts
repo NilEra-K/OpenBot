@@ -13,7 +13,15 @@ import type { KernelEvent } from '@openbot/transport'
 /** preload 注入的全局（index.cts 暴露；E2E 可在页面加载前替换） */
 interface OpenbotGlobal {
   desktop: boolean
-  window: { minimize(): void; toggleMaximize(): void; close(): void }
+  window: {
+    minimize(): void
+    toggleMaximize(): void
+    close(): void
+    /** 当前最大化状态（加载/重载后的初始同步） */
+    isMaximized(): Promise<boolean>
+    /** 订阅最大化状态变化；返回退订函数 */
+    onMaximizeChange(cb: (maximized: boolean) => void): () => void
+  }
   gateway: { info(): Promise<GatewayEndpoint | null> }
 }
 declare global {

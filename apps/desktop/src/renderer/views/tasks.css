@@ -201,15 +201,15 @@
 }
 
 .chip-accent {
-  border-color: rgba(238, 177, 84, 0.35);
+  border-color: rgba(var(--accent-rgb), 0.35);
   color: var(--accent);
   background: var(--accent-weak);
 }
 
 .chip-success {
-  border-color: rgba(115, 206, 149, 0.35);
+  border-color: rgba(var(--success-rgb), 0.35);
   color: var(--success);
-  background: rgba(115, 206, 149, 0.12);
+  background: rgba(var(--success-rgb), 0.12);
 }
 
 .chip-danger {

@@ -60,15 +60,15 @@
 }
 
 .chip-accent {
-  border-color: rgba(238, 177, 84, 0.35);
+  border-color: rgba(var(--accent-rgb), 0.35);
   color: var(--accent);
   background: var(--accent-weak);
 }
 
 .chip-success {
-  border-color: rgba(115, 206, 149, 0.35);
+  border-color: rgba(var(--success-rgb), 0.35);
   color: var(--success);
-  background: rgba(115, 206, 149, 0.12);
+  background: rgba(var(--success-rgb), 0.12);
 }
 
 .chip-danger {
@@ -87,7 +87,7 @@
 
 .stat-dot.working {
   background: var(--success);
-  box-shadow: 0 0 0 3px rgba(115, 206, 149, 0.15);
+  box-shadow: 0 0 0 3px rgba(var(--success-rgb), 0.15);
 }
 
 .stat-dot.ok {
@@ -123,7 +123,7 @@
 
 .btn-secondary {
   background: var(--bg2);
-  border-color: rgba(238, 177, 84, 0.28);
+  border-color: rgba(var(--accent-rgb), 0.28);
   color: var(--accent);
 }
 
@@ -192,7 +192,7 @@
   content: '';
   position: absolute;
   inset: 5px;
-  border: 1px solid rgba(238, 177, 84, 0.4);
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
   border-radius: 3px;
 }
 
@@ -269,7 +269,7 @@
 .box-claim {
   margin-top: 16px;
   padding: 12px 14px;
-  border: 1px dashed rgba(238, 177, 84, 0.3);
+  border: 1px dashed rgba(var(--accent-rgb), 0.3);
   border-radius: 10px;
   background: var(--accent-weak);
   font-size: 12.5px;

@@ -3,9 +3,10 @@
  * App 壳骨架（Step 7）：titlebar（frameless 三键）+ 侧栏五视图 + 主区容器。
  * 视觉基调对齐 prototype.html 设计变量（Step 8–9 逐视图迁移完整样式）。
  */
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useKernelStore } from './stores/kernel'
 import { useUiStore } from './stores/ui'
+import { initThemeWatch } from './stores/ui'
 import type { ViewName } from './stores/ui'
 import ConsoleView from './views/ConsoleView.vue'
 import BoxesView from './views/BoxesView.vue'
@@ -18,10 +19,37 @@ import BoxOps from './components/BoxOps.vue'
 const kernel = useKernelStore()
 const ui = useUiStore()
 
+// 主题：setup 阶段先于首帧应用（无暗→亮闪烁）；系统跟随监听挂载时注册一次
+ui.applyTheme()
+onMounted(initThemeWatch)
+
 // 模板全局白名单不含 window——窗口控制经方法转发（preload 桥可能缺失，全部可选链）
 const minimize = (): void => window.openbot?.window.minimize()
 const toggleMaximize = (): void => window.openbot?.window.toggleMaximize()
 const hideToTray = (): void => window.openbot?.window.close()
+
+// 最大化状态（三键图标随状态切换：最大化=方框 / 还原=叠放双框）
+const maximized = ref(false)
+let unsubscribeMaximize: (() => void) | null = null
+onMounted(() => {
+  void window.openbot?.window.isMaximized().then((v) => (maximized.value = v))
+  unsubscribeMaximize = window.openbot?.window.onMaximizeChange((v) => (maximized.value = v)) ?? null
+})
+onUnmounted(() => unsubscribeMaximize?.())
+
+// ---- 滚动条闲时隐藏（全局行为）：滚动中的容器加 .sb-active（CSS 门控显形），停滚 700ms 自动隐回 ----
+// 捕获阶段监听 document——任意层级滚动容器一次覆盖（stream/ctx/box-term/操作台/各视图列表），无需逐容器接线
+const sbHideTimers = new WeakMap<Element, number>()
+const onAnyScroll = (e: Event): void => {
+  const el = e.target
+  if (!(el instanceof Element)) return // document 级滚动目标（本应用不出现，防御）
+  el.classList.add('sb-active')
+  const prev = sbHideTimers.get(el)
+  if (prev !== undefined) window.clearTimeout(prev)
+  sbHideTimers.set(el, window.setTimeout(() => el.classList.remove('sb-active'), 700))
+}
+onMounted(() => document.addEventListener('scroll', onAnyScroll, { capture: true, passive: true }))
+onUnmounted(() => document.removeEventListener('scroll', onAnyScroll, { capture: true }))
 
 const views: Array<{ id: ViewName; label: string; icon: string; component: unknown }> = [
   { id: 'console', label: '控制台', icon: 'chat', component: ConsoleView },
@@ -53,10 +81,35 @@ onUnmounted(() => kernel.shutdown())
     <header class="titlebar">
       <div class="brand">OpenBot</div>
       <div v-if="kernel.bootError" class="boot-error" :title="kernel.bootError">内核未连接</div>
-      <div class="win-controls">
-        <button class="win-btn" title="最小化" @click="minimize">─</button>
-        <button class="win-btn" title="最大化/还原" @click="toggleMaximize">□</button>
-        <button class="win-btn close" title="驻留托盘" @click="hideToTray">✕</button>
+      <div class="titlebar-right">
+        <!-- 主题快捷切换：实效夜间显示太阳（点击转日间），日间显示月亮（auto 下点击即转显式偏好） -->
+        <button
+          class="theme-toggle"
+          :title="`切换主题（当前：${ui.theme === 'auto' ? `跟随系统 · ${ui.effectiveTheme === 'dark' ? '夜间' : '日间'}` : ui.effectiveTheme === 'dark' ? '夜间' : '日间'}）`"
+          :aria-label="`切换到${ui.effectiveTheme === 'dark' ? '日间' : '夜间'}模式`"
+          @click="ui.toggleTheme()"
+        >
+          <svg v-if="ui.effectiveTheme === 'dark'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.2 5.2l1.8 1.8M17 17l1.8 1.8M18.8 5.2L17 7M7 17l-1.8 1.8"/></svg>
+          <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M20 13.6A8 8 0 1 1 10.4 4a6.4 6.4 0 0 0 9.6 9.6z"/></svg>
+        </button>
+        <div class="win-controls">
+        <!-- 三键图标与侧栏 ICONS 同语言（线性 stroke）；最小化线略下沉是 Windows 惯例 -->
+        <button class="win-btn" title="最小化" aria-label="最小化" @click="minimize">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 16.5h12"/></svg>
+        </button>
+        <button class="win-btn" :title="maximized ? '还原' : '最大化'" :aria-label="maximized ? '还原' : '最大化'" @click="toggleMaximize">
+          <!-- 最大化=单方框；还原=错位叠放双框（Windows 惯例形） -->
+          <svg v-if="!maximized" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="13" height="13" rx="1.5"/></svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+            <!-- 还原：右上完整框（前景）+ 左下背景框只画可见 L 形轮廓——止于前景框边缘，不交叉穿框 -->
+            <rect x="8.5" y="4.5" width="11" height="11" rx="1.5"/>
+            <path d="M8.5 8.5H6Q4.5 8.5 4.5 10V18Q4.5 19.5 6 19.5H14Q15.5 19.5 15.5 18V15.5"/>
+          </svg>
+        </button>
+        <button class="win-btn close" title="驻留托盘" aria-label="驻留托盘" @click="hideToTray">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>
+        </button>
+        </div>
       </div>
     </header>
 
@@ -104,6 +157,7 @@ onUnmounted(() => kernel.shutdown())
   --ink3: #747474;
   --muted: rgba(234, 234, 234, 0.55);
   --accent: #eeb154;
+  --accent-strong: #f5c071; /* hover 提亮 */
   --accent-ink: #2a1e0c;
   --accent-rgb: 238, 177, 84;
   --accent-weak: rgba(var(--accent-rgb), 0.11);
@@ -111,12 +165,40 @@ onUnmounted(() => kernel.shutdown())
   --warning-rgb: 227, 206, 92;
   --warning-weak: rgba(227, 206, 92, 0.1);
   --danger: #ea6a64;
+  --danger-strong: #ef8b86; /* hover 提亮 */
   --danger-rgb: 234, 106, 100;
   --danger-weak: rgba(var(--danger-rgb), 0.1);
   --success: #73ce95;
+  --success-rgb: 115, 206, 149;
   --mono: 'Cascadia Code', Consolas, ui-monospace, monospace;
   --ease: cubic-bezier(0.25, 1, 0.5, 1);
   --radius: 10px;
+}
+
+/* 日间主题（夜间为默认态；data-theme 由 ui store 依偏好/系统解析挂到 <html>）。
+   同色相、白底对比度加深（正文 ≥4.5:1 目标）；weak 族由 rgb 变量派生自动适配 */
+:root[data-theme='light'] {
+  --bg0: #f4f2ed;
+  --bg1: #fbfaf7;
+  --bg2: #efece5;
+  --bg3: #e4e0d6;
+  --line: rgba(28, 25, 18, 0.1);
+  --line-strong: rgba(28, 25, 18, 0.18);
+  --ink: #26231c;
+  --ink2: #5d584c;
+  --ink3: #8f897a;
+  --muted: rgba(38, 35, 28, 0.55);
+  --accent: #9a6d1a;
+  --accent-strong: #7e5a16;
+  --accent-ink: #fff8ec;
+  --accent-rgb: 154, 109, 26;
+  --warning: #8a7a1c;
+  --warning-rgb: 138, 122, 28;
+  --danger: #c2453f;
+  --danger-strong: #a93a34;
+  --danger-rgb: 194, 69, 63;
+  --success: #2f7d4f;
+  --success-rgb: 47, 125, 79;
 }
 
 * {
@@ -134,16 +216,25 @@ body {
   font-size: 14px;
 }
 
-/* 全局滚动条（prototype 92-94 行同源）：深色界面统一——原生白底灰条在深色 UI 中割裂 */
+/* 全局滚动条（prototype 92-94 行同源）：深色界面统一——原生白底灰条在深色 UI 中割裂。
+   闲时隐藏（thumb 全透明）：滚动中（.sb-active——App 全局 scroll 监听加类）或鼠标悬停滚动区时显形；
+   10px 占位保留不 overlay——显隐切换不引起内容宽度抖动 */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--bg3);
+  background: transparent;
   border-radius: 5px;
-  border: 2px solid var(--bg1); /* 与容器底同色的边框=滑块四周留隙的悬浮感 */
+  border: 2px solid transparent;
+}
+
+/* 显形（滚动中 / 悬停）：滑块配色沿用深色方案 */
+.sb-active::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb {
+  background: var(--bg3);
+  border-color: var(--bg1); /* 与容器底同色的边框=滑块四周留隙的悬浮感 */
 }
 
 ::-webkit-scrollbar-track {
@@ -186,13 +277,39 @@ body {
   margin-left: 12px;
   padding: 1px 8px;
   border-radius: 4px;
-  background: rgba(234, 106, 100, 0.15);
+  background: rgba(var(--danger-rgb), 0.15);
   color: var(--danger);
   font-size: 12px;
 }
 
-.win-controls {
+.titlebar-right {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.theme-toggle {
+  width: 34px;
+  height: 28px;
+  margin-right: 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.win-controls {
   display: flex;
   height: 100%;
   -webkit-app-region: no-drag;
@@ -204,7 +321,9 @@ body {
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 
