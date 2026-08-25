@@ -274,7 +274,7 @@ interface BoxBackend {
   exec(box: BoxId, cmd: ExecSpec): Promise<ExecResult>;      // 含流式输出；ExecSpec.signal 触发即终止命令（run 取消/抢占传导）
   fsRead/fsWrite(box: BoxId, path, ...): Promise<...>;
   snapshot(box: BoxId): Promise<SnapshotId>;
-  stats(box: BoxId): Promise<BoxStats>;  // CPU/内存/磁盘，喂磁盘压力告警
+  stats(box: BoxId): Promise<BoxStats>;  // CPU/内存/磁盘（字段可选：缺席=后端不可测——WSL 只有磁盘 vhdx 真值）；StatsService 定时轮询发 v1.box.stats，并据注入的宿主磁盘探针做压力判定（派生量归内核）发 v1.system.pressure
   teardown(box: BoxId): Promise<void>;
   openShell?(box: BoxId, opts?): Promise<ShellSession>;      // 交互式终端（PTY；caps.interactive=true 必须实现）
 }

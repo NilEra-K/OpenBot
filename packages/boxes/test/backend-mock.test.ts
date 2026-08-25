@@ -70,7 +70,7 @@ describe('MockBoxBackend', () => {
     const b2 = await backend.create({ image: 'default', cpus: 2 })
     expect(await backend.snapshot(b1)).toBe('snap-1')
     expect(await backend.snapshot(b2)).toBe('snap-2')
-    expect(await backend.stats(b1)).toEqual({ cpuPercent: 0, memoryMb: 0, diskMb: 0 })
+    expect(await backend.stats(b1)).toEqual({ cpuPercent: 12, memoryMb: 256, diskMb: 1200 })
     expect(await backend.list()).toEqual([
       { boxId: 'box-1', spec: { image: 'default' }, state: 'active', createdAt: 1 },
       { boxId: 'box-2', spec: { image: 'default', cpus: 2 }, state: 'active', createdAt: 2 },

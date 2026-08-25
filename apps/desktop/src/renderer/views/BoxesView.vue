@@ -2,7 +2,8 @@
 /**
  * 本机沙箱视图（prototype.html 迁移）：Box 卡列表 + caps 驱动按钮。
  * caps 纪律：快照按钮仅 caps.snapshot=true 渲染——永不出现「UI 有按钮但后端不支持」。
- * 诚实降级：P2 mock 后端无真实资源信号——不渲染 CPU/内存/磁盘仪表与终端接管（P3 真实后端接入）。
+ * 资源仪表（Step 6）：v1.box.stats 最新值驱动，按在场字段渲染——缺席=后端不可测，不造假仪表
+ * （WSL 只有磁盘 vhdx 真值；CPU/内存属 OCI 后端接入项）。宿主磁盘压力条同理纯事实呈现。
  */
 import { computed, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
@@ -28,6 +29,12 @@ const sum = computed(() => {
   for (const b of kernel.boxes) by[b.state] += 1
   return by
 })
+
+/** 宿主剩余空间的呈现文案（GB 一位小数；压力文案归视图层——内核只发事实） */
+const fmtGb = (bytes: number): string => `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+
+/** 磁盘占用展示档（GB/MB 分档——vhdx 动辄 GB 级） */
+const fmtMb = (mb: number): string => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`)
 
 /** runId 的 agent 前缀（P1 约定 `${agentId}-run-N`；ConsoleView 同款推断） */
 const agentOfRun = (runId?: string): string | null =>
@@ -80,12 +87,20 @@ const snapshot = async (boxId: string): Promise<void> => {
     </div>
 
     <div class="boxes">
+      <!-- 宿主磁盘压力条（Step 6）：warn/critical 档才出现；纯事实（剩余/总量），文案在此组合 -->
+      <div v-if="kernel.pressure" class="disk-banner" :class="kernel.pressure.level" role="alert">
+        <span class="stat-dot err"></span>
+        <b>{{ kernel.pressure.level === 'critical' ? '磁盘空间严重不足' : '磁盘空间偏低' }}</b>
+        <span class="mono">剩余 {{ fmtGb(kernel.pressure.freeBytes) }} / {{ fmtGb(kernel.pressure.totalBytes) }}</span>
+        <span class="disk-banner-note">Box 的 vhdx、快照与 transcript 都写此卷——请清理后再继续派活</span>
+      </div>
+
       <div class="box-sum mono">
         <span>{{ kernel.boxes.length }} Box</span>
         <span>运行 {{ sum.active }}</span>
         <span>休眠 {{ sum.sleeping }}</span>
         <span>快照态 {{ sum.snapshot }}</span>
-        <span class="box-sum-note">资源仪表与终端接管属 P3 真实后端（WSL2/Docker）接入项</span>
+        <span class="box-sum-note">仪表按后端可测维度呈现（WSL：磁盘；CPU/内存属 OCI 后端项）</span>
       </div>
 
       <div class="box-grid">
@@ -107,6 +122,25 @@ const snapshot = async (boxId: string): Promise<void> => {
               >
                 {{ snapping.has(box.boxId) ? '快照中…' : '快照' }}
               </button>
+            </div>
+          </div>
+
+          <!-- 资源仪表（Step 6）：字段在场才渲染（缺席=不可测，不造假）；条宽按值比例 -->
+          <div v-if="kernel.boxStats[box.boxId]" class="box-gauges">
+            <div v-if="kernel.boxStats[box.boxId]!.cpuPercent !== undefined" class="gauge">
+              <span class="gauge-k">CPU</span>
+              <span class="gauge-bar"><span class="gauge-fill" :style="{ width: `${Math.min(100, kernel.boxStats[box.boxId]!.cpuPercent!)}%` }"></span></span>
+              <span class="gauge-v mono">{{ Math.round(kernel.boxStats[box.boxId]!.cpuPercent!) }}%</span>
+            </div>
+            <div v-if="kernel.boxStats[box.boxId]!.memoryMb !== undefined" class="gauge">
+              <span class="gauge-k">内存</span>
+              <span class="gauge-bar"><span class="gauge-fill mem" :style="{ width: `${Math.min(100, (kernel.boxStats[box.boxId]!.memoryMb! / 4096) * 100)}%` }"></span></span>
+              <span class="gauge-v mono">{{ fmtMb(kernel.boxStats[box.boxId]!.memoryMb!) }}</span>
+            </div>
+            <div v-if="kernel.boxStats[box.boxId]!.diskMb !== undefined" class="gauge">
+              <span class="gauge-k">磁盘</span>
+              <span class="gauge-bar"><span class="gauge-fill disk" :style="{ width: `${Math.min(100, (kernel.boxStats[box.boxId]!.diskMb! / 65536) * 100)}%` }"></span></span>
+              <span class="gauge-v mono">{{ fmtMb(kernel.boxStats[box.boxId]!.diskMb!) }}</span>
             </div>
           </div>
 

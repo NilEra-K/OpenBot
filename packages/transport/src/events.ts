@@ -89,6 +89,18 @@ export const EventPayloadSchemas = {
     command: z.array(z.string()),
     exitCode: z.number().int().optional(),
   }),
+  'v1.box.stats': z.object({
+    boxId: z.string(),
+    cpuPercent: z.number().min(0).optional(),
+    memoryMb: z.number().min(0).optional(),
+    diskMb: z.number().min(0).optional(),
+  }),
+  'v1.system.pressure': z.object({
+    dimension: z.literal('disk'),
+    level: z.enum(['ok', 'warn', 'critical']),
+    freeBytes: z.number().int().nonnegative(),
+    totalBytes: z.number().int().nonnegative(),
+  }),
   'v1.approval.requested': z.object({
     approvalId: z.string(),
     runId: z.string(),

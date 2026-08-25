@@ -128,6 +128,13 @@ onUnmounted(() => kernel.shutdown())
           <span v-if="view.id === 'console' && kernel.pendingApprovals.length" class="badge">{{
             kernel.pendingApprovals.length
           }}</span>
+          <!-- 宿主磁盘压力角标（Step 6）：warn/critical 档常驻提醒；critical 加脉冲 -->
+          <span
+            v-if="view.id === 'boxes' && kernel.pressure"
+            class="badge badge-danger"
+            :class="{ pulse: kernel.pressure.level === 'critical' }"
+            :title="kernel.pressure.level === 'critical' ? '磁盘空间严重不足' : '磁盘空间偏低'"
+          >!</span>
         </button>
       </nav>
       <main class="main">
@@ -393,6 +400,22 @@ body {
   display: grid;
   place-items: center;
   line-height: 1;
+}
+
+/* 磁盘压力角标（danger 族；critical 脉冲提醒） */
+.badge.badge-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.badge.badge-danger.pulse {
+  animation: badge-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .main {

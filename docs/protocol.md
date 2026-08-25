@@ -52,8 +52,13 @@ u8 版本(=1) | u8 帧类型 | u32 流 ID | u32 帧序号 | u32 负载长度 | �
 ## wire 校验与错误 code
 
 - 命令 payload：注册命令时可带 zod schema（`InProcessTransport.register` 第三参），不过 schema → envelope `TRANSPORT_PAYLOAD_INVALID`。
-- 事件 payload：`@openbot/transport` 的 `EventPayloadSchemas`（14 类型，与 core `KernelEventMap` 编译期双向断言防漂移）。
+- 事件 payload：`@openbot/transport` 的 `EventPayloadSchemas`（16 类型，与 core `KernelEventMap` 编译期双向断言防漂移）。
 - 错误 code 目录：命令领域失败按 KernelError code 原样透传；传输层见 `GatewayErrorCodes`/`TransportErrorCodes`/`StreamErrorCodes`（均在 `@openbot/transport` 导出）。
+
+## 遥测与压力事件（plan-p3 Step 6）
+
+- `v1.box.stats`：`{ boxId, cpuPercent?, memoryMb?, diskMb? }`——StatsService 定时轮询（默认 10s，开机先立即拍一轮）逐盒发出；**字段可选，缺席=后端不可测**（WSL 只有 diskMb=ext4.vhdx 体积；mock 三字段模拟值）。最新值语义：消费方每盒留最新，重放过期遥测幂等。
+- `v1.system.pressure`：`{ dimension:'disk', level:'ok'|'warn'|'critical', freeBytes, totalBytes }`——宿主磁盘压力（**派生量归内核**：判定在 StatsService，探针由装配方注入——桌面用 fs.statfs userData 所在卷）。只在状态转移时发（ok→warn→critical→ok）；纯事实无文案（文案归渲染层）；阈值 warn 8GiB / critical 3GiB（env `OPENBOT_DISK_WARN_BYTES` 覆盖，critical 取其半——E2E 确定性）。
 
 ## 待填充（P3）
 

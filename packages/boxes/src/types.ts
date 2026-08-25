@@ -56,10 +56,16 @@ export interface ExecResult {
   stderr: string
 }
 
+/** Box 资源统计（Step 6）：字段可选——**缺席=该维度不可测（如实）**，UI 按在场字段渲染不造假。
+ *  backend-wsl：发行版即 Box 无 per-distro stats API，只有 diskMb（vhdx 体积真值）；
+ *  backend-mock：三字段全给（确定性模拟值——E2E 与无 WSL 环境的断言地基）。 */
 export interface BoxStats {
-  cpuPercent: number
-  memoryMb: number
-  diskMb: number
+  /** CPU 占用百分比 [0,100]；缺席=后端不可测 */
+  cpuPercent?: number
+  /** 内存用量 MB；缺席=后端不可测 */
+  memoryMb?: number
+  /** 磁盘占用 MB（WSL=ext4.vhdx 体积）；缺席=后端不可测 */
+  diskMb?: number
 }
 
 export interface BoxInstance {

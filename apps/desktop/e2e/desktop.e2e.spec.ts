@@ -258,3 +258,38 @@ test('中止工作中的 agent（审批挂起中打断：run aborted 收敛 + �
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('Box 仪表与宿主磁盘压力角标（Step 6：stats 轮询 → 事件 → 仪表/角标）', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-stats-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+      // warn 阈值抬高到天文数字（critical 取其半仍远超真实余量）→ 首拍即 critical 档，确定性
+      OPENBOT_DISK_WARN_BYTES: String(Number.MAX_SAFE_INTEGER),
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 侧栏 Box 图标压力角标（critical 档常驻 + 脉冲）
+    await expect(page.locator('.nav-item .badge-danger')).toBeVisible({ timeout: 15_000 })
+
+    // boxes 视图：压力警示条（剩余空间事实）+ Box 卡仪表（mock 三字段全给）
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    await expect(page.locator('.disk-banner.critical')).toBeVisible()
+    await expect(page.locator('.disk-banner')).toContainText('磁盘空间严重不足')
+    await expect(page.locator('.boxcard .gauge', { hasText: 'CPU' })).toBeVisible({ timeout: 15_000 })
+    // 体积类仪表（内存/磁盘）的值带 MB/GB 档——按 gauge 标签定位取值，CPU 值是百分号不走此断言
+    await expect(page.locator('.boxcard .gauge', { hasText: '内存' }).locator('.gauge-v')).toContainText(/MB|GB/)
+    await expect(page.locator('.boxcard .gauge', { hasText: '磁盘' }).locator('.gauge-v')).toContainText(/MB|GB/)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

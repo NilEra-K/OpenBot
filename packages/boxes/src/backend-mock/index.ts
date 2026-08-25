@@ -203,7 +203,8 @@ export class MockBoxBackend implements BoxBackend {
 
   async stats(_boxId: BoxId): Promise<BoxStats> {
     this.#require(_boxId)
-    return { cpuPercent: 0, memoryMb: 0, diskMb: 0 }
+    // 模拟后端的设计本分：确定性假值（Step 6 仪表与 E2E 断言的地基——mock 不造假给谁看？给测试看）
+    return { cpuPercent: 12, memoryMb: 256, diskMb: 1200 }
   }
 
   async teardown(boxId: BoxId): Promise<void> {

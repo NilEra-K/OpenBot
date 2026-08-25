@@ -58,6 +58,7 @@
   - 测试两层:替身套件(默认,断言 wsl.exe 参数序列/错误语义/前缀过滤)+ 真实套件
     (`OPENBOT_TEST_WSL=1 OPENBOT_TEST_ROOTFS=...`,18s 全链路:create→exec UTF-8→fs 双向→流式→快照→注销)
 - [ ] 4. OCI 容器后端(底座共用,两薄壳):`backend-docker` + `backend-podman`——容器即 Box:`run -d --cpus --memory` / `exec` / `commit` 快照 / `stats --no-stream --format json`;caps 如实(persistent 需卷挂载、resourceLimits ✓、isolation medium);单测注入脚本化 CLI(mock 同构);真实验证分别依赖 Docker Desktop / podman machine
+  - **2026-08-25 用户裁定:暂缓**——P3 以 WSL 为主力后端收官,OCI 双壳推迟到 P4/后续再启(Step 6 的 CPU/内存仪表随之推迟解锁:BoxStats 可选化已为其留好接口)
 - [x] 5. 后端探测与装配选择(WSL 部分;用户裁定「先基于 WSL 开工」):`boxes/probe`(wsl --status / docker version / podman --version,ProcRunner 注入可测)→ `coordinator/chooseBackend` 装配决策(偏好 × 探测 × 实现白名单,依赖铁律:吃 boxes probe + state 偏好,决策只能在装配根)→ 桌面 main 装配 WslBoxBackend;settings-store 沙箱偏好 + `v1.sandbox.status/set` 命令面;settings 视图后端区块(当前后端/降级警示/rootfs 引导/偏好选择重启生效/探测清单);E2E `OPENBOT_SANDBOX=mock` 确定性隔离
   - 三级诚实降级:未实现(白名单外)→ CLI 不可用 → WSL rootfs 未就绪,全部回 mock 带 reason;
     auto 择优链 wsl→docker→podman,全不可用落「无可用真实后端」汇总原因(mock 是地基而非错误)
@@ -72,7 +73,13 @@
   - chooseBackend 纯函数单测 12 用例(显式偏好/auto 链/白名单/缺项探测);docker/podman 在设置页
     只读呈现探测状态(disabled 选项「待实现 P3 Step 4」)——不放假选项
   - `packages/boxes` index 增 probe 导出;coordinator index 增 sandbox 导出;desktop package.json 补 boxes 依赖
-- [ ] 6. 资源统计与磁盘压力告警:内核定时 stats 轮询 → WS 实况/事件;磁盘压力判定在内核(进协议的派生量归内核)→ 告警事件 → UI 角标;boxes 仪表接真数据(P2 降级项解锁)
+- [x] 6. 资源统计与磁盘压力告警:内核定时 stats 轮询 → 事件下发;磁盘压力判定在内核(进协议的派生量归内核)→ 告警事件 → UI 角标;boxes 仪表接真数据(P2 降级项解锁)
+  - 实施裁定(2026-08-25,用户裁定 Step 4 OCI 后端暂缓):BoxStats 字段可选化——**缺席=后端不可测,不造假仪表**;backend-wsl 只有 diskMb 真值(--import 目标目录 ext4.vhdx 体积宿主侧 stat,statFile 注入可测),CPU/内存如实缺席(发行版共享 vmmem,无 per-distro API);mock 三字段确定性模拟值(E2E 断言地基)
+  - 两个新事件族:`v1.box.stats`(每盒最新值遥测)与 `v1.system.pressure`(纯事实无文案,文案归渲染层);遥测走事件总线不走 WS 流——最新值语义,重放过期遥测幂等无害,免给 StreamHub 加周期流
+  - StatsService 归 coordinator(与 ShellService 同居所):定时轮询 registry 在册盒(读装配层 agentId→boxId 映射,零子进程开销——backend.list 的跨重启真相职责不变)+ 注入的宿主磁盘探针(桌面 main 用 fs.statfs userData 所在卷;**测量属壳、判定归内核**)；压力状态机只在转移时发(ok→warn→critical→ok);探针失败/返回 null 静默保持上一档(无数据不判定)
+  - 阈值 warn 8GiB / critical 3GiB;env `OPENBOT_DISK_WARN_BYTES` 覆盖(critical 取其半——E2E 设 MAX_SAFE_INTEGER 直达 critical 档,确定性);start() 先立即拍一轮再进 10s 间隔(开机即有数据,E2E 免等)
+  - renderer:kernel store boxStats/pressure 投影;boxes 卡仪表按在场字段渲染(WSL 只见磁盘仪表);压力呈现=侧栏 Box 图标 danger 角标(critical 加脉冲)+ boxes 视图警示条(剩余/总量事实);顺带修正过时降级文案(「终端接管属 P3」——PTY 已于 v0.0.9 落地)
+  - 测试:StatsService 六用例(逐盒透传/单盒失败不拖累/状态机转移去重/探针失败保持上一档/无探针不启动/立即拍+stop 幂等);backend-wsl stats 替身断言 vhdx 路径与缺失空报告;E2E 新用例(角标+警示条+仪表可见)
 - [x] 7. 流式双线:llm `openai-compat` stream:true(SSE 增量解析)+ exec 流式 → WS `/stream` 接 renderer;console 打字机与 ctx 三栏面板(P2 原型 #11 标注位)落地
   - llm:`ChatRequest.onText`(聚合语义不变)+ SSE 消费器(delta.content 增量、tool_calls 按 index
     累积拼装、`[DONE]` 终止、流中断=LLM_RESPONSE_INVALID)+ FetchLike 扩流式 body

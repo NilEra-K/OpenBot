@@ -7,7 +7,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { WslBoxBackend, WSL_BOX_PREFIX } from '../src/backend-wsl/index.js'
 import { runProcess } from '../src/procexec/index.js'
 import type { ProcResult, ProcRunner, ProcSpec, ShellSpawner } from '../src/procexec/index.js'
@@ -139,11 +139,17 @@ describe('WslBoxBackend（脚本化替身）', () => {
     expect(last(calls)).toEqual(['wsl', '--export', `${WSL_BOX_PREFIX}box-1`, 'D:/WSL/snapshots/snap-1.tar.gz'])
   })
 
-  it('stats 如实全零（caps.resourceLimits=false 的对偶）；teardown 注销并除名', async () => {
+  it('stats 只有磁盘真值（vhdx 体积，注入替身）；CPU/内存缺席=不可测；vhdx 缺失如实空报告；teardown 注销并除名', async () => {
     const { run, calls } = scripted(() => OK)
-    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run })
+    let vhdxSize = 2048 * 1024 * 1024
+    const statFile = vi.fn(async () => ({ size: vhdxSize }))
+    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run, statFile })
     await backend.create({ image: 'default' })
-    expect(await backend.stats('box-1')).toEqual({ cpuPercent: 0, memoryMb: 0, diskMb: 0 })
+    expect(await backend.stats('box-1')).toEqual({ diskMb: 2048 })
+    expect(statFile).toHaveBeenCalledWith('D:/WSL/openbot-box-box-1/ext4.vhdx')
+    vhdxSize = 0
+    statFile.mockRejectedValueOnce(new Error('ENOENT'))
+    expect(await backend.stats('box-1')).toEqual({})
     await backend.teardown('box-1')
     expect(last(calls)).toEqual(['wsl', '--unregister', `${WSL_BOX_PREFIX}box-1`])
     await expect(backend.exec('box-1', { command: ['ls'] })).rejects.toMatchObject({ code: 'BOX_NOT_FOUND' })

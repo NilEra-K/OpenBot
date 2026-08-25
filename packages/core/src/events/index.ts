@@ -97,6 +97,27 @@ export interface BoxExecPayload {
   exitCode?: number
 }
 
+/** Box 资源统计（Step 6 周期遥测）：字段可选=后端不可测（缺席不造假；采样时刻即 envelope.at）。
+ *  最新值语义——消费方每盒留最新，重放过期遥测幂等无害 */
+export interface BoxStatsPayload {
+  boxId: string
+  /** CPU 百分比 [0,100]；缺席=不可测 */
+  cpuPercent?: number
+  /** 内存 MB；缺席=不可测 */
+  memoryMb?: number
+  /** 磁盘 MB；缺席=不可测 */
+  diskMb?: number
+}
+
+/** 宿主资源压力（Step 6）：派生量归内核——判定在 StatsService，只在状态转移时发（ok→warn→critical→ok）。
+ *  纯事实无文案（「错误文案归渲染层」的同款纪律）；重连重放幂等（投影收敛到最新态） */
+export interface SystemPressurePayload {
+  dimension: 'disk'
+  level: 'ok' | 'warn' | 'critical'
+  freeBytes: number
+  totalBytes: number
+}
+
 export interface ApprovalRequestedPayload {
   approvalId: string
   runId: string
@@ -133,6 +154,8 @@ export interface KernelEventMap {
   'v1.message.a2a': MessageA2aPayload
   'v1.box.state': BoxStatePayload
   'v1.box.exec': BoxExecPayload
+  'v1.box.stats': BoxStatsPayload
+  'v1.system.pressure': SystemPressurePayload
   'v1.approval.requested': ApprovalRequestedPayload
   'v1.approval.resolved': ApprovalResolvedPayload
   'v1.system.roster': SystemRosterPayload

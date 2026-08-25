@@ -7,7 +7,7 @@
  * 命令输出字节直传（Linux 侧进程输出 UTF-8）；所有 Box 共享 vmmem（wsl --shutdown 全杀——全局地雷，UI 层告知）。
  */
 import { KernelError } from '@openbot/core'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import { runProcess, spawnShellProcess } from '../procexec/index.js'
 import type { ProcRunner, ShellSpawner } from '../procexec/index.js'
 import { BoxesErrorCodes } from '../types.js'
@@ -59,6 +59,8 @@ export interface WslBoxBackendOptions {
   nextBoxId?: () => BoxId
   /** Box 内默认工作目录（exec cwd 缺省值） */
   workdir?: string
+  /** vhdx 体积查询（stats 的磁盘真值；注入可测——替身套件零真实文件系统） */
+  statFile?: (path: string) => Promise<{ size: number }>
 }
 
 interface WslBox {
@@ -75,6 +77,7 @@ export class WslBoxBackend implements BoxBackend {
   readonly #snapshotDir: string
   readonly #run: ProcRunner
   readonly #spawnShell: ShellSpawner
+  readonly #statFile: (path: string) => Promise<{ size: number }>
   readonly #now: () => number
   readonly #nextBoxId: () => BoxId
   readonly #workdir: string
@@ -87,6 +90,7 @@ export class WslBoxBackend implements BoxBackend {
     this.#snapshotDir = options.snapshotDir ?? `${options.dir}/snapshots`
     this.#run = options.run ?? runProcess
     this.#spawnShell = options.spawnShell ?? spawnShellProcess
+    this.#statFile = options.statFile ?? stat
     this.#now = options.now ?? (() => 0)
     let counter = 0
     this.#nextBoxId = options.nextBoxId ?? (() => `box-${++counter}`)
@@ -227,11 +231,18 @@ export class WslBoxBackend implements BoxBackend {
     return snapshotId
   }
 
-  async stats(_boxId: BoxId): Promise<BoxStats> {
-    this.#require(_boxId)
-    // caps.resourceLimits=false 的诚实对偶：WSL 无按 Box 统计（全局 vmmem 共享），
-    // 如实报 0——不造假仪表（消费方按 caps 隐藏 UI）
-    return { cpuPercent: 0, memoryMb: 0, diskMb: 0 }
+  async stats(boxId: BoxId): Promise<BoxStats> {
+    const box = this.#require(boxId)
+    // 发行版即 Box：无 per-distro CPU/内存 API（发行版共享 vmmem，caps 如实不声明）——
+    // 唯一可测真值是磁盘：--import 目标目录的 ext4.vhdx 体积即该 Box 磁盘占用（宿主侧 stat，零 Box 内开销）。
+    // 字段缺席=不可测（BoxStats 可选化语义），UI 按在场字段渲染不造假
+    try {
+      const st = await this.#statFile(`${box.dir}/ext4.vhdx`)
+      return { diskMb: Math.round(st.size / (1024 * 1024)) }
+    } catch {
+      // vhdx 尚未生成/不可读（快照恢复中等）：如实空报告
+      return {}
+    }
   }
 
   async teardown(boxId: BoxId): Promise<void> {

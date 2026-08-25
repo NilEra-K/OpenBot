@@ -192,6 +192,10 @@ export const useKernelStore = defineStore('kernel', {
     defaultProvider: null as string | null,
     /** 沙箱后端装配事实（settings 视图呈现） */
     sandbox: null as SandboxStatus | null,
+    /** Box 资源统计（Step 6）：每盒最新值；字段缺席=后端不可测（WSL 只有磁盘） */
+    boxStats: {} as Record<string, { cpuPercent?: number; memoryMb?: number; diskMb?: number; at: number }>,
+    /** 宿主磁盘压力（Step 6）：null=无压力/未知；warn/critical 档事实（文案归视图层） */
+    pressure: null as { level: 'warn' | 'critical'; freeBytes: number; totalBytes: number } | null,
     /** run 实况流块（ctx 面板；容量有限——只保留最近） */
     streams: [] as LiveStreamBlock[],
     lastSeq: 0,
@@ -528,6 +532,18 @@ export const useKernelStore = defineStore('kernel', {
           const idx = this.boxes.findIndex((b) => b.boxId === boxId)
           if (idx >= 0) this.boxes[idx] = { ...this.boxes[idx]!, state }
           else this.boxes.push({ boxId, image: '?', state, createdAt: event.at }) // 快照缺失时的兜底（box 卡补齐靠重启）
+          return
+        }
+        case 'v1.box.stats': {
+          // 最新值语义：每盒留最新（重放过期遥测幂等收敛）；字段缺席=后端不可测，如实保留缺席
+          const { boxId, ...fields } = event.payload
+          this.boxStats[boxId] = { ...fields, at: event.at }
+          return
+        }
+        case 'v1.system.pressure': {
+          // 压力投影：ok 归零（角标消退）；纯事实，文案组合归视图层
+          const { level, freeBytes, totalBytes } = event.payload
+          this.pressure = level === 'ok' ? null : { level, freeBytes, totalBytes }
           return
         }
         case 'v1.lifecycle.queued': {

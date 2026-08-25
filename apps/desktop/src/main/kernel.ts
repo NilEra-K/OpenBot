@@ -12,9 +12,9 @@
  */
 import { app, safeStorage } from 'electron'
 import { z } from 'zod'
-import { stat } from 'node:fs/promises'
+import { stat, statfs } from 'node:fs/promises'
 import { assembleKernel, chooseBackend } from '@openbot/coordinator'
-import type { AssembledKernel, ChooseResult } from '@openbot/coordinator'
+import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinator'
 import { startGateway } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import { NodeFs, SettingsStore } from '@openbot/state'
@@ -126,6 +126,17 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/** 宿主磁盘探针（Step 6 压力判定的事实源）：statfs userData 所在卷——
+ *  Box 的 vhdx、transcript、快照全落此卷，它的余量即系统的「 sandbox 预算」 */
+const hostDiskProbe = (path: string) => async (): Promise<DiskFact | null> => {
+  try {
+    const st = await statfs(path)
+    return { freeBytes: st.bavail * st.bsize, totalBytes: st.blocks * st.bsize }
+  } catch {
+    return null // 测不到不发事件（压力判定保持上一档——如实）
+  }
+}
+
 /** 装配桌面内核（app ready 后调用；safeStorage 依赖 ready 状态） */
 export async function assembleDesktop(): Promise<DesktopKernel> {
   // NodeFs 路径约定 posix 风格（Windows 同样接受 '/'）
@@ -173,6 +184,17 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       return approvalGate
     },
     systemPrompt: '你是 OpenBot 管家——本机多 agent 社交控制台的默认对话者，用简洁中文回复。',
+    // Step 6：宿主磁盘探针（fs.statfs userData 所在卷）+ 压力阈值。
+    // env OPENBOT_DISK_WARN_BYTES 覆盖 warn 阈值（E2E 确定性驱动压力角标；critical 取其半→可直达 critical 档）
+    stats: (() => {
+      const warn = process.env.OPENBOT_DISK_WARN_BYTES
+      return {
+        diskProbe: hostDiskProbe(userDataRoot),
+        ...(warn !== undefined && Number.isFinite(Number(warn))
+          ? { warnBytes: Number(warn), criticalBytes: Math.floor(Number(warn) / 2) }
+          : {}),
+      }
+    })(),
   })
 
   /** settings 变更后热切换 provider（明文 key 只在本进程内存中存在） */
@@ -268,6 +290,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   })
   const replayed = await approvalGate.replayPending()
   kernel.startWatchdog()
+  kernel.statsService.start() // Box 遥测 + 宿主磁盘压力轮询（Step 6）
 
   const sandboxNote =
     chosen.backendId === chosen.wanted || chosen.wanted === 'mock'
@@ -286,6 +309,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     sandbox: sandboxStatus,
     async dispose() {
       kernel.shellService.dispose() // 杀全部 PTY 会话（不留后台 shell）
+      kernel.statsService.stop()
       kernel.stopWatchdog()
       await gateway.close()
     },

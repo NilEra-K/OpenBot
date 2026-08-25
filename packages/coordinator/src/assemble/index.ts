@@ -17,6 +17,8 @@ import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
 import { StreamHub } from '../stream-hub/index.js'
 import { ShellService } from '../shell-service/index.js'
+import { StatsService } from '../stats-service/index.js'
+import type { DiskProbe } from '../stats-service/index.js'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 
@@ -43,6 +45,12 @@ export interface AssembleOptions {
    * 默认每次启动随机；确定性冒烟（CLI）注入固定值。
    */
   bootPrefix?: string
+  /** StatsService 配置（Step 6）：宿主磁盘探针与压力阈值（探针由装配方注入——测量属壳） */
+  stats?: {
+    diskProbe?: DiskProbe
+    warnBytes?: number
+    criticalBytes?: number
+  }
 }
 
 export interface AgentRegistration {
@@ -71,6 +79,8 @@ export interface AssembledKernel {
   readonly streamHub: StreamHub
   /** 交互式 shell 会话（PTY）管理与流分发（gateway 回调与 streamHub 并联 attach） */
   readonly shellService: ShellService
+  /** Box 统计轮询与宿主磁盘压力判定（Step 6；生产经 startStats 定时驱动） */
+  readonly statsService: StatsService
   readonly schedulers: ReadonlyMap<string, AgentScheduler>
   /** 注册 agent：名册 + 调度器 + 专属 Box + turn 引擎接线 */
   addAgent(registration: AgentRegistration): Promise<void>
@@ -138,6 +148,16 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const streamHub = new StreamHub()
   // 交互式 shell（PTY）：用户亲手操作，不经 run/审批/预算——与 agent exec 路线完全分离
   const shellService = new ShellService({ backend })
+  // Box 统计轮询与宿主磁盘压力判定（Step 6）：盒清单读装配层映射——零子进程开销；
+  // backend.list 的跨重启真相职责不变（两者分工：在册盒遥测 vs 全盘发现）
+  const statsService = new StatsService({
+    backend,
+    bus,
+    boxIds: () => [...boxes.values()],
+    ...(options.stats?.diskProbe !== undefined ? { diskProbe: options.stats.diskProbe } : {}),
+    ...(options.stats?.warnBytes !== undefined ? { warnBytes: options.stats.warnBytes } : {}),
+    ...(options.stats?.criticalBytes !== undefined ? { criticalBytes: options.stats.criticalBytes } : {}),
+  })
   const onStream = (event: Parameters<StreamHub['handle']>[0]): void => streamHub.handle(event)
   const tools = new ToolRegistry()
     .register(execTool({ backend, bus, onStream, transcript }))
@@ -262,6 +282,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     messaging,
     streamHub,
     shellService,
+    statsService,
     schedulers,
     async addAgent(registration) {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
