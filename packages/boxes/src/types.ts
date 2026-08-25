@@ -11,10 +11,24 @@ export const BoxesErrorCodes = {
   BOX_FS_WRITE_FAILED: 'BOX_FS_WRITE_FAILED',
   /** Box 内命令被外部中止（run 取消/抢占传导——用户打断工作中的 agent） */
   BOX_EXEC_ABORTED: 'BOX_EXEC_ABORTED',
+  /** 后端不支持休眠（caps.suspendable=false——UI 按 caps 不渲染按钮，此码是协议层兜底） */
+  BOX_NOT_SUSPENDABLE: 'BOX_NOT_SUSPENDABLE',
+  /** 后端不支持该可选操作（快照链/回滚等——caps 门禁的协议层兜底） */
+  BOX_UNSUPPORTED: 'BOX_UNSUPPORTED',
 } as const
 
 export type BoxId = string
 export type SnapshotId = string
+
+/** 快照档案（P4 Step 9）：快照是导出 tar（wsl 命名约定 snap-N.tar.gz）——无 Box 归属事实，
+ *  恢复进哪个 Box 由 restore(boxId, snapshotId) 参数决定；字段缺席=后端不可知（如实） */
+export interface SnapshotInfo {
+  snapshotId: SnapshotId
+  /** 快照文件字节数；缺席=不可知（mock 无文件系统） */
+  sizeBytes?: number
+  /** 创建时间（epoch ms）；缺席=不可知 */
+  createdAt?: number
+}
 
 /** Box 实例三态（与 v1.box.state 事件同词表） */
 export type BoxInstanceState = 'active' | 'sleeping' | 'snapshot'
@@ -28,6 +42,8 @@ export interface BoxCaps {
   isolation: 'low' | 'medium' | 'high'
   /** 交互式 shell（PTY）——操作台终端远程控制的能力声明（caps.interactive=true 必须实现 openShell） */
   interactive: boolean
+  /** 休眠/唤醒（P4 Step 8）——caps.suspendable=true 必须实现 pause/resume */
+  suspendable: boolean
 }
 
 export interface BoxSpec {
@@ -109,4 +125,12 @@ export interface BoxBackend {
   list(): Promise<BoxInstance[]>
   /** 交互式 shell（可选实现；caps.interactive=true 时必须存在——caps 与接口永不背离） */
   openShell?(box: BoxId, opts?: ShellOpenOptions): Promise<ShellSession>
+  /** 休眠（可选实现；caps.suspendable=true 时必须存在）——释放 CPU/内存，rootfs 留在磁盘 */
+  pause?(box: BoxId): Promise<void>
+  /** 唤醒（可选实现）：轻量触发发行版自启；休眠中的 exec 也会自然唤醒（同一机制） */
+  resume?(box: BoxId): Promise<void>
+  /** 快照链清单（可选实现；caps.snapshot=true 时必须存在）：全局快照目录扫描（最近在前由调用方排序） */
+  listSnapshots?(): Promise<SnapshotInfo[]>
+  /** 回滚（可选实现；caps.snapshot=true 时必须存在）：**破坏性**——Box 当前内容被快照内容替换 */
+  restore?(box: BoxId, snapshotId: SnapshotId): Promise<void>
 }

@@ -6,7 +6,6 @@
 import { computed, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { RunCard } from '../stores/kernel'
-import { agentColor } from '../lib/agent-color'
 
 const kernel = useKernelStore()
 
@@ -109,7 +108,7 @@ const successRate = computed(() => {
         <div class="lane-note">{{ l.note }}</div>
         <div v-for="run in byLane(l.lane)" :key="run.runId" class="run" :class="{ 'is-active': run.state === 'running', 'is-done': run.state === 'succeeded', 'is-zombie': run.state === 'escaped' || run.state === 'reaped' }">
           <div class="run-top">
-            <span class="stat-dot" :style="{ background: agentColor(run.agentId) }"></span>
+            <span class="stat-dot" :style="{ background: kernel.colorOf(run.agentId) }"></span>
             <span class="run-agent">{{ run.agentId }}</span>
             <span class="chip" :class="stateChip(run).cls">{{ stateChip(run).label }}</span>
             <button

@@ -139,6 +139,72 @@ describe('WslBoxBackend（脚本化替身）', () => {
     expect(last(calls)).toEqual(['wsl', '--export', `${WSL_BOX_PREFIX}box-1`, 'D:/WSL/snapshots/snap-1.tar.gz'])
   })
 
+  it('休眠/唤醒（P4 Step 8）：--terminate 单发行版 / exec true 自启；list 反映 sleeping；exec 自然唤醒', async () => {
+    const { run, calls } = scripted((spec) => {
+      if (spec.command.includes('--list')) return { ...OK, stdout: `${WSL_BOX_PREFIX}box-1\r\n` }
+      return OK
+    })
+    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run })
+    await backend.create({ image: 'default' })
+    expect(backend.caps().suspendable).toBe(true)
+
+    await backend.pause('box-1')
+    expect(last(calls)).toEqual(['wsl', '--terminate', `${WSL_BOX_PREFIX}box-1`])
+    expect((await backend.list()).find((b) => b.boxId === 'box-1')?.state).toBe('sleeping')
+
+    await backend.resume('box-1')
+    expect(last(calls)).toEqual(['wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--', 'true'])
+    expect((await backend.list()).find((b) => b.boxId === 'box-1')?.state).toBe('active')
+
+    // 休眠中的 exec 自然唤醒（发行版自启）——标志随真实状态清除
+    await backend.pause('box-1')
+    await backend.exec('box-1', { command: ['ls'] })
+    expect((await backend.list()).find((b) => b.boxId === 'box-1')?.state).toBe('active')
+  })
+
+  it('休眠/唤醒失败：exit 非 0 抛稳定 code（stderr 进 message）', async () => {
+    // create 相关命令成功，休眠（--terminate）/唤醒（exec true）失败——按命令分流
+    const { run } = scripted((spec) => {
+      if (spec.command.includes('--terminate') || spec.command.at(-1) === 'true') {
+        return { ...OK, exitCode: 1, stderr: '拒绝访问' }
+      }
+      return OK
+    })
+    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run })
+    await backend.create({ image: 'default' })
+    await expect(backend.pause('box-1')).rejects.toMatchObject({ code: 'BOX_PAUSE_FAILED' })
+    await expect(backend.resume('box-1')).rejects.toMatchObject({ code: 'BOX_RESUME_FAILED' })
+  })
+
+  it('快照链与回滚（P4 Step 9）：扫 snapshotDir 的 snap-N.tar.gz（N 降序+大小）；restore=unregister+import', async () => {
+    const files = new Map<string, number>([
+      ['snap-1.tar.gz', 1024 * 1024 * 100],
+      ['snap-2.tar.gz', 1024 * 1024 * 300],
+      ['unrelated.txt', 5],
+    ])
+    const { run, calls } = scripted(() => OK)
+    const backend = new WslBoxBackend({
+      rootfs: 'C:/r.tar.gz',
+      dir: 'D:/WSL',
+      run,
+      listDir: async () => [...files.keys()],
+      statFile: async (p) => ({ size: files.get(p.split('/').pop()!) ?? 0 }),
+    })
+    await backend.create({ image: 'default' })
+
+    const chain = await backend.listSnapshots()
+    expect(chain).toEqual([
+      { snapshotId: 'snap-2', sizeBytes: 1024 * 1024 * 300 },
+      { snapshotId: 'snap-1', sizeBytes: 1024 * 1024 * 100 },
+    ])
+
+    await backend.restore('box-1', 'snap-2')
+    expect(calls.at(-2)?.command).toEqual(['wsl', '--unregister', `${WSL_BOX_PREFIX}box-1`])
+    expect(last(calls)).toEqual([
+      'wsl', '--import', `${WSL_BOX_PREFIX}box-1`, `D:/WSL/${WSL_BOX_PREFIX}box-1`, 'D:/WSL/snapshots/snap-2.tar.gz', '--version', '2',
+    ])
+  })
+
   it('stats 只有磁盘真值（vhdx 体积，注入替身）；CPU/内存缺席=不可测；vhdx 缺失如实空报告；teardown 注销并除名', async () => {
     const { run, calls } = scripted(() => OK)
     const vhdxSize = 2048 * 1024 * 1024

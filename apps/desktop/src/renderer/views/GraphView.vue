@@ -8,7 +8,6 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
-import { agentColor } from '../lib/agent-color'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -198,7 +197,7 @@ const goTo = (agentId: string): void => {
             :cx="n.x"
             :cy="n.y"
             :r="n.r"
-            :style="{ fill: n.isUser ? 'var(--ink2)' : agentColor(n.id) }"
+            :style="{ fill: n.isUser ? 'var(--ink2)' : kernel.colorOf(n.id) }"
             filter="url(#gshadow)"
           ></circle>
           <text class="ginit" :x="n.x" :y="n.y + 4.5">{{ n.initial }}</text>
@@ -228,8 +227,8 @@ const goTo = (agentId: string): void => {
         <div v-if="ranking.length" class="side-sec">对话量排行</div>
         <div v-for="e in ranking" :key="e.key" class="rank-row">
           <span class="rank-dots">
-            <span class="lg-dot" :style="{ background: e.from === 'user' ? 'var(--ink2)' : agentColor(e.from) }"></span>
-            <span class="lg-dot" :style="{ background: e.to === 'user' ? 'var(--ink2)' : agentColor(e.to) }"></span>
+            <span class="lg-dot" :style="{ background: e.from === 'user' ? 'var(--ink2)' : kernel.colorOf(e.from) }"></span>
+            <span class="lg-dot" :style="{ background: e.to === 'user' ? 'var(--ink2)' : kernel.colorOf(e.to) }"></span>
           </span>
           <span class="rank-label">{{ labelOf(e.from) }} ↔ {{ labelOf(e.to) }}</span>
           <span class="rcnt mono">×{{ e.count }}</span>
@@ -243,9 +242,9 @@ const goTo = (agentId: string): void => {
           <span class="graph-title">关系详情</span>
         </div>
         <div class="detail-title">
-          <span :style="{ color: focusedEdge.from === 'user' ? 'var(--ink2)' : agentColor(focusedEdge.from) }">{{ labelOf(focusedEdge.from) }}</span>
+          <span :style="{ color: focusedEdge.from === 'user' ? 'var(--ink2)' : kernel.colorOf(focusedEdge.from) }">{{ labelOf(focusedEdge.from) }}</span>
           ↔
-          <span :style="{ color: focusedEdge.to === 'user' ? 'var(--ink2)' : agentColor(focusedEdge.to) }">{{ labelOf(focusedEdge.to) }}</span>
+          <span :style="{ color: focusedEdge.to === 'user' ? 'var(--ink2)' : kernel.colorOf(focusedEdge.to) }">{{ labelOf(focusedEdge.to) }}</span>
         </div>
         <div class="kv"><span class="k">累计消息</span><span class="v mono">×{{ focusedEdge.count }}</span></div>
         <div class="kv"><span class="k">边类型</span><span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ agent）' : '委派边（A2A）' }}</span></div>
@@ -261,7 +260,7 @@ const goTo = (agentId: string): void => {
           <span class="graph-title">节点详情</span>
         </div>
         <div class="detail-title">
-          <span class="lg-dot" :style="{ background: focus.key === 'user' ? 'var(--ink2)' : agentColor(focus.key) }"></span>
+          <span class="lg-dot" :style="{ background: focus.key === 'user' ? 'var(--ink2)' : kernel.colorOf(focus.key) }"></span>
           {{ labelOf(focus.key) }}
         </div>
         <div v-if="focus.key === 'user'" class="kv"><span class="k">身份</span><span class="v">本机主人 · 所有对话的起点</span></div>
@@ -276,7 +275,7 @@ const goTo = (agentId: string): void => {
           class="rank-row clickable"
           @click="focus = { type: 'edge', key: e.key }"
         >
-          <span class="lg-dot" :style="{ background: (e.from === focus.key ? e.to : e.from) === 'user' ? 'var(--ink2)' : agentColor(e.from === focus.key ? e.to : e.from) }"></span>
+          <span class="lg-dot" :style="{ background: (e.from === focus.key ? e.to : e.from) === 'user' ? 'var(--ink2)' : kernel.colorOf(e.from === focus.key ? e.to : e.from) }"></span>
           <span class="rank-label">{{ labelOf(e.from === focus.key ? e.to : e.from) }}</span>
           <span class="rcnt mono">×{{ e.count }}</span>
         </div>

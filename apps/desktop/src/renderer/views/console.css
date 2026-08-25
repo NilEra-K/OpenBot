@@ -8,6 +8,20 @@
   min-height: 0;
 }
 
+/* ctx 面板收起（P4 Step 6，原型 .console.no-ctx 同款）：三栏 ⇄ 两栏——stream 拉满、分界线随栏消失；
+   CtxPanel 是独立 scoped 组件，须经 :deep 命中其根元素 */
+.console.no-ctx {
+  grid-template-columns: 246px 1fr;
+}
+
+.console.no-ctx :deep(.ctx) {
+  display: none;
+}
+
+.console.no-ctx .streamcol {
+  border-right: none;
+}
+
 /* ---- 中栏：头 + 流 + 输入 ---- */
 .streamcol {
   display: flex;
@@ -29,6 +43,41 @@
 
 .sh-text {
   min-width: 0;
+}
+
+/* 操作区（P4 Step 6）：右对齐图标按钮组（原型 .sh-actions） */
+.sh-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+
+.sh-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+}
+
+.sh-icon:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.sh-icon[aria-pressed='true'] {
+  color: var(--ink2);
+}
+
+/* 档案入口的激活态（ctx 处于 Settings 模式） */
+.sh-icon.is-on {
+  background: var(--accent-weak);
+  color: var(--accent);
 }
 
 .sh-name {

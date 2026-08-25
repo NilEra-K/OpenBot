@@ -9,7 +9,7 @@ import { AgentStore, IdempotencyLedger, InMemoryFs, TranscriptStore } from '@ope
 import type { FsAdapter } from '@openbot/state'
 import { MockChatProvider } from '@openbot/llm'
 import type { ChatProvider } from '@openbot/llm'
-import { BoxRegistry, MockBoxBackend } from '@openbot/boxes'
+import { BoxRegistry, BoxesErrorCodes, MockBoxBackend } from '@openbot/boxes'
 import type { BoxBackend } from '@openbot/boxes'
 import { A2aService } from '@openbot/messaging'
 import { AutoApprovalGate, execTool, gated, hostFetchTool, sendMessageTool, ToolRegistry, TurnRunner } from '@openbot/runner'
@@ -56,6 +56,8 @@ export interface AssembleOptions {
 export interface AgentRegistration {
   agentId: string
   name?: string
+  /** 身份色（hex，P4 Step 5 档案事实；缺席由渲染端回退哈希派生） */
+  color?: string
   /** 该 agent 的模型客户端；未提供时用空脚本 mock（首个 turn 即显式报脚本耗尽） */
   llm?: ChatProvider
   /** 注册后立即任命为管家（走标准任命事务：他人在位时如实拒绝） */
@@ -121,8 +123,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const messaging = new A2aService({
     bus,
     now,
-    nextMessageId,
-    transcript,
+    nextMessageId,    transcript,
     ledger,
     schedulerOf: (agentId) => {
       const scheduler = schedulers.get(agentId)
@@ -177,6 +178,15 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   })
   executeRef.current = runner.execute
 
+  /** 休眠/唤醒门禁（P4 Step 8）：caps.suspendable=false 如实拒绝（协议层兜底——UI 按 caps 不渲染按钮） */
+  const suspendGate = async (op: 'pause' | 'resume', boxId: string): Promise<void> => {
+    const impl = op === 'pause' ? backend.pause : backend.resume
+    if (!backend.caps().suspendable || impl === undefined) {
+      throw new KernelError(BoxesErrorCodes.BOX_NOT_SUSPENDABLE, `后端 ${backend.id} 不支持休眠/唤醒`)
+    }
+    await impl.call(backend, boxId)
+  }
+
   // ---- 命令目录（P1）：协议纯度——只有领域命令，无 UI 指令 ----
   transport
     .register('v1.system.ping', async () => ({ pong: true }))
@@ -216,6 +226,38 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       const snapshotId = await backend.snapshot(boxId)
       return { boxId, snapshotId }
     })
+    // ---- 休眠/唤醒（P4 Step 8）：状态转移复用既有 v1.box.state 事件族（零新事件）——
+    //      UI 的 Box 卡与 ctx 屏灰化都消费同一事件，命令面只做 caps 门禁与事实下发
+    .register('v1.boxes.pause', async (payload) => {
+      const { boxId } = boxIdSchema.parse(payload)
+      await suspendGate('pause', boxId)
+      bus.emit('v1.box.state', { boxId, state: 'sleeping' })
+      return { boxId, state: 'sleeping' as const }
+    }, boxIdSchema)
+    .register('v1.boxes.resume', async (payload) => {
+      const { boxId } = boxIdSchema.parse(payload)
+      await suspendGate('resume', boxId)
+      bus.emit('v1.box.state', { boxId, state: 'active' })
+      return { boxId, state: 'active' as const }
+    }, boxIdSchema)
+    // ---- 快照链与回滚（P4 Step 9）：restore 是快照能力的延伸（caps.snapshot 门禁）；
+    //      状态转移复用 v1.box.state（restoring 复用 sleeping 档=不可用，成功后 active）
+    .register('v1.boxes.listSnapshots', async () => {
+      if (backend.listSnapshots === undefined) {
+        throw new KernelError(BoxesErrorCodes.BOX_UNSUPPORTED, `后端 ${backend.id} 不支持快照链`)
+      }
+      return backend.listSnapshots()
+    })
+    .register('v1.boxes.restore', async (payload) => {
+      const { boxId, snapshotId } = restoreSchema.parse(payload)
+      if (backend.restore === undefined || !backend.caps().snapshot) {
+        throw new KernelError(BoxesErrorCodes.BOX_UNSUPPORTED, `后端 ${backend.id} 不支持回滚`)
+      }
+      bus.emit('v1.box.state', { boxId, state: 'sleeping' }) // 回滚中不可用（sleeping 档复用）
+      await backend.restore(boxId, snapshotId)
+      bus.emit('v1.box.state', { boxId, state: 'active' })
+      return { boxId, snapshotId, state: 'active' as const }
+    }, restoreSchema)
     // ---- 交互式 shell（PTY，plan-p3 Step 10）：键入走命令面（每键几字节），输出走 WS /stream ----
     .register(
       'v1.boxes.shellOpen',
@@ -288,7 +330,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
       const registered = (await agentStore.list()).some((a) => a.agentId === registration.agentId)
       if (!registered) {
-        await agentStore.register(registration.agentId, registration.name)
+        await agentStore.register(registration.agentId, registration.name, registration.color)
       }
       llms.set(registration.agentId, registration.llm ?? new MockChatProvider({ steps: [] }))
       const boxId = await backend.create({ image: 'default' })
@@ -360,3 +402,5 @@ const shellWriteSchema = z.object({
 })
 const shellIdSchema = z.object({ shellId: z.string().min(1) })
 const schedulerCancelSchema = z.object({ agentId: z.string().min(1), runId: z.string().min(1) })
+const boxIdSchema = z.object({ boxId: z.string().min(1) })
+const restoreSchema = z.object({ boxId: z.string().min(1), snapshotId: z.string().min(1) })

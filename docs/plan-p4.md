@@ -66,25 +66,70 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
     [一-龥A-Za-z0-9] 即命中」（中文标点后命中、字母数字前不命中防邮箱 a@b.com）；E2E 七断言：
     弹菜单双名册（档案名/缺席回退 id）→ 前缀过滤 → Enter 补全（含尾随空格不重复 @）→ Esc/失焦收起 →
     路由跳转 sh-name → 用户消息 chip（mentionify 路径）→ agent 回复 chip（md inline 路径）
-- [ ] 5. **新建 agent 全链路**：命令面 `v1.system.registerAgent`（zod：name/role/color；注册事实经既有 `v1.system.roster`
+- [x] 5. **新建 agent 全链路**：命令面 `v1.system.registerAgent`（zod：name/role/color；注册事实经既有 `v1.system.roster`
   快照事件下发，零新事件族）→ 装配 `addAgent` 暴露 + agent-store 扩 `color?` 字段（读取端兼容：缺席回退哈希派生色，
   版本号+兼容读取，不做迁移）→ 名册「+ 新建 agent」入口 + 向导 UI（身份/身份色 → 角色分段 → 复核；模型/沙箱项按
   裁定 F 如实标注「继承全局」不放假选项）→ 身份色从哈希派生升级为档案事实（头像/署名/图谱节点同源生效）
-- [ ] 6. **名册与 stream-head**：未读徽标（**renderer 会话-local 计数**——非读过语义属呈现关注点，不进内核；
+  - 实施（2026-08-25）：agent-store `color?`（register 第三参；老 profile.json 无 color 兼容单测）+ assemble
+    `AgentRegistration.color?` 透传 + **main 侧命令面**（register 支持 zod schema——settings/approval 同款先例）：
+    `v1.system.registerAgent`（name 去空白 1-24 字 / color hex6 / role steward|worker 默认 worker）；agentId 服务端
+    生成 `agent-N`（名册序号递增）；steward 前置检查（在位直接拒绝 STATE_STEWARD_EXISTS——不创建半成品；
+    任命事务由 addAgent 兜底不变量）；llm 共享 SwitchableChatProvider（主力切换对全部 agent 生效，与启动装配同语义）
+  - renderer：RosterEntry.color? + refreshRoster 抽取（boot 与注册共用——roster 事件只带 agentId/role，档案字段以
+    快照为准）+ registerAgent action + **colorOf 统一取色 getter**（档案优先回退 lib 哈希——ConsoleView/Roster/
+    Tasks/Graph/Boxes/MentionMenu 六处调用点同源迁移；MentionItem.color 由父级带入）；AgentWizard.vue 三步
+    （身份：名字/角色分段四选一映射内核二值/身份色 swatches 六色 → 模型与沙箱：裁定 B/F 如实说明 → 复核 kv），
+    成功 toast+跳新会话、失败就地错误（管家在位文案分流）；RosterPanel「＋ 新建 agent」虚线入口 + CommandPalette
+    动作组接入（Step 3 预留位兑现）；单测 3 例（color 持久化/老档案兼容/角色变更保留色）+ E2E 全链 8 断言
+    （三步向导/toast/名册档案色 rgb 断言/@提及中文前缀收录/Boxes 1→2 注册即建）
+- [x] 6. **名册与 stream-head**：未读徽标（**renderer 会话-local 计数**——非读过语义属呈现关注点，不进内核；
   切换会话清零）+ ctx 面板收起开关（三栏 ⇄ 两栏，原型 `.console.no-ctx` 语义）+ stream-head 操作区
   （通知/会话信息图标一期裁剪或占位——**不放假按钮**，实现时按真实价值定）
-- [ ] 7. **ctx Settings 档案模式**：ctx-top（返回 + Settings 标题栏，原型 48px sticky 语义）+ 档案 kv
+  - 实施（2026-08-25）：未读计数归 ui store（`unread` + bump/clear——App 层 watch messages 长度差取新增段，
+    agent 回复且 from≠当前会话 +1；activeAgentId watch 清零——跨视图派单/relay 点击/名册点击统一路径）；
+    ctx 收起 = ui.ctxCollapsed + `.console.no-ctx`（grid 246px 1fr + `:deep(.ctx)` 隐藏 + streamcol 去分界线——
+    CtxPanel 独立 scoped 须经 :deep 命中）；stream-head 操作区落 ctxToggle（原型 panelcol/panelexp 图标 +
+    aria-pressed）；**通知/会话信息图标无真实动作源——按计划裁剪不放假**（chatSettings 随 Step 7）；
+    E2E：收起/展开 class+可见性+aria 三断言 + worker1 回复徽标 +1 → 点击清零 → sh-name 切换
+- [x] 7. **ctx Settings 档案模式**：ctx-top（返回 + Settings 标题栏，原型 48px sticky 语义）+ 档案 kv
   （角色 / 模型=继承全局主力·裁定 F / Box 归属 / 权限现状=Manual 闸门如实）+ 协作对象 edges（数据已有：kernel.edges，
   可点击跳会话）+ 记忆/自动化如实空缺态（「数据源属后续版本」——不放假条目）
-- [ ] 8. **Box 休眠/唤醒**：`BoxBackend` 增可选 `pause()/resume()`（wsl：`--terminate` 单发行版休眠——vmmem 共享但
+  - 实施（2026-08-25）：ui.ctxSettings（会话局部态——activeAgentId watch 重置回屏幕）+ stream-head 档案按钮
+    （原型 toggleCtxSettings 同款：面板收起时点击 = 展开并直接进档案；is-on 激活态）+ CtxPanel 双模式渲染
+    （ctx-top 48px sticky 与 stream-head 底边线连成一条——原型同款）+ 档案 kv 四行全真值（模型=继承全局主力
+    （provider 名）/ Box 归属=roster.boxId / 权限现状=新命令 `v1.approval.mode`（桌面装配 Manual 事实）——
+    唯一内核改动是这条只读命令）；协作对象 = edges 里 agent↔agent 边聚合（user 端不属协作叙事），点击跳会话；
+    记忆/自动化空缺态如实标注「数据源属后续版本」；E2E 十断言（kv 四行/协作行跳会话+模式重置/回边/返回/空缺态）
+    ——实测坑：toContainText 正则锚定 ^$ 对整行文本（k+v 连写）不命中，去锚定改 /box-\d+/
+- [x] 8. **Box 休眠/唤醒**：`BoxBackend` 增可选 `pause()/resume()`（wsl：`--terminate` 单发行版休眠——vmmem 共享但
   发行版独立，`--shutdown` 全杀地雷不碰；resume=轻量 exec `true` 触发发行版自启）+ caps 增 `suspendable` +
   `v1.boxes.pause/resume` 命令（zod）+ **状态转移复用既有 `v1.box.state` 事件族（零新事件）** + mock 对称 +
   boxes 卡按钮（caps 驱动；原型的「重启」= 休眠+唤醒组合覆盖，不单设按钮）+ ctx 屏 `is-asleep` 灰化
   （解锁 P3-ctx-ops-align 记档的「等信号源」项）
-- [ ] 9. **快照链与回滚**：`BoxBackend` 增可选 `listSnapshots()`（wsl：扫 snapshotDir 的 `snap-N.tar.gz`——已有命名
+  - 实施（2026-08-25）：types 增 `caps.suspendable` + 可选 `pause/resume`（caps 与接口永不背离）+ 新码
+    `BOX_NOT_SUSPENDABLE`（命令面协议层兜底——UI 按 caps 不渲染按钮）；wsl：`--terminate` 单发行版 / resume=
+    `wsl -d <name> -- true` 自启 / **休眠中的 exec 自然唤醒（exec 成功即清休眠标志——与显式 resume 同机制）** /
+    list() 叠加内存休眠态（重启后 create 拉起，语义自洽）；mock 状态机对称（sleeping/active）；
+    assemble `v1.boxes.pause/resume`（boxId zod + suspendGate 门禁 + `v1.box.state` 事件下发——零新事件族）；
+    BoxesView 卡按钮（caps.suspendable 驱动、sleeping↔active 文案翻转、toast 反馈）+ ctx 屏 `is-asleep`
+    灰化 + cs-bar「休眠中」+ 空屏文案（rootfs 在磁盘随时可唤醒）；单测 4 例（wsl argv/自然唤醒/失败码、
+    mock 状态机、命令面事件+门禁）；E2E 全闭环（chip 状态机/toast/ctx 同源灰化与恢复）
+  - 实测坑：CtxPanel 加 `is-asleep` class 时留下重复 `:class` 属性——vite 构建失败但 tail -1 只见 warning
+    尾行、E2E 一直跑旧 dist 产物（按钮「凭空消失」）；排查路径= grep dist 产物找 suspendable 零命中。
+    **教训：E2E 排查先确认构建真成功（grep 关键标识符进产物），别信 exit 前 pipe 的 tail**
+- [x] 9. **快照链与回滚**：`BoxBackend` 增可选 `listSnapshots()`（wsl：扫 snapshotDir 的 `snap-N.tar.gz`——已有命名
   约定，state 零新增）+ 可选 `restore(boxId, snapshotId)`（wsl：`--unregister` + `--import` 快照 tar，**破坏性**）+
   `v1.boxes.listSnapshots/restore` 命令 + UI 快照链 chips（最近 N 个，点击查看）+ 回滚**二段确认**
   （「当前 Box 内容将被快照内容替换」警示）+ mock 对称；E2E 只走 mock 链路
+  - 实施（2026-08-25）：`SnapshotInfo { snapshotId, sizeBytes?, createdAt? }`（字段缺席=不可知，接口按最弱后端
+    设计——wsl 快照 tar 无 Box 归属事实，恢复进哪个 Box 由 restore 参数定）；wsl listSnapshots 扫目录正则匹配
+    + stat 大小（listDir/statFile 双注入可测）、restore=unregister+import（**失败窗口如实**：unregister 成功而
+    import 失败时发行版已注销，message 指引「快照 tar 在，可重试恢复」）；mock 对称做真——快照深拷贝 files、
+    回滚恢复快照点内容（单测断言「回滚到 snap-1 再前进到 snap-2」双向可走）；assemble `v1.boxes.listSnapshots/
+    restore`（restore 前后 v1.box.state 转移：sleeping 档复用=回滚中不可用 → active；新码 BOX_UNSUPPORTED 做
+    协议层兜底）；UI：快照链 chips（最近 5，全局事实就近回滚——卡上交互作用于该卡 Box）+ 点击展开详情
+    （时间/大小）+ 二段确认条（警示文案 + 确认/取消）；kernel store snapshots 链 + boot/快照/回滚三处刷新；
+    单测 3 例 + E2E 全闭环（链序/详情/取消路径/确认回滚 toast/链保持）
 - [ ] 10. **演示值清扫（不造假纪律修复）**：run-progress 去固定 64%（改 indeterminate 流光——run 无进度事实，如实）；
   boxes gauge 假刻度基数清除——**无上限事实的维度（内存/磁盘）只留数值+label 不画比例条**，CPU 百分比保留真比例条；
   仪表 warn 色档只对有真上限的维度生效（一期无——等资源限额后端）
@@ -156,7 +201,7 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 | 群聊 / 广播 / subagent（名册群组节/群聊流/sysnote/background lane 数据源） | 记档：P5+/backlog |
 | omnibox + Ctrl K 命令面板 | ✅ 已实现（Step 3） |
 | 状态栏 statusbar | ✅ 已实现（Step 1） |
-| 新建 agent 向导 | Step 5 |
+| 新建 agent 向导 | ✅ 已实现（Step 5） |
 | 新建 Box 侧滑 | 记档：裁定 B 不做（等 box-catalog/多后端） |
 | Toast 轻提示 | ✅ 已实现（Step 2） |
 
@@ -165,9 +210,9 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 | 差距项 | 处置 |
 |---|---|
 | @提及补全菜单 + 消息内 @高亮 | ✅ 已实现（Step 4；@全员→记档 P5，裁定 C） |
-| ctx Settings 档案模式（档案/记忆/协作/自动化） | Step 7（记忆/自动化=记档空缺态） |
-| stream-head 操作区（通知/会话信息/ctx 开关/设置入口） | Step 6 |
-| 名册未读徽标 | Step 6 |
+| ctx Settings 档案模式（档案/记忆/协作/自动化） | ✅ 已实现（Step 7；记忆/自动化=空缺态如实标注） |
+| stream-head 操作区（通知/会话信息/ctx 开关/设置入口） | ✅ 已实现（Step 6：ctx 开关 + 裁剪无源图标；设置入口随 Step 7） |
+| 名册未读徽标 | ✅ 已实现（Step 6） |
 | task 卡步骤轨迹 + 产物 diff chips + 已运行时长 | 记档：后置（内核无步骤/产物事实，不造假；随 P3 Step 9 再议） |
 | 群聊 sysnote / 自动化条 | 记档：P5+/backlog |
 | typing 三点占位 | 已对齐（v0.0.10） |
@@ -176,13 +221,13 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 
 | 差距项 | 处置 |
 |---|---|
-| 快照链 chips + 从快照回滚 | Step 9 |
-| 暂停/重启/唤醒（休眠语义） | Step 8（重启=休眠+唤醒组合） |
+| 快照链 chips + 从快照回滚 | ✅ 已实现（Step 9） |
+| 暂停/重启/唤醒（休眠语义） | ✅ 已实现（Step 8；重启=休眠+唤醒组合） |
 | per-Box 磁盘配额/资源限额 | 记档：随 OCI 后端与 box-catalog（与裁定 B 同族） |
 | Box 卡归属 chip「某某工作中」 | Step 12 |
 | box-claim 安全叙事条 | Step 12 |
 | 仪表形态（三列 meters/warn 色档） | Step 10（无真上限只留数值；色档等资源限额后端） |
-| ctx 屏 is-asleep 灰化 | Step 8（解锁 P3 记档项） |
+| ctx 屏 is-asleep 灰化 | ✅ 已实现（Step 8） |
 
 ### 四、图谱视图
 

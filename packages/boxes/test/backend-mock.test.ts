@@ -14,6 +14,44 @@ describe('MockBoxBackend', () => {
     expect(backend.calls).toEqual([{ boxId: 'box-1', spec: { command: ['node', '-v'] }, at: 5 }])
   })
 
+  it('休眠/唤醒状态机（P4 Step 8）：pause/resume 置位复位，list 反映 sleeping', async () => {
+    const backend = new MockBoxBackend()
+    const box = await backend.create({ image: 'default' })
+    expect(backend.caps().suspendable).toBe(true)
+    await backend.pause(box)
+    expect((await backend.list()).find((b) => b.boxId === box)?.state).toBe('sleeping')
+    await backend.resume(box)
+    expect((await backend.list()).find((b) => b.boxId === box)?.state).toBe('active')
+    // 不存在的 Box 按稳定 code 拒绝
+    await expect(backend.pause('box-none')).rejects.toMatchObject({ code: 'BOX_NOT_FOUND' })
+  })
+
+  it('快照链与回滚（P4 Step 9）：listSnapshots 最近在前；restore 恢复快照点内容', async () => {
+    let t = 100
+    const backend = new MockBoxBackend({ now: () => t })
+    const box = await backend.create({ image: 'default' })
+    await backend.fsWrite(box, '/work/a.txt', 'v1')
+    const snap1 = await backend.snapshot(box)
+    t = 200
+    await backend.fsWrite(box, '/work/a.txt', 'v2')
+    await backend.fsWrite(box, '/work/b.txt', 'new')
+    const snap2 = await backend.snapshot(box)
+
+    // 链：最近在前（snap-2, snap-1），带 createdAt
+    const chain = await backend.listSnapshots()
+    expect(chain.map((s) => s.snapshotId)).toEqual(['snap-2', 'snap-1'])
+    expect(chain[0]!.createdAt).toBe(200)
+
+    // 回滚到 snap-1：内容恢复到快照点（b.txt 消失、a.txt 回 v1）
+    await backend.restore(box, snap1)
+    expect(backend.filesOf(box)).toEqual({ '/work/a.txt': 'v1' })
+    // 回滚到 snap-2：再前进（快照是时间点，双向可走）
+    await backend.restore(box, snap2)
+    expect(backend.filesOf(box)).toEqual({ '/work/a.txt': 'v2', '/work/b.txt': 'new' })
+    // 不存在的快照按稳定 code 拒绝
+    await expect(backend.restore(box, 'snap-99')).rejects.toMatchObject({ code: 'BOX_NOT_FOUND' })
+  })
+
   it('自定义 exec 行为：模拟失败/输出可编排', async () => {
     const fail: ExecResult = { exitCode: 1, stdout: '', stderr: 'boom' }
     const backend = new MockBoxBackend({ exec: (_box, spec) => (spec.command[0] === 'bad' ? fail : { exitCode: 0, stdout: 'ok', stderr: '' }) })

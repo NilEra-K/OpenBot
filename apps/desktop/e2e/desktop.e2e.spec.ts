@@ -473,3 +473,268 @@ test('@提及（P4 Step 4）：补全菜单键盘流 + 单提及路由 + 消息�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → @提及收录 → 注册即建 Box', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-wizard-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— 名册入口 → 向导（三步）——
+    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    const card = page.locator('.wiz-card')
+    await expect(card).toBeVisible()
+    await page.locator('#wizName').fill('欧米伽')
+    // 角色默认研究员；身份色默认第 4 色（断言选中态——档案色断言依赖此值）
+    await expect(card.locator('.wiz-swatch.is-sel')).toHaveAttribute('aria-label', '身份色 #3987e5')
+    await card.getByRole('button', { name: '下一步' }).click()
+    // 步 2：模型与沙箱如实说明（裁定 B/F——不放假选项）
+    await expect(card.locator('.wiz-body')).toContainText('继承全局主力')
+    await expect(card.locator('.wiz-body')).toContainText('注册即建专属 Box')
+    await card.getByRole('button', { name: '下一步' }).click()
+    // 步 3：复核行（名字/角色/身份色/继承说明）
+    await expect(card.locator('.wiz-body')).toContainText('欧米伽')
+    await expect(card.locator('.wiz-body')).toContainText('研究员')
+    await card.getByRole('button', { name: '创建 agent' }).click()
+
+    // —— 创建收敛：toast + 向导关闭 + 跳新会话（sh-name 切换）——
+    await expect(page.locator('.toast', { hasText: '欧米伽」已创建' })).toBeVisible({ timeout: 15_000 })
+    await expect(card).toHaveCount(0)
+    await expect(page.locator('.sh-name')).toHaveText('欧米伽')
+
+    // 名册出现新成员；头像底色 = 档案色（#3987e5 → rgb 序列化）
+    const item = page.locator('.roster-item', { hasText: '欧米伽' })
+    await expect(item).toBeVisible()
+    await expect(item.locator('.avatar')).toHaveAttribute('style', expect.stringContaining('rgb(57, 135, 229)'))
+
+    // @提及菜单收录新成员（中文前缀过滤命中）
+    const input = page.locator('.composer-box input')
+    await input.fill('@欧')
+    await expect(page.locator('.mention-menu .mm-name')).toHaveText('@欧米伽')
+
+    // 注册即建专属 Box（裁定 B 语义）：Boxes 视图 1 → 2
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    await expect(page.locator('.boxcard')).toHaveCount(2, { timeout: 15_000 })
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('名册与 stream-head（P4 Step 6）：ctx 面板收起两栏 ⇄ 三栏 + 未读徽标计数清零', async () => {
+  // steward 派发 worker1 → worker1 回文本：在 steward 会话产生 worker1 的未读
+  const mock = await startMockOpenAi([
+    { match: (l) => l.role === 'user' && !l.content.startsWith('[A2A'), toolCalls: [{ id: 'c1', name: 'send_message', args: { toAgentId: 'worker1', text: '报数' } }] },
+    { match: (l) => l.role === 'user' && l.content.startsWith('[A2A'), text: 'worker1 就位' },
+    { match: (_l, t) => t === 'send_message', text: '已收到' },
+  ])
+
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-roster-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_EXTRA_AGENTS: 'worker1',
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // —— ctx 收起（三栏 ⇄ 两栏；aria-pressed 语义随状态翻转） ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    const toggle = page.locator('.sh-icon[title="收起上下文面板"]')
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('.ctx')).toBeVisible()
+    await toggle.click()
+    await expect(page.locator('.console')).toHaveClass(/no-ctx/)
+    await expect(page.locator('.ctx')).toBeHidden()
+    await expect(page.locator('.sh-icon[title="展开上下文面板"]')).toHaveAttribute('aria-pressed', 'false')
+    await page.locator('.sh-icon[title="展开上下文面板"]').click()
+    await expect(page.locator('.ctx')).toBeVisible()
+
+    // —— 未读徽标：steward 会话内 worker1 回复到达 → 名册 +1 → 点击进入清零 ——
+    await page.locator('.composer-box input').fill('叫 worker1 报数')
+    await page.locator('.composer-box input').press('Enter')
+    const worker1Badge = page.locator('.roster-item', { hasText: 'worker1' }).locator('.ri-badge')
+    await expect(worker1Badge).toHaveText('1', { timeout: 30_000 })
+    await page.locator('.roster-item', { hasText: 'worker1' }).click()
+    await expect(worker1Badge).toHaveCount(0)
+    await expect(page.locator('.sh-name')).toHaveText('worker1')
+    // 进入会话后新回复不再累计（读过即清）
+    await expect(page.locator('.m-text', { hasText: 'worker1 就位' })).toBeVisible({ timeout: 15_000 })
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会话 + 空缺态如实', async () => {
+  // steward 派发 worker1 → 双方回复（产生 a2a 边：档案「协作对象」的数据源）
+  const mock = await startMockOpenAi([
+    { match: (l) => l.role === 'user' && !l.content.startsWith('[A2A'), toolCalls: [{ id: 'c1', name: 'send_message', args: { toAgentId: 'worker1', text: '报数' } }] },
+    { match: (l) => l.role === 'user' && l.content.startsWith('[A2A'), text: 'worker1 就位' },
+    { match: (_l, t) => t === 'send_message', text: '已收到' },
+  ])
+
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-ctxsettings-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_EXTRA_AGENTS: 'worker1',
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.composer-box input').fill('叫 worker1 报数')
+    await page.locator('.composer-box input').press('Enter')
+    await expect(page.locator('.m-text', { hasText: '已收到' })).toBeVisible({ timeout: 30_000 })
+
+    // —— 进入档案模式：ctx-top（Settings + 会话名）+ 档案 kv 四行（全真值） ——
+    await page.locator('.sh-icon[title="会话档案（Settings）"]').click()
+    const ctx = page.locator('.ctx')
+    await expect(ctx.locator('.ctx-top-title')).toHaveText('Settings')
+    await expect(ctx.locator('.ctx-top-sub')).toHaveText('管家')
+    await expect(ctx.locator('.ctx-name')).toHaveText('管家')
+    await expect(ctx.locator('.kv', { hasText: '角色' })).toContainText('管家（steward）')
+    await expect(ctx.locator('.kv', { hasText: '模型' })).toContainText('继承全局主力（E2E mock）')
+    await expect(ctx.locator('.kv', { hasText: 'Box 归属' })).toContainText(/box-\d+/)
+    await expect(ctx.locator('.kv', { hasText: '权限现状' })).toContainText('出 Box 需批准（Manual 闸门）')
+
+    // 协作对象（a2a 边投影）：worker1 行 + 计数；点击跳会话（档案模式随之重置回屏幕）
+    const edge = ctx.locator('.edge-row', { hasText: 'worker1' })
+    await expect(edge).toBeVisible()
+    await expect(edge.locator('.cnt')).toHaveText(/×\d+/)
+    await edge.click()
+    await expect(page.locator('.sh-name')).toHaveText('worker1')
+    await expect(page.locator('.ctx-screen')).toBeVisible()
+
+    // 空缺态如实（记忆/自动化无数据源不放占位）；worker1 档案的协作对象也应有回边
+    await page.locator('.sh-icon[title="会话档案（Settings）"]').click()
+    await expect(ctx.locator('.mem-empty').first()).toContainText('后续版本')
+    const backEdge = ctx.locator('.edge-row', { hasText: '管家' })
+    await expect(backEdge).toBeVisible()
+    await ctx.locator('.ctx-back').click()
+    await expect(page.locator('.ctx-screen')).toBeVisible()
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('Box 休眠/唤醒（P4 Step 8）：卡按钮状态机 + toast + ctx 屏灰化同源', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-sleep-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— Boxes 视图：caps 驱动按钮在位；休眠 → chip 变「休眠」 + toast ——
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    const card = page.locator('.boxcard').first()
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    await expect(card.locator('.chip', { hasText: '运行中' })).toBeVisible()
+    await card.getByRole('button', { name: '休眠', exact: true }).click()
+    await expect(card.locator('.chip', { hasText: '休眠' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.toast', { hasText: '已休眠' })).toBeVisible()
+
+    // —— console ctx 屏同源灰化（v1.box.state 事件单一信号源） ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await expect(page.locator('.ctx-screen.is-asleep')).toBeVisible()
+    await expect(page.locator('.cs-live')).toContainText('休眠中')
+
+    // —— 唤醒闭环：按钮文案随状态翻转，chip 回「运行中」，ctx 恢复 ——
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    await card.getByRole('button', { name: '唤醒', exact: true }).click()
+    await expect(card.locator('.chip', { hasText: '运行中' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.toast', { hasText: '已唤醒' })).toBeVisible()
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await expect(page.locator('.ctx-screen.is-asleep')).toHaveCount(0)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('快照链与回滚（P4 Step 9）：chips 链 + 点击详情 + 二段确认 + 回滚闭环（mock 链路）', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-restore-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    const card = page.locator('.boxcard').first()
+    await expect(card).toBeVisible({ timeout: 15_000 })
+
+    // —— 快照 ×2 → 链 chips 最近在前 ——
+    await card.getByRole('button', { name: '快照', exact: true }).click()
+    await expect(card.locator('.snap-chip', { hasText: 'snap-1' })).toBeVisible({ timeout: 15_000 })
+    await card.getByRole('button', { name: '快照', exact: true }).click()
+    await expect(card.locator('.snap-chip')).toHaveCount(2)
+    expect(await card.locator('.snap-chip').first().textContent()).toBe('snap-2')
+
+    // —— 点击 chip 展开详情（不直接触发回滚）；取消路径 ——
+    await card.locator('.snap-chip', { hasText: 'snap-1' }).click()
+    const detail = card.locator('.snap-detail')
+    await expect(detail).toBeVisible()
+    await detail.getByRole('button', { name: '从快照回滚…' }).click()
+    await expect(detail.locator('.sd-confirm')).toContainText('将被快照内容替换')
+    await detail.getByRole('button', { name: '取消' }).click()
+    await expect(detail.locator('.sd-confirm')).toHaveCount(0)
+
+    // —— 二段确认回滚 → toast + 详情收起 + 链仍在 ——
+    await detail.getByRole('button', { name: '从快照回滚…' }).click()
+    await detail.getByRole('button', { name: '确认回滚' }).click()
+    await expect(page.locator('.toast', { hasText: '已回滚到 snap-1' })).toBeVisible({ timeout: 15_000 })
+    await expect(detail).toHaveCount(0)
+    await expect(card.locator('.snap-chip')).toHaveCount(2)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

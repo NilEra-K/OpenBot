@@ -10,6 +10,8 @@ export interface MentionItem {
   agentId: string
   name: string
   sub: string
+  /** 档案身份色（P4 Step 5）；缺席回退 agentId 哈希派生（lib 同源规则） */
+  color?: string
 }
 
 defineProps<{ items: MentionItem[]; sel: number }>()
@@ -29,7 +31,7 @@ const emit = defineEmits<{ pick: [index: number] }>()
       @mousedown.prevent
       @click="emit('pick', i)"
     >
-      <span class="stat-dot" :style="{ background: agentColor(it.agentId) }"></span>
+      <span class="stat-dot" :style="{ background: it.color ?? agentColor(it.agentId) }"></span>
       <span class="mm-name">@{{ it.name }}</span>
       <span class="mm-sub">{{ it.sub }}</span>
     </button>

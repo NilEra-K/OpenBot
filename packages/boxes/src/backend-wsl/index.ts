@@ -8,6 +8,7 @@
  */
 import { KernelError } from '@openbot/core'
 import { mkdir, stat } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import { runProcess, spawnShellProcess } from '../procexec/index.js'
 import type { ProcRunner, ShellSpawner } from '../procexec/index.js'
 import { BoxesErrorCodes } from '../types.js'
@@ -23,6 +24,7 @@ import type {
   ShellOpenOptions,
   ShellSession,
   SnapshotId,
+  SnapshotInfo,
 } from '../types.js'
 
 export const WSL_BOX_CAPS: BoxCaps = {
@@ -33,6 +35,8 @@ export const WSL_BOX_CAPS: BoxCaps = {
   isolation: 'low',
   // PTY：Box 内 script 分配真终端（2026-08-20 实测——bash 全套 readline/颜色/转义序列存活）
   interactive: true,
+  // 休眠：--terminate 单发行版（vmmem 共享但发行版独立——互不波及；--shutdown 全杀地雷永不触碰）
+  suspendable: true,
 }
 
 /** WSL 发行版名前缀（list() 据此识别我们的 Box；手工发行的 distro 不碰） */
@@ -42,6 +46,9 @@ export const BoxesWslErrorCodes = {
   BOX_EXEC_TIMEOUT: 'BOX_EXEC_TIMEOUT',
   BOX_CREATE_FAILED: 'BOX_CREATE_FAILED',
   BOX_SNAPSHOT_FAILED: 'BOX_SNAPSHOT_FAILED',
+  BOX_PAUSE_FAILED: 'BOX_PAUSE_FAILED',
+  BOX_RESUME_FAILED: 'BOX_RESUME_FAILED',
+  BOX_RESTORE_FAILED: 'BOX_RESTORE_FAILED',
 } as const
 
 export interface WslBoxBackendOptions {
@@ -61,6 +68,8 @@ export interface WslBoxBackendOptions {
   workdir?: string
   /** vhdx 体积查询（stats 的磁盘真值；注入可测——替身套件零真实文件系统） */
   statFile?: (path: string) => Promise<{ size: number }>
+  /** 快照目录列举（P4 Step 9 快照链；注入可测） */
+  listDir?: (path: string) => Promise<string[]>
 }
 
 interface WslBox {
@@ -78,11 +87,14 @@ export class WslBoxBackend implements BoxBackend {
   readonly #run: ProcRunner
   readonly #spawnShell: ShellSpawner
   readonly #statFile: (path: string) => Promise<{ size: number }>
+  readonly #listDir: (path: string) => Promise<string[]>
   readonly #now: () => number
   readonly #nextBoxId: () => BoxId
   readonly #workdir: string
   readonly #boxes = new Map<BoxId, WslBox>()
   #snapshotCounter = 0
+  /** 休眠内存态（P4 Step 8）：pause 置位 / resume 与 exec 自然唤醒清除；重启后发行版由 create 拉起 */
+  readonly #sleeping = new Set<BoxId>()
 
   constructor(options: WslBoxBackendOptions) {
     this.#rootfs = options.rootfs
@@ -91,6 +103,7 @@ export class WslBoxBackend implements BoxBackend {
     this.#run = options.run ?? runProcess
     this.#spawnShell = options.spawnShell ?? spawnShellProcess
     this.#statFile = options.statFile ?? stat
+    this.#listDir = options.listDir ?? readdir
     this.#now = options.now ?? (() => 0)
     let counter = 0
     this.#nextBoxId = options.nextBoxId ?? (() => `box-${++counter}`)
@@ -165,6 +178,8 @@ export class WslBoxBackend implements BoxBackend {
         `exec 超时（${spec.timeoutMs}ms）：${spec.command.join(' ')}`,
       )
     }
+    // exec 触发发行版自启 = 自然唤醒（与显式 resume 同一机制）——休眠标志随真实状态清除
+    this.#sleeping.delete(boxId)
     return { exitCode: r.exitCode ?? -1, stdout: r.stdout, stderr: r.stderr }
   }
 
@@ -245,8 +260,83 @@ export class WslBoxBackend implements BoxBackend {
     }
   }
 
-  async teardown(boxId: BoxId): Promise<void> {
+  async pause(boxId: BoxId): Promise<void> {
     const box = this.#require(boxId)
+    // 单发行版休眠（platforms.md：--terminate 只影响该发行版；--shutdown 全杀地雷永不触碰）
+    const r = await this.#run({ command: ['wsl', '--terminate', box.name], timeoutMs: 60_000, encoding: 'utf16le' })
+    if (r.exitCode !== 0) {
+      throw new KernelError(
+        BoxesWslErrorCodes.BOX_PAUSE_FAILED,
+        `发行版休眠失败（exit ${r.exitCode}）：${(r.stderr || r.stdout).trim()}`,
+      )
+    }
+    this.#sleeping.add(boxId)
+  }
+
+  async resume(boxId: BoxId): Promise<void> {
+    const box = this.#require(boxId)
+    // 轻量 exec 触发发行版自启（休眠中的任何 exec 同样自然唤醒——同一机制，显式唤醒只是补一个入口）
+    const r = await this.#run({ command: ['wsl', '-d', box.name, '--', 'true'], timeoutMs: 120_000 })
+    if (r.exitCode !== 0) {
+      throw new KernelError(
+        BoxesWslErrorCodes.BOX_RESUME_FAILED,
+        `发行版唤醒失败（exit ${r.exitCode}）：${r.stderr.trim()}`,
+      )
+    }
+    this.#sleeping.delete(boxId)
+  }
+
+  /** 快照链（P4 Step 9）：扫 snapshotDir 的 snap-N.tar.gz（既有命名约定，state 零新增）；N 降序=最近在前 */
+  async listSnapshots(): Promise<SnapshotInfo[]> {
+    let names: string[]
+    try {
+      names = await this.#listDir(this.#snapshotDir)
+    } catch {
+      return [] // 目录不存在=尚无快照（如实空链）
+    }
+    const infos: SnapshotInfo[] = []
+    for (const name of names) {
+      const m = /^snap-(\d+)\.tar\.gz$/.exec(name)
+      if (!m) continue
+      const info: SnapshotInfo = { snapshotId: `snap-${m[1]}` }
+      try {
+        const st = await this.#statFile(`${this.#snapshotDir}/${name}`)
+        info.sizeBytes = st.size
+      } catch {
+        /* 大小不可知即缺席（如实） */
+      }
+      infos.push(info)
+    }
+    return infos.sort((a, b) => Number(b.snapshotId.slice(5)) - Number(a.snapshotId.slice(5)))
+  }
+
+  /** 回滚（P4 Step 9）：**破坏性**——unregister 当前后端 + import 快照 tar；失败窗口如实：
+   *  unregister 成功而 import 失败时发行版已注销（快照 tar 在即数据可恢复——重新 import 即可） */
+  async restore(boxId: BoxId, snapshotId: SnapshotId): Promise<void> {
+    const box = this.#require(boxId)
+    const tar = `${this.#snapshotDir}/${snapshotId}.tar.gz`
+    const un = await this.#run({ command: ['wsl', '--unregister', box.name], timeoutMs: 60_000, encoding: 'utf16le' })
+    if (un.exitCode !== 0) {
+      throw new KernelError(
+        BoxesWslErrorCodes.BOX_RESTORE_FAILED,
+        `回滚注销失败（exit ${un.exitCode}）：${(un.stderr || un.stdout).trim()}`,
+      )
+    }
+    const im = await this.#run({
+      command: ['wsl', '--import', box.name, box.dir, tar, '--version', '2'],
+      timeoutMs: 10 * 60_000,
+      encoding: 'utf16le',
+    })
+    if (im.exitCode !== 0) {
+      throw new KernelError(
+        BoxesWslErrorCodes.BOX_RESTORE_FAILED,
+        `回滚导入失败（exit ${im.exitCode}）：${(im.stderr || im.stdout).trim()}——发行版已注销，可用同一快照重试恢复`,
+      )
+    }
+    this.#sleeping.delete(boxId) // import 后发行版处于 Stopped，语义上等同可唤醒的休眠档——清除标志交给下一次 exec/create 拉起
+  }
+
+  async teardown(boxId: BoxId): Promise<void> {    const box = this.#require(boxId)
     const r = await this.#run({ command: ['wsl', '--unregister', box.name], timeoutMs: 60_000, encoding: 'utf16le' })
     if (r.exitCode !== 0) {
       throw new KernelError(
@@ -266,7 +356,7 @@ export class WslBoxBackend implements BoxBackend {
       return {
         boxId,
         spec: known ? { ...known.spec } : { image: 'wsl' },
-        state: 'active' as const,
+        state: (this.#sleeping.has(boxId) ? 'sleeping' : 'active') as BoxInstance['state'],
         createdAt: known?.createdAt ?? 0,
       }
     })

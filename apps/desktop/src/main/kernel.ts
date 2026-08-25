@@ -12,6 +12,7 @@
  */
 import { app, safeStorage } from 'electron'
 import { z } from 'zod'
+import { KernelError } from '@openbot/core'
 import { stat, statfs } from 'node:fs/promises'
 import { assembleKernel, chooseBackend } from '@openbot/coordinator'
 import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinator'
@@ -91,6 +92,15 @@ const resolveSchema = z.object({
 })
 const sandboxPrefSchema = z.enum(['auto', 'mock', 'wsl', 'docker', 'podman'])
 const sandboxSetSchema = z.object({ preference: sandboxPrefSchema })
+/** 注册 agent（P4 Step 5）：name 必填（去空白 1-24 字）；color hex6 可选；role 默认 worker（steward 走任命事务语义） */
+const registerAgentSchema = z.object({
+  name: z.string().trim().min(1).max(24),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+  role: z.enum(['steward', 'worker']).optional(),
+})
 /** 沙箱装配事实（status 命令与 UI 呈现的单一来源；main 内存态，重启随装配重算） */
 export interface SandboxStatus {
   /** 生效偏好（env 覆盖后的值——装配决策用的就是它） */
@@ -247,6 +257,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       return { approved: await approvalGate.resolve(nonce, decision) }
     }, resolveSchema)
     .register('v1.approval.pending', async () => approvalGate.pending())
+    // 审批闸门模式（P4 Step 7 档案事实）：桌面装配固定 Manual——出 Box 需用户批准（如实呈现） */
+    .register('v1.approval.mode', async () => ({ mode: 'manual' as const }))
     // caps 驱动 UI：按钮渲染依据后端能力声明（永不出现「UI 有按钮但后端不支持」）
     .register('v1.boxes.caps', async () => kernel.backend.caps())
     // 沙箱后端：状态呈现 + 偏好写入（重启生效——后端选择是装配期决策，不热切换）
@@ -265,6 +277,22 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await settings.setSandbox(pref)
       return { ok: true, restartRequired: true }
     }, sandboxSetSchema)
+    // 注册 agent（P4 Step 5）：经装配 addAgent（名册+调度器+专属 Box+turn 接线）；
+    // llm 共享 SwitchableChatProvider——主力模型切换对全部 agent 生效（与启动装配同语义）
+    .register('v1.system.registerAgent', async (payload) => {
+      const { name, color, role } = registerAgentSchema.parse(payload)
+      // 管家前置检查：在位时直接拒绝（不创建半成品 agent；任命事务由 addAgent 兜底不变量）
+      if (role === 'steward' && (await kernel.agentStore.findSteward()) !== null) {
+        throw new KernelError('STATE_STEWARD_EXISTS', '管家已在位（须先罢免或转移）')
+      }
+      // agentId 服务端生成：agent-N（名册内既有同前缀序号递增；单用户桌面应用无并发竞争）
+      const ids = new Set((await kernel.agentStore.list()).map((a) => a.agentId))
+      let n = 1
+      while (ids.has(`agent-${n}`)) n++
+      const agentId = `agent-${n}`
+      await kernel.addAgent({ agentId, name, color, llm: provider, steward: role === 'steward' })
+      return { agentId, name, role: role ?? 'worker', ...(color !== undefined ? { color } : {}) }
+    }, registerAgentSchema)
 
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })

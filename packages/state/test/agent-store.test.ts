@@ -25,6 +25,32 @@ describe('AgentStore 名册', () => {
     await expect(store.register('a1')).rejects.toMatchObject({ code: 'STATE_AGENT_EXISTS' })
   })
 
+  it('身份色（P4 Step 5）：register 带 color 落盘并读回；缺席时字段不出现（零迁移）', async () => {
+    const { store, fs } = makeStore()
+    const p = await store.register('a1', '欧米伽', '#199e70')
+    expect(p.color).toBe('#199e70')
+    expect(fs.snapshot()['data/agents/a1/profile.json']).toContain('"color": "#199e70"')
+    const no = await store.register('a2')
+    expect(no.color).toBeUndefined()
+    expect(fs.snapshot()['data/agents/a2/profile.json']).not.toContain('"color"')
+    // 既有档案不变：role 变更（任命/罢免）保留 color
+    await store.appointSteward('a1')
+    expect((await store.get('a1'))?.color).toBe('#199e70')
+  })
+
+  it('身份色读取端兼容：老 profile.json 无 color 字段加载不炸、字段缺席', async () => {
+    const { fs } = makeStore()
+    await fs.write(
+      'data/agents/legacy/profile.json',
+      `${JSON.stringify({ agentId: 'legacy', name: '旧档案', role: 'worker', createdAt: 1 }, null, 2)}\n`,
+    )
+    const store2 = new AgentStore({ fs, root: 'data', now: () => 0 })
+    const list = await store2.list()
+    expect(list).toHaveLength(1)
+    expect(list[0]!.color).toBeUndefined()
+    expect(list[0]!.name).toBe('旧档案')
+  })
+
   it('唯一管家不变量：在位时第二个任命直接拒绝；同一人重复任命幂等', async () => {
     const { store } = makeStore()
     await store.register('a1')

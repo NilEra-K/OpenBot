@@ -22,6 +22,8 @@ export interface AgentProfile {
   name: string
   role: AgentRole
   createdAt: number
+  /** 身份色（hex，P4 Step 5）：可选——缺席由渲染端回退哈希派生色（版本号+读取端兼容，零迁移） */
+  color?: string
 }
 
 export interface AgentStoreOptions {
@@ -45,8 +47,8 @@ export class AgentStore {
     this.#now = options.now
   }
 
-  /** 注册：一律 worker（steward 只能经任命事务产生）；重名拒绝 */
-  async register(agentId: string, name?: string): Promise<AgentProfile> {
+  /** 注册：一律 worker（steward 只能经任命事务产生）；重名拒绝；color 可选（身份色档案事实） */
+  async register(agentId: string, name?: string, color?: string): Promise<AgentProfile> {
     return this.#withLock(async () => {
       await this.#load()
       if (this.#profiles.has(agentId)) {
@@ -57,6 +59,7 @@ export class AgentStore {
         name: name ?? agentId,
         role: 'worker',
         createdAt: this.#now(),
+        ...(color !== undefined ? { color } : {}),
       }
       this.#profiles.set(agentId, profile)
       await this.#persist(profile)

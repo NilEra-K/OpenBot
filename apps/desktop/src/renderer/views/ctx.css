@@ -148,3 +148,177 @@
 .mono {
   font-family: var(--mono);
 }
+
+/* ---- 档案模式（P4 Step 7，原型 ctxMode='settings' 迁移：ctx-top 48px sticky 与 stream-head 底边线连成一条） ---- */
+
+.ctx-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  margin: 0 -16px 14px;
+  padding: 0 16px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--line);
+}
+
+.ctx-back {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+}
+
+.ctx-back:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.ctx-top-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink2);
+  letter-spacing: 0.03em;
+}
+
+.ctx-top-sub {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.ctx-head .avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #141414;
+  flex: none;
+}
+
+.ctx-head-text {
+  min-width: 0;
+}
+
+.ctx-name {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.ctx-sub {
+  font-size: 11.5px;
+  color: var(--ink3);
+}
+
+.ctx-sec {
+  font-size: 11px;
+  color: var(--ink3);
+  letter-spacing: 0.06em;
+  margin: 18px 0 7px;
+}
+
+.ctx .kv {
+  display: flex;
+  gap: 12px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.ctx .kv .k {
+  width: 56px;
+  flex: none;
+  color: var(--ink3);
+}
+
+.ctx .kv .v {
+  min-width: 0;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kv-note {
+  font-size: 10.5px;
+  color: var(--ink3);
+}
+
+/* 协作对象行（原型 .edge-row）：身份色点 + 名字 + 往来计数，点击跳会话 */
+.edge-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.edge-row:hover {
+  background: var(--bg3);
+}
+
+.edge-row .stat-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.edge-row .er-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edge-row .cnt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink3);
+  flex: none;
+}
+
+/* 记忆/自动化如实空缺态（不放假条目） */
+.mem-empty {
+  padding: 9px 2px;
+  font-size: 11.5px;
+  color: var(--ink3);
+  line-height: 1.6;
+}
+
+/* 休眠灰化（P4 Step 8）：Box sleeping 时屏幕降饱和降透明——状态与 Box 卡 chip 同源（v1.box.state） */
+.ctx-screen.is-asleep {
+  filter: saturate(0.4) brightness(0.75);
+  cursor: pointer; /* 仍可进入操作台（PTY 会自然唤醒——休眠不是禁用） */
+}

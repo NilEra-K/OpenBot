@@ -6,6 +6,7 @@ import { defineStore } from 'pinia'
 import { createGatewayClient } from '../lib/gateway'
 import { GatewayCommandError } from '../lib/gateway'
 import { connectRunStreams } from '../lib/stream'
+import { agentColor } from '../lib/agent-color'
 import type { GatewayClient, GatewayEndpoint } from '../lib/gateway'
 import type { StreamClient } from '../lib/stream'
 import type { KernelEvent } from '@openbot/transport'
@@ -35,6 +36,9 @@ export interface RosterEntry {
   agentId: string
   name?: string
   role: 'steward' | 'worker'
+  /** 身份色（P4 Step 5 档案事实；缺席回退哈希派生——colorOf 统一取色）。
+   *  可选：roster 事件 push 的新 agent（运行中注册）档案字段未知，待下次快照刷新。 */
+  color?: string
   /** 该 agent 的专属 Box（v1.system.listAgents 返回；注册即创建——ctx 任意时刻可接管的信号源）。
    *  可选：roster 事件 push 的新 agent（运行中注册）归属未知，待下次快照刷新。 */
   boxId?: string | null
@@ -185,7 +189,7 @@ export const useKernelStore = defineStore('kernel', {
     boxes: [] as BoxCard[],
     edges: [] as GraphEdge[],
     /** 后端能力声明（caps 驱动 UI 按钮的依据） */
-    caps: null as { persistent: boolean; snapshot: boolean; headless: boolean; resourceLimits: boolean; isolation: string; interactive: boolean } | null,
+    caps: null as { persistent: boolean; snapshot: boolean; headless: boolean; resourceLimits: boolean; isolation: string; interactive: boolean; suspendable: boolean } | null,
     /** settings 里已配置默认 provider（空缺态提示用） */
     providerConfigured: false,
     /** provider 档案清单（settings 视图；无 key 材料） */
@@ -195,14 +199,24 @@ export const useKernelStore = defineStore('kernel', {
     sandbox: null as SandboxStatus | null,
     /** Box 资源统计（Step 6）：每盒最新值；字段缺席=后端不可测（WSL 只有磁盘） */
     boxStats: {} as Record<string, { cpuPercent?: number; memoryMb?: number; diskMb?: number; at: number }>,
+    /** 快照链（P4 Step 9）：全局快照目录事实（最近在前）；caps.snapshot=false 时空链 */
+    snapshots: [] as Array<{ snapshotId: string; sizeBytes?: number; createdAt?: number }>,
     /** 宿主磁盘压力（Step 6）：null=无压力/未知；warn/critical 档事实（文案归视图层） */
     pressure: null as { level: 'warn' | 'critical'; freeBytes: number; totalBytes: number } | null,
+    /** 审批闸门模式（P4 Step 7 档案事实）：manual=出 Box 需批准（桌面装配固定值，如实呈现） */
+    approvalMode: 'manual' as 'manual' | 'auto',
     /** run 实况流块（ctx 面板；容量有限——只保留最近） */
     streams: [] as LiveStreamBlock[],
     lastSeq: 0,
   }),
   getters: {
     steward: (state) => state.roster.find((a) => a.agentId === state.stewardId) ?? null,
+    /** 统一取色（P4 Step 5）：档案色优先、缺席回退 agentId 哈希派生——
+     *  头像/署名/图谱节点/提及菜单同源；既有 agent 零迁移观感不变 */
+    colorOf(state): (agentId: string) => string {
+      return (agentId: string): string =>
+        state.roster.find((a) => a.agentId === agentId)?.color ?? agentColor(agentId)
+    },
   },
   actions: {
     /** 启动接线：endpoint（preload 桥）→ 客户端 → 事件订阅 + 快照拉取 */
@@ -225,19 +239,15 @@ export const useKernelStore = defineStore('kernel', {
           onPtyData: (meta, text) => this.dispatchPty({ type: 'data', ...meta, text }),
           onPtyEnd: (meta) => this.dispatchPty({ type: 'end', ...meta }),
         })
-        const agents = await client.call<Array<{ agentId: string; name?: string; role: string; boxId?: string | null }>>('v1.system.listAgents')
-        this.roster = agents.map((a) => ({
-          agentId: a.agentId,
-          name: a.name,
-          role: a.role as RosterEntry['role'],
-          boxId: a.boxId ?? null,
-        }))
+        await this.refreshRoster()
         const steward = await client.call<{ agentId: string } | null>('v1.system.getSteward')
         this.stewardId = steward?.agentId ?? null
+        this.approvalMode = (await client.call<{ mode: 'manual' | 'auto' }>('v1.approval.mode')).mode
         await this.refreshSettings()
         const boxes = await client.call<Array<{ boxId: string; spec: { image: string }; state: BoxCard['state']; createdAt: number }>>('v1.boxes.list')
         this.boxes = boxes.map((b) => ({ boxId: b.boxId, image: b.spec.image, state: b.state, createdAt: b.createdAt }))
         this.caps = await client.call<NonNullable<typeof this.caps>>('v1.boxes.caps')
+        if (this.caps?.snapshot) await this.refreshSnapshots()
         await this.refreshSandbox()
         this.connected = true
       } catch (err) {
@@ -256,6 +266,41 @@ export const useKernelStore = defineStore('kernel', {
     call<T = unknown>(command: string, payload?: unknown): Promise<T> {
       if (!client) return Promise.reject(new Error('网关未连接'))
       return client.call<T>(command, payload)
+    },
+    /** 名册快照重拉（boot 与注册后共用——roster 事件只带 agentId/role，档案字段以快照为准） */
+    async refreshRoster(): Promise<void> {
+      const agents = await this.call<Array<{ agentId: string; name?: string; role: string; color?: string; boxId?: string | null }>>('v1.system.listAgents')
+      this.roster = agents.map((a) => ({
+        agentId: a.agentId,
+        name: a.name,
+        role: a.role as RosterEntry['role'],
+        color: a.color,
+        boxId: a.boxId ?? null,
+      }))
+    },
+    /** 注册 agent（P4 Step 5）：命令面受理（name/color/role）→ 重拉名册 → 返回 agentId（向导跳会话用） */
+    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker' }): Promise<string> {
+      const created = await this.call<{ agentId: string }>('v1.system.registerAgent', input)
+      await this.refreshRoster()
+      return created.agentId
+    },
+    /** Box 休眠/唤醒（P4 Step 8）：状态转移经 v1.box.state 事件回放（boxes/ctx 灰化同一信号源） */
+    async pauseBox(boxId: string): Promise<void> {
+      await this.call('v1.boxes.pause', { boxId })
+    },
+    async resumeBox(boxId: string): Promise<void> {
+      await this.call('v1.boxes.resume', { boxId })
+    },
+    /** 快照链重拉（P4 Step 9）：snapshot/restore 成功后由调用方刷新 */
+    async refreshSnapshots(): Promise<void> {
+      this.snapshots = await this.call<Array<{ snapshotId: string; sizeBytes?: number; createdAt?: number }>>(
+        'v1.boxes.listSnapshots',
+      )
+    },
+    /** 回滚（破坏性——UI 负责二段确认）；状态转移经 v1.box.state 事件回放 */
+    async restoreBox(boxId: string, snapshotId: string): Promise<void> {
+      await this.call('v1.boxes.restore', { boxId, snapshotId })
+      await this.refreshSnapshots()
     },
     /**
      * 发送用户消息（乐观更新 + nonce 幂等）：本地占位 → 命令受理（messageId 升级占位）→
@@ -306,6 +351,7 @@ export const useKernelStore = defineStore('kernel', {
     /** Box 快照（按钮按 caps.snapshot 渲染；返回快照 id 供视图反馈） */
     async snapshotBox(boxId: string): Promise<string> {
       const { snapshotId } = await this.call<{ snapshotId: string }>('v1.boxes.snapshot', { boxId })
+      if (this.caps?.snapshot) await this.refreshSnapshots()
       return snapshotId
     },
     /** 中止 run（打断工作中的 agent）：排队中直接结算，活跃中经 AbortSignal 传播 */

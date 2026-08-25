@@ -109,7 +109,7 @@ describe('ShellService', () => {
     // 最小 stub：open 的 caps 分支先抛——其余成员走不到（BoxBackend 只声明用到的两面）
     const capped = {
       caps: () => ({
-        persistent: true, snapshot: true, headless: true, resourceLimits: false, isolation: 'low' as const, interactive: false,
+        persistent: true, snapshot: true, headless: true, resourceLimits: false, isolation: 'low' as const, interactive: false, suspendable: false,
       }),
       openShell: async () => {
         throw new Error('不应到达（caps 已声明不支持）')

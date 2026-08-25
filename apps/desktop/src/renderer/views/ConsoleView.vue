@@ -12,7 +12,6 @@ import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { renderMarkdown } from '../lib/markdown'
 import { mentionify } from '../lib/mention'
-import { agentColor } from '../lib/agent-color'
 import RosterPanel from '../components/RosterPanel.vue'
 import CtxPanel from '../components/CtxPanel.vue'
 import BoxScreen from '../components/BoxScreen.vue'
@@ -296,7 +295,12 @@ const onComposerInput = (): void => {
   }
   const q = m[1]!.toLowerCase()
   const items = kernel.roster
-    .map((a) => ({ agentId: a.agentId, name: a.name ?? a.agentId, sub: a.role === 'steward' ? '管家' : 'worker' }))
+    .map((a) => ({
+      agentId: a.agentId,
+      name: a.name ?? a.agentId,
+      sub: a.role === 'steward' ? '管家' : 'worker',
+      color: a.color,
+    }))
     .filter((it) => it.name.toLowerCase().startsWith(q) || it.agentId.toLowerCase().startsWith(q))
   if (items.length === 0) {
     closeMention()
@@ -393,15 +397,21 @@ const retry = (index: number): void => {
 const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
   void kernel.resolveApproval(nonce, decision).catch(() => {})
 }
+
+/** ctx 收起开关图标（原型 ICONS.panelcol/panelexp 同款 path） */
+const PANELCOL = '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M14.5 5v14"/><path d="M11 10.5L8.5 12l2.5 1.5"/>'
+const PANELEXP = '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M14.5 5v14"/><path d="M8 10.5L10.5 12 8 13.5"/>'
+/** 档案入口图标（CommandPalette ICONS.sliders 同源） */
+const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>'
 </script>
 
 <template>
-  <section class="console">
+  <section class="console" :class="{ 'no-ctx': ui.ctxCollapsed }">
     <RosterPanel />
 
     <div class="streamcol">
       <div class="stream-head">
-        <div class="avatar" :style="{ background: agentColor(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
+        <div class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
         <div class="sh-text">
           <div class="sh-name">{{ activeAgent?.name ?? ui.activeAgentId }}</div>
           <div class="sh-status">
@@ -409,6 +419,28 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
             <span v-if="!kernel.providerConfigured" class="sh-warn">provider 未配置——回复将失败，去「设置」配置</span>
             <span v-else-if="kernel.connected">已连接 · seq {{ kernel.lastSeq }}</span>
           </div>
+        </div>
+        <!-- 操作区（P4 Step 6/7）：ctx 开关 + 该会话的档案（Settings）；通知/会话信息无动作源——裁剪不放假 -->
+        <div class="sh-actions">
+          <button
+            class="sh-icon"
+            type="button"
+            :class="{ 'is-on': ui.ctxSettings }"
+            :aria-pressed="ui.ctxSettings"
+            :title="ui.ctxSettings ? '返回执行画面' : '会话档案（Settings）'"
+            @click="ui.toggleCtxSettings()"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" v-html="SLIDERS"></svg>
+          </button>
+          <button
+            class="sh-icon"
+            type="button"
+            :aria-pressed="!ui.ctxCollapsed"
+            :title="ui.ctxCollapsed ? '展开上下文面板' : '收起上下文面板'"
+            @click="ui.toggleCtx()"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="ui.ctxCollapsed ? PANELEXP : PANELCOL"></svg>
+          </button>
         </div>
       </div>
 
@@ -439,9 +471,9 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
             <button v-else-if="unit.kind === 'relay'" class="relay" :title="`跳到 ${kernel.messages[unit.msgIndex!]!.to} 的会话`" @click="ui.activeAgentId = kernel.messages[unit.msgIndex!]!.to">
               <span class="relay-arrow">→</span>
               <span class="relay-text">
-                <b :style="{ color: agentColor(kernel.messages[unit.msgIndex!]!.from) }">{{ kernel.messages[unit.msgIndex!]!.from }}</b>
+                <b :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex!]!.from) }">{{ kernel.messages[unit.msgIndex!]!.from }}</b>
                 →
-                <b :style="{ color: agentColor(kernel.messages[unit.msgIndex!]!.to) }">{{ kernel.messages[unit.msgIndex!]!.to }}</b>
+                <b :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex!]!.to) }">{{ kernel.messages[unit.msgIndex!]!.to }}</b>
                 · <span v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></span>
               </span>
               <span class="m-time">{{ fmtTime(unit.at) }}</span>
@@ -449,10 +481,10 @@ const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
 
             <!-- agent 聚合单元（含进行中/纯块组）：m-name 之下——思考块（可折叠）与 task 卡，最终文本（或三个点占位）收尾 -->
             <div v-else class="m">
-              <div class="avatar" :style="{ background: agentColor(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
+              <div class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
               <div class="m-body">
                 <div class="m-meta">
-                  <span class="m-name" :style="{ color: agentColor(ui.activeAgentId) }">
+                  <span class="m-name" :style="{ color: kernel.colorOf(ui.activeAgentId) }">
                     {{ activeAgent?.name ?? ui.activeAgentId }}
                   </span>
                   <span v-if="unit.kind === 'pending'" class="m-state">工作中…</span>

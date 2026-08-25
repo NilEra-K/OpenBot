@@ -9,7 +9,6 @@ import { computed, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
-import { agentColor } from '../lib/agent-color'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -72,6 +71,69 @@ const snapshot = async (boxId: string): Promise<void> => {
     snapping.value = next
   }
 }
+
+// ---- 快照链与回滚（P4 Step 9）：链是全局快照目录事实（wsl 导出 tar 无 Box 归属），
+//      chips 展示在各卡上、回滚作用于该卡 Box——就近交互；二段确认防破坏性误触 ----
+
+const recentSnaps = computed(() => kernel.snapshots.slice(0, 5))
+const openSnap = ref<string | null>(null)
+const confirmSnap = ref<string | null>(null)
+const restoring = ref(new Set<string>())
+
+const toggleSnap = (snapshotId: string): void => {
+  confirmSnap.value = null
+  openSnap.value = openSnap.value === snapshotId ? null : snapshotId
+}
+
+const snapOf = (snapshotId: string) => kernel.snapshots.find((s) => s.snapshotId === snapshotId)
+
+const fmtSize = (b?: number): string =>
+  b === undefined ? '' : b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`
+
+const fmtSnapTime = (t?: number): string =>
+  t === undefined ? '' : new Date(t).toLocaleString('zh-CN', { hour12: false })
+
+const doRestore = async (boxId: string, snapshotId: string): Promise<void> => {
+  if (restoring.value.has(snapshotId)) return
+  restoring.value = new Set(restoring.value).add(snapshotId)
+  try {
+    await kernel.restoreBox(boxId, snapshotId)
+    toast.push(`${boxId} 已回滚到 ${snapshotId}`, 'success')
+    openSnap.value = null
+    confirmSnap.value = null
+  } catch (err) {
+    toast.push(`回滚失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
+  } finally {
+    const next = new Set(restoring.value)
+    next.delete(snapshotId)
+    restoring.value = next
+  }
+}
+
+// ---- 休眠/唤醒（P4 Step 8）：caps.suspendable 驱动；状态转移经 v1.box.state 事件回放（卡 chip 同源刷新） ----
+
+const suspending = ref(new Set<string>())
+
+const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
+  if (suspending.value.has(boxId)) return
+  suspending.value = new Set(suspending.value).add(boxId)
+  try {
+    if (sleeping) {
+      await kernel.resumeBox(boxId)
+      toast.push(`${boxId} 已唤醒`, 'success')
+    } else {
+      await kernel.pauseBox(boxId)
+      toast.push(`${boxId} 已休眠——CPU/内存释放，rootfs 留在磁盘`, 'info')
+    }
+  } catch (err) {
+    toast.push(`${sleeping ? '唤醒' : '休眠'}失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
+  } finally {
+    const next = new Set(suspending.value)
+    next.delete(boxId)
+    suspending.value = next
+  }
+}
+
 </script>
 
 <template>
@@ -120,6 +182,14 @@ const snapshot = async (boxId: string): Promise<void> => {
             <div class="box-actions">
               <button class="btn btn-secondary btn-sm" @click="ui.openBoxOps(box.boxId)">操作台</button>
               <button
+                v-if="kernel.caps?.suspendable"
+                class="btn btn-secondary btn-sm"
+                :disabled="suspending.has(box.boxId)"
+                @click="toggleSleep(box.boxId, box.state === 'sleeping')"
+              >
+                {{ suspending.has(box.boxId) ? '处理中…' : box.state === 'sleeping' ? '唤醒' : '休眠' }}
+              </button>
+              <button
                 v-if="kernel.caps?.snapshot"
                 class="btn btn-secondary btn-sm"
                 :disabled="snapping.has(box.boxId)"
@@ -150,15 +220,42 @@ const snapshot = async (boxId: string): Promise<void> => {
           </div>
 
           <div class="box-snaps mono">
+            <!-- 快照链 chips（全局事实、就近回滚）：点击展开详情，不直接触发回滚 -->
+            <button
+              v-for="s in recentSnaps"
+              :key="s.snapshotId"
+              class="snap-chip"
+              :class="{ 'is-open': openSnap === s.snapshotId }"
+              type="button"
+              :title="`快照 ${s.snapshotId}${fmtSize(s.sizeBytes) ? ' · ' + fmtSize(s.sizeBytes) : ''}——点击查看`"
+              @click="toggleSnap(s.snapshotId)"
+            >{{ s.snapshotId }}</button>
             <span v-if="lastSnap[box.boxId]" class="chip chip-success">最近快照 {{ lastSnap[box.boxId] }}</span>
             <span v-if="snapError[box.boxId]" class="chip chip-danger">{{ snapError[box.boxId] }}</span>
+          </div>
+
+          <!-- 快照详情 + 回滚二段确认（破坏性防护：先看时间/大小再决定——确认条二次点击才执行） -->
+          <div v-if="openSnap && snapOf(openSnap)" class="snap-detail">
+            <div class="sd-meta mono">
+              <b>{{ openSnap }}</b>
+              <span>{{ fmtSnapTime(snapOf(openSnap)!.createdAt) || '时间未知' }}</span>
+              <span>{{ fmtSize(snapOf(openSnap)!.sizeBytes) || '大小未知' }}</span>
+            </div>
+            <div v-if="confirmSnap === openSnap" class="sd-confirm" role="alert">
+              <span>当前 {{ box.boxId }} 的内容将被快照内容替换（不可撤销）</span>
+              <button class="btn btn-danger btn-sm" :disabled="restoring.has(openSnap)" @click="doRestore(box.boxId, openSnap)">
+                {{ restoring.has(openSnap) ? '回滚中…' : '确认回滚' }}
+              </button>
+              <button class="btn btn-ghost btn-sm" @click="confirmSnap = null">取消</button>
+            </div>
+            <button v-else class="btn btn-danger-ghost btn-sm" @click="confirmSnap = openSnap">从快照回滚…</button>
           </div>
 
           <div v-if="execsOf(box.boxId).length" class="box-execs">
             <div class="box-execs-label">近期执行</div>
             <div v-for="e in execsOf(box.boxId)" :key="e.key" class="box-exec mono">
               <span class="stat-dot" :class="e.phase === 'finished' ? (e.exitCode === 0 ? 'ok' : 'err') : 'working'"></span>
-              <span v-if="agentOfRun(e.runId)" class="box-exec-agent" :style="{ color: agentColor(agentOfRun(e.runId)!) }">
+              <span v-if="agentOfRun(e.runId)" class="box-exec-agent" :style="{ color: kernel.colorOf(agentOfRun(e.runId)!) }">
                 {{ agentOfRun(e.runId) }}
               </span>
               <span class="box-exec-cmd">{{ e.command.join(' ') }}</span>

@@ -53,6 +53,15 @@ export const useUiStore = defineStore('ui', {
     effectiveTheme: resolveTheme(readStoredTheme()) as 'dark' | 'light',
     /** 命令面板（P4 Step 3）：Ctrl K / 标题栏 omnibox 唤起 */
     paletteOpen: false,
+    /** 新建 agent 向导（P4 Step 5）：名册「+ 新建 agent」与命令面板动作共用开合 */
+    wizardOpen: false,
+    /** ctx 实况面板收起（P4 Step 6，原型 .console.no-ctx 语义）：三栏 ⇄ 两栏 */
+    ctxCollapsed: false,
+    /** ctx 档案模式（P4 Step 7，原型 ctxMode='settings'）：false=屏幕实况 / true=该会话的档案；
+     *  会话局部态——切会话回屏幕模式（App 层 activeAgentId watch 重置） */
+    ctxSettings: false,
+    /** 会话未读计数（P4 Step 6）：呈现关注点不进内核——非当前会话有 agent 回复 +1，切换会话清零 */
+    unread: {} as Record<string, number>,
     /** composer 聚焦请求（「快速派单」跨组件聚焦没有句柄——标志位由 ConsoleView 消费：
      *  视图重挂载场景（从其他视图派单回 console）watcher 错过事件，挂载时兜底检查） */
     composerFocus: false,
@@ -69,6 +78,32 @@ export const useUiStore = defineStore('ui', {
     },
     togglePalette() {
       this.paletteOpen = !this.paletteOpen
+    },
+    openWizard() {
+      this.wizardOpen = true
+    },
+    closeWizard() {
+      this.wizardOpen = false
+    },
+    toggleCtx() {
+      this.ctxCollapsed = !this.ctxCollapsed
+    },
+    /** 进入/退出档案模式（原型 toggleCtxSettings 同款语义）：面板收起时点击 = 展开并直接进入档案 */
+    toggleCtxSettings() {
+      if (this.ctxCollapsed) {
+        this.ctxCollapsed = false
+        this.ctxSettings = true
+      } else {
+        this.ctxSettings = !this.ctxSettings
+      }
+    },
+    /** 非当前会话收到 agent 回复（App 层 watch 消息流驱动） */
+    bumpUnread(agentId: string) {
+      this.unread[agentId] = (this.unread[agentId] ?? 0) + 1
+    },
+    /** 进入会话即清零（读过语义只存在于呈现层） */
+    clearUnread(agentId: string) {
+      if (this.unread[agentId] !== undefined) delete this.unread[agentId]
     },
     /** 快速派单落点：ConsoleView 消费标志并聚焦输入框（重挂载由 onMounted 兜底） */
     focusComposer() {

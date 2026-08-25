@@ -3,7 +3,7 @@
  * App 壳骨架（Step 7）：titlebar（frameless 三键）+ 侧栏五视图 + 主区容器。
  * 视觉基调对齐 prototype.html 设计变量（Step 8–9 逐视图迁移完整样式）。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useKernelStore } from './stores/kernel'
 import { useUiStore } from './stores/ui'
 import { initThemeWatch } from './stores/ui'
@@ -17,6 +17,7 @@ import ApprovalModal from './components/ApprovalModal.vue'
 import BoxOps from './components/BoxOps.vue'
 import ToastHost from './components/ToastHost.vue'
 import CommandPalette from './components/CommandPalette.vue'
+import AgentWizard from './components/AgentWizard.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -65,6 +66,26 @@ const views: Array<{ id: ViewName; label: string; icon: string; component: unkno
 
 /** 面包屑：当前视图名（原型 tb-crumb 语义） */
 const currentViewLabel = computed(() => views.find((v) => v.id === ui.currentView)?.label ?? '')
+
+// ---- 名册未读徽标（P4 Step 6）：呈现关注点——App 层 watch 消息流驱动 ui.unread，不进内核 ----
+// messages 只增不减（append-only 呈现面）：按长度差取新增段，agent 回复且非当前会话 +1
+watch(
+  () => kernel.messages.length,
+  (len, prev) => {
+    for (let i = prev ?? 0; i < len; i++) {
+      const m = kernel.messages[i]
+      if (m && m.kind === 'agent' && m.from !== ui.activeAgentId) ui.bumpUnread(m.from)
+    }
+  },
+)
+// 进入会话即清零（跨视图派单/relay 点击/名册点击统一走 activeAgentId）；档案模式是会话局部态，切会话回屏幕
+watch(
+  () => ui.activeAgentId,
+  (id) => {
+    ui.clearUnread(id)
+    ui.ctxSettings = false
+  },
+)
 
 /** 双击标题栏最大化（Windows 惯例；交互子元素不触发——原型同款排除表） */
 const onTitlebarDblclick = (e: MouseEvent): void => {
@@ -218,6 +239,9 @@ onUnmounted(() => kernel.shutdown())
 
     <!-- 命令面板（P4 Step 3）：Ctrl K / omnibox 唤起 -->
     <CommandPalette />
+
+    <!-- 新建 agent 向导（P4 Step 5）：名册入口与命令面板动作共用 -->
+    <AgentWizard />
   </div>
 </template>
 

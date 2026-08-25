@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MockChatProvider } from '@openbot/llm'
 import type { MockStep } from '@openbot/llm'
+import { MockBoxBackend } from '@openbot/boxes'
 import { ManualApprovalGate } from '@openbot/runner'
 import { assembleKernel, InProcessCarrier } from '../src/index.js'
 import type { AssembledKernel } from '../src/index.js'
@@ -143,6 +144,20 @@ describe('assembleKernel 组织模型命令', () => {
     }
   })
 
+  it('身份色透传（P4 Step 5）：addAgent 带 color 落档案；缺席不出现字段（读取端兼容）', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'colored', name: '欧米伽', color: '#199e70' })
+    await kernel.addAgent({ agentId: 'plain', name: '无色者' })
+
+    const agents = await client.call<Array<{ agentId: string; color?: string }>>('v1.system.listAgents')
+    expect(agents.find((a) => a.agentId === 'colored')?.color).toBe('#199e70')
+    expect(agents.find((a) => a.agentId === 'plain')?.color).toBeUndefined()
+    // 任命等角色变更保留档案色（profile 全量落盘）
+    await kernel.agentStore.appointSteward('colored')
+    expect((await kernel.agentStore.get('colored'))?.color).toBe('#199e70')
+  })
+
   it('未知 agent 命令：STATE_AGENT_NOT_FOUND 按 code 透传', async () => {
     const kernel = makeKernel()
     const client = kernel.transport.createClient()
@@ -168,6 +183,72 @@ describe('assembleKernel Box 命令', () => {
     expect(snap.snapshotId).toMatch(/^snap-\d+$/)
     await expect(client.call('v1.boxes.snapshot', { boxId: 'ghost' })).rejects.toMatchObject({
       code: 'BOX_NOT_FOUND',
+    })
+  })
+
+  it('v1.boxes.pause/resume（P4 Step 8）：状态经 v1.box.state 事件下发（零新事件族）+ list 反映', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    const events: KernelEvent[] = []
+    client.subscribe((e) => events.push(e))
+    await kernel.addAgent({ agentId: 'a1' })
+    const boxId = (await client.call<{ boxId: string }[]>('v1.boxes.list'))[0]!.boxId
+
+    const paused = await client.call<{ boxId: string; state: string }>('v1.boxes.pause', { boxId })
+    expect(paused.state).toBe('sleeping')
+    const resumed = await client.call<{ boxId: string; state: string }>('v1.boxes.resume', { boxId })
+    expect(resumed.state).toBe('active')
+
+    // 复用既有 v1.box.state 事件族（协议零新增）
+    const states = events.filter((e) => e.type === 'v1.box.state').map((e) => e.payload)
+    expect(states).toContainEqual({ boxId, state: 'sleeping' })
+    expect(states).toContainEqual({ boxId, state: 'active' })
+    expect((await client.call<Array<{ state: string }>>('v1.boxes.list')).find((b) => b.boxId === boxId)?.state).toBe('active')
+  })
+
+  it('v1.boxes.listSnapshots/restore（P4 Step 9）：链事实下发 + restore 前后 v1.box.state 转移（零新事件族）', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    const events: KernelEvent[] = []
+    client.subscribe((e) => events.push(e))
+    await kernel.addAgent({ agentId: 'a1' })
+    const boxId = (await client.call<{ boxId: string }[]>('v1.boxes.list'))[0]!.boxId
+    await client.call('v1.boxes.snapshot', { boxId })
+    await client.call('v1.boxes.snapshot', { boxId })
+
+    const chain = await client.call<Array<{ snapshotId: string }>>('v1.boxes.listSnapshots')
+    expect(chain.map((s) => s.snapshotId)).toEqual(['snap-2', 'snap-1'])
+
+    events.length = 0
+    const r = await client.call<{ state: string }>('v1.boxes.restore', { boxId, snapshotId: 'snap-1' })
+    expect(r.state).toBe('active')
+    // 回滚中不可用（sleeping 档复用）→ 完成回 active
+    const states = events.filter((e) => e.type === 'v1.box.state').map((e) => e.payload)
+    expect(states).toEqual([
+      { boxId, state: 'sleeping' },
+      { boxId, state: 'active' },
+    ])
+    await expect(client.call('v1.boxes.restore', { boxId, snapshotId: 'snap-99' })).rejects.toMatchObject({
+      code: 'BOX_NOT_FOUND',
+    })
+  })
+
+  it('caps.suspendable=false 的后端：pause 按 BOX_NOT_SUSPENDABLE 拒绝（协议层兜底——UI 按 caps 不渲染按钮）', async () => {
+    // mock 本身支持休眠——此用例验证命令面门禁：caps 声明不支持即如实拒绝
+    const capped = Object.assign(new MockBoxBackend(), {
+      pause: undefined,
+      resume: undefined,
+      caps: () => ({
+        persistent: true, snapshot: true, headless: true, resourceLimits: true,
+        isolation: 'low' as const, interactive: true, suspendable: false,
+      }),
+    }) as never
+    const kernel = assembleKernel({ now: () => 0, backend: capped })
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'a1' })
+    const boxId = (await client.call<{ boxId: string }[]>('v1.boxes.list'))[0]!.boxId
+    await expect(client.call('v1.boxes.pause', { boxId })).rejects.toMatchObject({
+      code: 'BOX_NOT_SUSPENDABLE',
     })
   })
 })

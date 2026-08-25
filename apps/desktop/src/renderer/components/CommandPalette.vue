@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 命令面板（P4 Step 3，原型 pal-* 迁移）：Ctrl K / 标题栏 omnibox 唤起的统一入口——
- * 快速派单（跳会话+聚焦输入）/ 跳转 agent / 接管 Box / 视图导航 / 动作（主题切换；
- * 「新建 agent」随 Step 5 向导落地接入——不放假项）。
+ * 快速派单（跳会话+聚焦输入）/ 跳转 agent / 接管 Box / 视图导航 / 动作（新建 agent 向导——
+ * P4 Step 5 接入；主题切换）。
  * 纯 renderer 消费既有 store，零内核改动；过滤 = 空白分词全部命中（label/kw/sub）。
  * 抢键边界（plan-p4 设计要点）：操作台 PTY 聚焦时 Ctrl K 直送 Box 不弹面板——
  * 判定在 App 全局监听（activeElement 在 .boxops 内即跳过），本组件不感知。
@@ -100,6 +100,14 @@ const commands = computed<PalCommand[]>(() => {
       run: () => ui.switchView(n.view),
     })
   }
+  cmds.push({
+    group: '动作',
+    icon: 'send',
+    label: '新建 agent（向导）',
+    sub: '注册即建专属 Box',
+    kw: '新建 agent 成员 创建 register',
+    run: () => ui.openWizard(),
+  })
   cmds.push({
     group: '动作',
     icon: ui.effectiveTheme === 'dark' ? 'sun' : 'moon',

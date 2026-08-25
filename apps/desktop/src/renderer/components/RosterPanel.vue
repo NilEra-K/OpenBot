@@ -6,7 +6,6 @@
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import type { RosterEntry } from '../stores/kernel'
-import { agentColor } from '../lib/agent-color'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -34,7 +33,7 @@ const subOf = (agent: RosterEntry): string => {
       :class="{ active: ui.activeAgentId === agent.agentId }"
       @click="ui.activeAgentId = agent.agentId"
     >
-      <span class="avatar" :style="{ background: agentColor(agent.agentId) }">
+      <span class="avatar" :style="{ background: kernel.colorOf(agent.agentId) }">
         {{ initialOf(agent.agentId, agent.name) }}
         <span class="stat-dot" :class="isWorking(agent.agentId) ? 'working' : 'idle'"></span>
       </span>
@@ -42,8 +41,14 @@ const subOf = (agent: RosterEntry): string => {
         <span class="ri-name">{{ agent.name ?? agent.agentId }}</span>
         <span class="ri-sub">{{ subOf(agent) }}</span>
       </span>
+      <!-- 未读徽标（P4 Step 6）：非当前会话的 agent 回复计数；进入会话清零（呈现层语义） -->
+      <span v-if="(ui.unread[agent.agentId] ?? 0) > 0" class="ri-badge" :aria-label="`${ui.unread[agent.agentId]} 条未读`">
+        {{ ui.unread[agent.agentId] }}
+      </span>
       <span v-if="agent.role === 'steward'" class="chip chip-accent">管家</span>
     </button>
+    <!-- 新建 agent 入口（P4 Step 5；原型 .roster-new 同款）——向导经命令面注册 -->
+    <button class="roster-new" type="button" @click="ui.openWizard()">＋ 新建 agent</button>
     <div v-if="kernel.roster.length === 0" class="roster-empty">名册为空——等待 agent 注册</div>
   </aside>
 </template>
@@ -197,5 +202,41 @@ const subOf = (agent: RosterEntry): string => {
   color: var(--ink3);
   font-size: 12px;
   padding: 12px 8px;
+}
+
+/* 未读徽标（P4 Step 6，原型 .rrow .badge 同语义）：accent 数字节 */
+.ri-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--accent-weak);
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 650;
+  flex: none;
+}
+
+/* 新建 agent 入口（P4 Step 5）：虚线边框弱化按钮——非事实行，视觉与名册条目区分 */
+.roster-new {
+  height: 34px;
+  margin-top: 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--ink3);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 140ms var(--ease), border-color 140ms var(--ease), background 140ms var(--ease);
+}
+
+.roster-new:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-weak);
 }
 </style>

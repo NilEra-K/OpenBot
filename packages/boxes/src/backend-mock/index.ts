@@ -17,6 +17,7 @@ import type {
   ShellOpenOptions,
   ShellSession,
   SnapshotId,
+  SnapshotInfo,
 } from '../types.js'
 
 /** mock 的诚实能力：功能全「假装 ✓」（矩阵见 ARCHITECTURE.md §6），隔离强度如实为 low */
@@ -28,6 +29,8 @@ export const MOCK_BOX_CAPS: BoxCaps = {
   isolation: 'low',
   // 回显式假终端（openShell 同步实现）——E2E 全链路可测，CI 零沙箱依赖不动摇
   interactive: true,
+  // 休眠状态机对称（P4 Step 8）：内存态置位/复位，E2E 可断言
+  suspendable: true,
 }
 
 /** 一次 exec 的留痕（断言「runner 让沙箱跑了什么」） */
@@ -51,12 +54,21 @@ interface MockBox {
   files: Map<string, string>
 }
 
+/** mock 快照记录（P4 Step 9）：files 深拷贝——回滚可验证「内容恢复到快照点」 */
+interface MockSnapshot {
+  snapshotId: SnapshotId
+  boxId: BoxId
+  createdAt: number
+  files: Map<string, string>
+}
+
 export class MockBoxBackend implements BoxBackend {
   readonly id = 'mock'
   readonly #now: () => number
   readonly #nextBoxId: () => BoxId
   readonly #execImpl: (boxId: BoxId, spec: ExecSpec) => ExecResult | Promise<ExecResult>
   readonly #boxes = new Map<BoxId, MockBox>()
+  readonly #snapshots = new Map<SnapshotId, MockSnapshot>()
   #snapshotCounter = 0
   readonly calls: MockExecCall[] = []
 
@@ -196,9 +208,41 @@ export class MockBoxBackend implements BoxBackend {
   }
 
   async snapshot(boxId: BoxId): Promise<SnapshotId> {
-    this.#require(boxId)
+    const box = this.#require(boxId)
     this.#snapshotCounter += 1
-    return `snap-${this.#snapshotCounter}`
+    const snapshotId = `snap-${this.#snapshotCounter}`
+    this.#snapshots.set(snapshotId, {
+      snapshotId,
+      boxId,
+      createdAt: this.#now(),
+      files: new Map(box.files),
+    })
+    return snapshotId
+  }
+
+  async listSnapshots(): Promise<SnapshotInfo[]> {
+    return [...this.#snapshots.values()]
+      .map((s) => ({ snapshotId: s.snapshotId, createdAt: s.createdAt }))
+      .sort((a, b) => Number(b.snapshotId.slice(5)) - Number(a.snapshotId.slice(5)))
+  }
+
+  async restore(boxId: BoxId, snapshotId: SnapshotId): Promise<void> {
+    const box = this.#require(boxId)
+    const snap = this.#snapshots.get(snapshotId)
+    if (!snap) {
+      throw new KernelError(BoxesErrorCodes.BOX_NOT_FOUND, `快照不存在：${snapshotId}`)
+    }
+    box.files = new Map(snap.files)
+  }
+
+  async pause(boxId: BoxId): Promise<void> {
+    const box = this.#require(boxId)
+    box.state = 'sleeping'
+  }
+
+  async resume(boxId: BoxId): Promise<void> {
+    const box = this.#require(boxId)
+    box.state = 'active'
   }
 
   async stats(_boxId: BoxId): Promise<BoxStats> {
