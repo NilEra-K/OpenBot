@@ -133,7 +133,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - 每 agent 独立目录：`transcript.jsonl / memory.json / automations.json / profile.json / settings.json / group.json`。
 - **角色与唯一性事务**：profile 增加 `role`（steward 管家 / worker 工人，默认 worker）；任命 / 罢免 / 转移为排他事务（复用排他变更锁），**全局唯一 steward 不变量在 store 层强制**——同一册内第二个任命直接拒绝（见 §3.5 主从模型）。
 - **幂等账本**：clientNonce + inputDigest，超时重试零双发。durable acceptance 使发送与执行解耦。
-- etag 钩子保留（条件写），**BCS 多端同步整块推 P5**。
+- etag 钩子保留（条件写），**BCS 多端同步整块推 P6**。
 - 薄薄的 box 目录存储（box 实例清单、快照索引、模板注册）。
 - 继任路线：规模到瓶颈时迁移 `node:sqlite`（Electron 内置 Node 自带，无原生编译）；JSONL 始终是 transcript 源头真相。
 
@@ -166,7 +166,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - 群聊编排：有界轮转（消息上限/轮次上限/全员 pass 收敛/用户消息 supersede）、@提及路由、每成员独立会话状态。
 - 广播：→全员单向扇出，顺序调度、并发执行、无环（发起方：用户与 steward，见上）。
 - subagent：父 agent 派生后台 run，lineage 世系、steer、abort。
-- `CrossUserRelay`（跨用户房间）：turn-request/result、10 分钟窗口 30 turn 预算、不可达退避、nonce 幂等——**协议保留，实现 P5**。
+- `CrossUserRelay`（跨用户房间）：turn-request/result、10 分钟窗口 30 turn 预算、不可达退避、nonce 幂等——**协议保留，实现 P6**。
 - 云 agent 桥：**接口桩，保留协议默认不用**（产品定位写死；后续可接第三方云做弹性补充）。
 - 删除原版 WebAuthn provider 契约（原版遗物，与 OpenBot 无关）。
 
@@ -201,7 +201,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 |---|---|---|
 | `apps/desktop` | **第一交付** | Electron：main（装配 coordinator + 网关）/ preload（contextBridge 注入 token）/ renderer（Vue 3 五大视图）。托盘常驻、自启动、自动更新 |
 | `apps/cli` | P1 | 无壳冒烟：mock llm + mock box 跑全链路（chat → A2A → box exec）。**CI 全确定性的地基**，也是「packages 壳无关」的活证据 |
-| `apps/relay` | P5 占位 | 跨用户房间公网 host（Hono + WS），到时候再说 |
+| `apps/relay` | P6 占位 | 跨用户房间公网 host（Hono + WS），到时候再说 |
 
 ---
 
@@ -219,7 +219,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 
 七族：`v1.lifecycle`（run 生命周期）/ `v1.message`（对话与 A2A）/ `v1.task`（任务与产物）/
 `v1.box`（沙箱状态与 caps）/ `v1.approval`（闸门审批）/ `v1.graph`（社交图谱，委派边与消息边并存）/ `v1.system`（roster 与角色变更等）。
-P5 做 relay 时这就是线上协议，不二次发明。
+P6 做 relay 时这就是线上协议，不二次发明。
 
 协议里只有**领域事实与命令**，永远没有 UI 指令——「打开弹窗 / 刷新视图 / 选中某项」不进协议，UI 对事件的呈现反应是渲染层自治决定。错误与状态传稳定 code（如 `BOX_SNAPSHOT_UNSUPPORTED`），不传文案；文案与多语言归渲染层。内核代码里不出现 UI 字符串。
 
@@ -252,7 +252,7 @@ P5 做 relay 时这就是线上协议，不二次发明。
 
 ### 后端矩阵（诚实版）
 
-| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (Linux·P4) | UTM (macOS·P4) | mock |
+| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (Linux·P5) | UTM (macOS·P5) | mock |
 |---|---|---|---|---|---|---|---|
 | 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓ | ✓ | 假装 ✓ |
 | 快照 | `--export` 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓ | ✓ | ✓ |
@@ -262,7 +262,7 @@ P5 做 relay 时这就是线上协议，不二次发明。
 | 交互终端（PTY） | ✓ Box 内 `script` 真 PTY | 待接入（`exec -it` 同构） | 待接入（`exec -it` 同构） | —— | ✓ | ✓ | ✓ 回显假终端 |
 | 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业要付费授权） | 免费开源；Windows 经 podman machine（**自身占一个 WSL2 发行版**） | **仅 Pro/Enterprise，Home 版没有**（作者本机即 Home） | Linux | macOS | 全平台 |
 
-**结论写死在架构里**：v1 做 **WSL2 + Docker + Podman + mock** 四个后端（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；docker/podman CLI 同构，实现共用 OCI 容器底座）；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P4 后视需求）；Linux/macOS 后端 P4 进。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
+**结论写死在架构里**：v1 做 **WSL2 + Docker + Podman + mock** 四个后端（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；docker/podman CLI 同构，实现共用 OCI 容器底座）；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P5 后视需求）；Linux/macOS 后端 P5 进。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
 
 ### 接口草图
 
@@ -360,14 +360,14 @@ OpenBot/
 │  ├─ state/        src/transcript · ledger · memory · automations · agent-store · box-catalog
 │  ├─ llm/          src/openai-compat · anthropic · mock
 │  ├─ boxes/        src/types(caps) · registry · backend-wsl · backend-docker · backend-mock · images
-│  ├─ messaging/    src/a2a · group · broadcast · subagent · xuser(P5) · cloud-stub
+│  ├─ messaging/    src/a2a · group · broadcast · subagent · xuser(P6) · cloud-stub
 │  ├─ runner/       src/turn · tools(in-box) · gate · approval
 │  ├─ transport/    src/bus · gateway(http/sse/ws) · auth · events(七族)
 │  └─ coordinator/  src/assemble · carriers(inproc · utility) · supervise
 ├─ apps/
 │  ├─ cli/          冒烟与 CI：mock llm + mock box 全链路
 │  ├─ desktop/      main · preload · renderer(Vue3) · resources · electron-builder.yml
-│  └─ relay/        P5 占位
+│  └─ relay/        P6 占位
 └─ tools/           build / publish 脚本
 ```
 
@@ -383,8 +383,9 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | **P1 内核走通（无壳）** | core + state + llm(mock) + runner + transport(bus) + boxes(mock) + coordinator(in-proc)，apps/cli | cli 演示 chat → A2A → box exec(mock) 全链路，确定性，CI 绿 |
 | **P2 桌面** | Electron 壳 + 网关(SSE/WS) + Vue renderer 五视图接真数据 + 闸门 UI + caps UI | 原型视觉对齐；Playwright `_electron` E2E 绿 |
 | **P3 真实后端** | backend-wsl + backend-docker + backend-podman（OCI 底座共用）+ 快照/资源统计/磁盘压力告警 + 流式双线（llm/exec/PTY）+ Windows 打包签名 | 真实 Box 内完成一次「改项目→构建」任务并产出 diff；操作台 PTY 真机可用 |
-| **P4 平台扩展** | Linux（nspawn/原生 docker + deb/AppImage）、macOS（UTM + dmg） | 三平台矩阵如实标注，capabilities 驱动 UI |
-| **P5 relay** | 跨用户房间公网 host、CrossUserRelay 实现 | P2P/Tailscale 优先叙事落地 |
+| **P4 原型对齐收敛** | 差距清零：命令面板（Ctrl K）/ @提及 / toast / 状态栏 / 新建 agent 向导 / Box 休眠与快照回滚 / ctx 档案 / 演示值清扫（2026-08-25 用户裁定重定位——原「平台扩展」顺延 P5、relay 顺延 P6；细案 [docs/plan-p4.md](docs/plan-p4.md)） | prototype.html 差距盘点逐项「已实现 / 记档裁定」二态收敛；三命令 + E2E 全绿 |
+| **P5 平台扩展** | Linux（nspawn/原生 docker + deb/AppImage）、macOS（UTM + dmg） | 三平台矩阵如实标注，capabilities 驱动 UI |
+| **P6 relay** | 跨用户房间公网 host、CrossUserRelay 实现 | P2P/Tailscale 优先叙事落地 |
 
 注：P1 是八包结构直接送的礼物——**不装 Electron 就能验证整个内核**，这是保留包边界的直接回报。
 
@@ -399,8 +400,8 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | `core` | `packages/core` | 架构继承：排他调度/watchdog 语义；代码自研 |
 | `coordinator` | `packages/coordinator` | 继承装配根与监督思想；载体从双进程载体改为 in-process/utility；**v1 不拆进程** |
 | `transport` | `packages/transport` | 继承网关与幂等重试语义；删 MessagePort 帧，**加 WS 数据面**与环回鉴权；local-exec 生态位被 boxes 取代 |
-| `state` | `packages/state` | 继承 JSONL/账本设计；BCS 推 P5；**账本被复用于审批闸门** |
-| `messaging` | `packages/messaging` | 继承 A2A/群聊/广播/subagent 协议语义；xuser 推 P5；云桥降为桩；删 WebAuthn 契约 |
+| `state` | `packages/state` | 继承 JSONL/账本设计；BCS 推 P6；**账本被复用于审批闸门** |
+| `messaging` | `packages/messaging` | 继承 A2A/群聊/广播/subagent 协议语义；xuser 推 P6；云桥降为桩；删 WebAuthn 契约 |
 | `llm` | `packages/llm` | 职责相同，自研薄客户端 |
 | `runner` | `packages/runner` | 继承 turn/SendMessage；**工具层重写为 in-box + 闸门** |
 | —— | `packages/boxes` | **OpenBot 独有**：执行基座从云 VM/宿主 daemon 换成本机沙箱，产品定义本身 |
@@ -421,13 +422,13 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 |---|---|---|
 | 1 | Electron 常驻内存（150–250MB）+ WSL2 vmmem（1GB+）叠加 | 接受（换内核零改造）；托盘「挂起时释放」记 backlog |
 | 2 | WSL2 全局性：所有 Box 共享一个 VM、`wsl --shutdown` 全杀、无按 Box 资源上限、快照=整盘 export | caps 如实标注；文档明示；重任务建议 Docker 后端 |
-| 3 | Docker Desktop 企业授权收费 | 文档标注免费边界（个人/小团队）；P4 评估 podman socket 兼容 |
+| 3 | Docker Desktop 企业授权收费 | 文档标注免费边界（个人/小团队）；P5 评估 podman socket 兼容 |
 | 4 | Windows Sandbox：Home 版没有（作者本机即 Home）、无 headless、关闭即焚、无快照 | 不进 v1；Pro 用户可选后端，caps 驱动 |
 | 5 | `wsl.exe` 输出 UTF-16LE | 解析 `--list` 按 wide-char 解码（记入 boxes 实现注意事项） |
 | 6 | Docker Windows 命名管道 `\\.\pipe\docker_engine` vs Linux unix socket | boxes 层抽象端点差异 |
 | 7 | `/mnt/c` 9P 慢 | 项目建议活在 Box 内或 clone 进去，不跨边界热编辑 |
 | 8 | LLM 中转/代理是国内刚需 | §3.3 写死为必须项 |
-| 9 | relay 与「本地优先」叙事矛盾 | P5；P2P/Tailscale 优先措辞写进协议文档 |
+| 9 | relay 与「本地优先」叙事矛盾 | P6；P2P/Tailscale 优先措辞写进协议文档 |
 | 10 | 单人范围风险 | 八包但 P1 即出无壳里程碑；Linux/macOS 只留接口位；每阶段验收标准已定 |
 | 11 | 本机环回网关攻击面（DNS rebinding/本机其他进程） | §5 安全三条 |
 | 12 | 未签名 exe 被 SmartScreen 拦 | Azure Trusted Signing 进 P3 预算 |
@@ -447,7 +448,7 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | 7 | 许可证 | Apache-2.0 + clean-room | 平移参考库代码（GPL 传染） | 自由度与商用可能性；架构借鉴合法且够用 |
 | 8 | LLM 接入 | 自研薄客户端 | openai/anthropic SDK | 统一、无依赖锁、代理/base_url 自由 |
 | 9 | 沙箱后端 | v1 = wsl + docker + mock | 首版含 Windows Sandbox | Home 版不可用 + 无 headless + 无快照；caps 驱动一切 |
-| 10 | 跨用户房间 | 协议保留，实现 P5 | v1 实现 | 单人范围纪律 + 本地优先叙事优先 |
+| 10 | 跨用户房间 | 协议保留，实现 P6 | v1 实现 | 单人范围纪律 + 本地优先叙事优先 |
 | 11 | agent 组织模型 | 一主多从 · 唯一管家（Steward） | 全对等 / 多管家 | 用户需要唯一默认入口与唯一委派根；主从限定于路由与委派，通信与调度保持对等 |
 
 ---
