@@ -141,13 +141,12 @@ describe('WslBoxBackend（脚本化替身）', () => {
 
   it('stats 只有磁盘真值（vhdx 体积，注入替身）；CPU/内存缺席=不可测；vhdx 缺失如实空报告；teardown 注销并除名', async () => {
     const { run, calls } = scripted(() => OK)
-    let vhdxSize = 2048 * 1024 * 1024
+    const vhdxSize = 2048 * 1024 * 1024
     const statFile = vi.fn(async () => ({ size: vhdxSize }))
     const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run, statFile })
     await backend.create({ image: 'default' })
     expect(await backend.stats('box-1')).toEqual({ diskMb: 2048 })
     expect(statFile).toHaveBeenCalledWith('D:/WSL/openbot-box-box-1/ext4.vhdx')
-    vhdxSize = 0
     statFile.mockRejectedValueOnce(new Error('ENOENT'))
     expect(await backend.stats('box-1')).toEqual({})
     await backend.teardown('box-1')
