@@ -11,8 +11,8 @@ import { MockChatProvider } from '@openbot/llm'
 import type { ChatProvider } from '@openbot/llm'
 import { BoxRegistry, BoxesErrorCodes, MockBoxBackend } from '@openbot/boxes'
 import type { BoxBackend } from '@openbot/boxes'
-import { A2aService } from '@openbot/messaging'
-import { AutoApprovalGate, execTool, gated, hostFetchTool, sendMessageTool, ToolRegistry, TurnRunner } from '@openbot/runner'
+import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
+import { AutoApprovalGate, execTool, gated, hostFetchTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
 import { StreamHub } from '../stream-hub/index.js'
@@ -77,6 +77,10 @@ export interface AssembledKernel {
   readonly backend: BoxBackend
   readonly registry: BoxRegistry
   readonly messaging: A2aService
+  /** 广播扇出（P5 Step 1）：@全员与 @多提及同一命令——UI 只构造收件列表，扇出调度在内核 */
+  readonly broadcast: BroadcastService
+  /** 群聊编排（P5 Step 3）：有界轮转 + supersede（leaderless） */
+  readonly groups: GroupService
   /** run 实况汇聚（壳把 gateway 的 WS 会话 attach 进来；流是实况不进事件总线） */
   readonly streamHub: StreamHub
   /** 交互式 shell 会话（PTY）管理与流分发（gateway 回调与 streamHub 并联 attach） */
@@ -132,6 +136,32 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     },
   })
 
+  // 广播扇出（P5 Step 1）：薄层复用单发管线（子 nonce 各自幂等）；扇出权与收件前置校验在此
+  const broadcast = new BroadcastService({
+    a2a: messaging,
+    isSteward: async (agentId) => (await agentStore.findSteward())?.agentId === agentId,
+    assertAgent: (agentId) => {
+      if (!schedulers.has(agentId)) throw new AgentSchedulerMissingError(agentId)
+    },
+  })
+
+  // 群聊编排（P5 Step 3）：有界轮转 + supersede；成员 turn 经 run.kind 'group' 走 TurnRunner
+  const groups = new GroupService({
+    bus,
+    now,
+    nextMessageId,
+    transcript,
+    ledger,
+    fs,
+    root,
+    schedulerOf: (agentId) => {
+      const scheduler = schedulers.get(agentId)
+      if (!scheduler) throw new AgentSchedulerMissingError(agentId)
+      return scheduler
+    },
+  })
+  void groups.load().catch(() => {}) // 启动恢复群清单（fire-and-forget：失败=空清单如实）
+
   const gate: ApprovalGate =
     options.approvalGateFactory?.({ bus, ledger }) ??
     options.approvalGate ??
@@ -163,6 +193,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const tools = new ToolRegistry()
     .register(execTool({ backend, bus, onStream, transcript }))
     .register(sendMessageTool(messaging))
+    .register(sendBroadcastTool(broadcast))
     .register(gated(hostFetchTool(), { gate }))
 
   const runner = new TurnRunner({
@@ -175,6 +206,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     systemPrompt: options.systemPrompt,
     maxToolRounds: options.maxToolRounds,
     onStream,
+    // 群轮转代际过期判定（P5 Step 4 修复）：supersede 后旧轮终答写入前拦截（GroupService 同判兜底）
+    isGroupTurnStale: (p) => groups.isStale(p),
   })
   executeRef.current = runner.execute
 
@@ -215,6 +248,35 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       messaging.sendA2a(
         payload as { fromAgentId: string; toAgentId: string; text: string; priority?: boolean; nonce: string },
       ),
+    )
+    // ---- 广播扇出（P5 Step 1）：@全员与 @多提及同一命令——UI 只构造 toAgentIds，扇出调度在内核；
+    //      发起方 'user' 或在位 steward（worker 拒绝稳定码）；零新事件族（投递复用既有消息事件） ----
+    .register(
+      'v1.message.fanout',
+      async (payload) => {
+        const { from, toAgentIds, text, nonce } = fanoutSchema.parse(payload)
+        return broadcast.broadcast({ from, toAgentIds, text, nonce })
+      },
+      fanoutSchema,
+    )
+    // ---- 群聊（P5 Step 3）：建群/清单/用户消息（触发有界轮转）；群历史读取复用 v1.transcript.read
+    //      （群=虚拟会话对象，groupId 即键）——零新增读取命令 ----
+    .register(
+      'v1.group.create',
+      async (payload) => {
+        const { name, memberAgentIds } = groupCreateSchema.parse(payload)
+        return groups.createGroup({ name, memberAgentIds })
+      },
+      groupCreateSchema,
+    )
+    .register('v1.group.list', async () => groups.list())
+    .register(
+      'v1.group.send',
+      async (payload) => {
+        const { groupId, text, nonce } = groupSendSchema.parse(payload)
+        return groups.sendUserMessage({ groupId, text, nonce })
+      },
+      groupSendSchema,
     )
     .register('v1.transcript.read', async (payload) =>
       transcript.readAll((payload as { agentId: string }).agentId),
@@ -322,6 +384,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     backend,
     registry,
     messaging,
+    broadcast,
+    groups,
     streamHub,
     shellService,
     statsService,
@@ -404,3 +468,16 @@ const shellIdSchema = z.object({ shellId: z.string().min(1) })
 const schedulerCancelSchema = z.object({ agentId: z.string().min(1), runId: z.string().min(1) })
 const boxIdSchema = z.object({ boxId: z.string().min(1) })
 const restoreSchema = z.object({ boxId: z.string().min(1), snapshotId: z.string().min(1) })
+/** 广播扇出（P5 Step 1）：from='user' 或 agentId；收件非空（去重/排除在服务层） */
+const fanoutSchema = z.object({
+  from: z.string().min(1),
+  toAgentIds: z.array(z.string().min(1)).min(1),
+  text: z.string().min(1),
+  nonce: z.string().min(1),
+})
+/** 群聊（P5 Step 3）：成员非空去重在服务层 */
+const groupCreateSchema = z.object({
+  name: z.string().min(1),
+  memberAgentIds: z.array(z.string().min(1)).min(1),
+})
+const groupSendSchema = z.object({ groupId: z.string().min(1), text: z.string().min(1), nonce: z.string().min(1) })

@@ -61,7 +61,7 @@ const commands = computed<PalCommand[]>(() => {
       sub,
       kw: `派单 dispatch ${a.agentId}`,
       run: () => {
-        ui.activeAgentId = a.agentId
+        ui.openAgent(a.agentId)
         ui.switchView('console')
         ui.focusComposer()
       },
@@ -76,7 +76,7 @@ const commands = computed<PalCommand[]>(() => {
       sub: a.role === 'steward' ? '管家' : 'worker',
       kw: `跳转 jump 会话 ${a.agentId}`,
       run: () => {
-        ui.activeAgentId = a.agentId
+        ui.openAgent(a.agentId)
         ui.switchView('console')
       },
     })
@@ -107,6 +107,14 @@ const commands = computed<PalCommand[]>(() => {
     sub: '注册即建专属 Box',
     kw: '新建 agent 成员 创建 register',
     run: () => ui.openWizard(),
+  })
+  cmds.push({
+    group: '动作',
+    icon: 'chat',
+    label: '新建群聊（建群）',
+    sub: '成员有界轮转 · leaderless',
+    kw: '新建 群聊 建群 group 创建',
+    run: () => ui.openGroupWizard(),
   })
   cmds.push({
     group: '动作',

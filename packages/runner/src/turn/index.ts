@@ -7,7 +7,8 @@
 import { KernelError } from '@openbot/core'
 import type { ActiveRun, EventBus, RunExecutor } from '@openbot/core'
 import type { TranscriptStore } from '@openbot/state'
-import type { A2aRunPayload, UserChatRunPayload } from '@openbot/messaging'
+import type { A2aRunPayload, GroupTurnPayload, UserChatRunPayload } from '@openbot/messaging'
+import { GROUP_PASS_TOKEN } from '@openbot/messaging'
 import { LlmError } from '@openbot/llm'
 import type { ChatMessage, ChatProvider } from '@openbot/llm'
 import type { RunStreamEvent } from '../stream/index.js'
@@ -42,11 +43,28 @@ export interface TurnRunnerDeps {
    * llm 轮次 open/chunk/end（onText 增量）；exec 流由工具层（BoxToolDeps.onStream）同型上报。
    */
   onStream?: (event: RunStreamEvent) => void
+  /**
+   * 群轮转代际过期判定（P5 Step 4 修复，装配注入 = GroupService.isStale）：
+   * supersede 后旧轮 turn 的终答写入前拦截——不落群流不发事件（静默丢弃）。
+   * 缺席时（测试最小注入）不做拦截——写入与编排层代际判定（onSettled）双层防线。
+   */
+  isGroupTurnStale?: (payload: GroupTurnPayload) => boolean
 }
 
 interface TurnInput {
   userMessage: ChatMessage
   originMessageId: string
+  /**
+   * 会话归属（P5 Step 3 群聊）：在场时历史与终答都走群流（transcript 键=groupId、
+   * 终答 kind=group-agent、事件=v1.group.message）；缺席=默认 agent 私聊流。
+   * 过程事实（thinking/exec）仍记 agentId——过程归 agent，消息归群。
+   * stale（P5 Step 4）：终答写入前判定——true=旧轮被 supersede，静默丢弃。
+   */
+  session?: {
+    groupId: string
+    emitFinal: (messageId: string, text: string, runId: string) => void
+    stale?: () => boolean
+  }
 }
 
 export class TurnRunner {
@@ -73,16 +91,48 @@ export class TurnRunner {
         originMessageId: payload.messageId,
       })
     }
+    // 群成员轮转（§3.6 GroupMemberRunner 语义）：历史=群流，终答写群流
+    if (run.kind === 'group') {
+      const payload = run.payload as GroupTurnPayload
+      const ctx = payload.context.length > 0 ? `本轮已发言：\n${payload.context.join('\n')}\n\n` : ''
+      const mentioned = payload.mentioned.length > 0 ? `（点名：${payload.mentioned.join('、')}）` : ''
+      return this.#runTurn(run, {
+        userMessage: {
+          role: 'user',
+          content: `[群 ${payload.groupId} · 第${payload.round}轮]${mentioned} ${payload.text}\n${ctx}（群聊轮转：若无补充请只回复 ${'[pass]'}）`,
+        },
+        originMessageId: payload.messageId,
+        session: {
+          groupId: payload.groupId,
+          emitFinal: (messageId, text, runId) => {
+            this.#deps.bus.emit('v1.group.message', {
+              groupId: payload.groupId,
+              messageId,
+              kind: 'agent',
+              from: run.agentId,
+              text,
+              runId,
+            })
+          },
+          // 代际过期（supersede）终答静默丢弃——写入前判定（E2E 实测：编排层 onSettled
+          // 拦不住先行的 transcript/事件写入——防线必须前移到写入点）
+          stale: () => this.#deps.isGroupTurnStale?.(payload) === true,
+        },
+      })
+    }
     throw new KernelError(RunnerErrorCodes.RUN_KIND_UNKNOWN, `未知 run 种类：${run.kind}`)
   }
 
   async #runTurn(run: ActiveRun, input: TurnInput): Promise<{ text: string }> {
     const { agentId } = run
-    // 入站消息在受理时已落 transcript（durable acceptance）；组装历史时剔除，避免同消息双计
+    // 入站消息在受理时已落 transcript（durable acceptance）；组装历史时剔除，避免同消息双计。
+    // 会话键：群 turn 读群流（群历史），私聊 turn 读 agent 流
+    const sessionKey = input.session?.groupId ?? agentId
     const history = toChatMessages(
-      (await this.#deps.transcript.readAll(agentId)).filter(
+      (await this.#deps.transcript.readAll(sessionKey)).filter(
         (record) => messageIdOf(record.payload) !== input.originMessageId,
       ),
+      agentId,
     )
     const messages: ChatMessage[] = []
     const system = typeof this.#deps.systemPrompt === 'function' ? this.#deps.systemPrompt(agentId) : this.#deps.systemPrompt
@@ -128,14 +178,34 @@ export class TurnRunner {
       })
       if (response.toolCalls.length === 0) {
         const text = response.text ?? ''
+        // 群轮转 [pass]：标准静默 token——不落群流不发事件（GroupService settle 判定缺席）
+        if (input.session && text.trim() === GROUP_PASS_TOKEN) {
+          return { text }
+        }
         const messageId = this.#deps.nextMessageId()
-        await this.#deps.transcript.append(agentId, 'agent', {
-          messageId,
-          text,
-          replyTo: input.originMessageId,
-          runId: run.runId,
-        })
-        this.#deps.bus.emit('v1.message.agent', { messageId, agentId, text, runId: run.runId })
+        if (input.session) {
+          // supersede（P5 Step 4 修复）：旧轮终答静默丢弃——不写群 transcript 不发事件
+          // （turn 本身正常 finish；编排层 onSettled 同判兜底）
+          if (input.session.stale?.()) return { text }
+          // 群终答：写群流（kind=group-agent，成员身份在 from 字段）+ v1.group.message；
+          // agent 私聊流零污染（群里说的话不出现在 1:1 会话）
+          await this.#deps.transcript.append(input.session.groupId, 'group-agent', {
+            messageId,
+            from: agentId,
+            text,
+            replyTo: input.originMessageId,
+            runId: run.runId,
+          })
+          input.session.emitFinal(messageId, text, run.runId)
+        } else {
+          await this.#deps.transcript.append(agentId, 'agent', {
+            messageId,
+            text,
+            replyTo: input.originMessageId,
+            runId: run.runId,
+          })
+          this.#deps.bus.emit('v1.message.agent', { messageId, agentId, text, runId: run.runId })
+        }
         return { text }
       }
       round += 1
@@ -186,8 +256,9 @@ function messageIdOf(payload: unknown): string | null {
   return null
 }
 
-/** transcript 记录 → 会话历史（只映射领域消息；工具往返不入历史） */
-export function toChatMessages(records: { kind: string; payload: unknown }[]): ChatMessage[] {  const messages: ChatMessage[] = []
+/** transcript 记录 → 会话历史（只映射领域消息；工具往返不入历史）。
+ *  viewerId（P5 Step 3）：群流映射的视角成员——自己发言=assistant、他人发言=user 带前缀；私聊流不依赖 */
+export function toChatMessages(records: { kind: string; payload: unknown }[], viewerId?: string): ChatMessage[] {  const messages: ChatMessage[] = []
   for (const record of records) {
     const payload = typeof record.payload === 'object' && record.payload !== null ? (record.payload as Record<string, unknown>) : {}
     const text = typeof payload['text'] === 'string' ? payload['text'] : ''
@@ -201,7 +272,17 @@ export function toChatMessages(records: { kind: string; payload: unknown }[]): C
     } else if (record.kind === 'a2a-out') {
       const to = typeof payload['to'] === 'string' ? payload['to'] : '?'
       messages.push({ role: 'assistant', content: `[A2A → ${to}] ${text}` })
+    } else if (record.kind === 'group-user') {
+      messages.push({ role: 'user', content: text })
+    } else if (record.kind === 'group-agent') {
+      const from = typeof payload['from'] === 'string' ? payload['from'] : '?'
+      if (viewerId !== undefined && from === viewerId) {
+        messages.push({ role: 'assistant', content: text })
+      } else {
+        messages.push({ role: 'user', content: `[群 ${from}] ${text}` })
+      }
     }
+    // group-sys：系统注记不入 llm 历史
   }
   return messages
 }

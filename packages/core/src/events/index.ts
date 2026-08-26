@@ -141,6 +141,25 @@ export interface SystemRosterPayload {
   cause: 'registered' | 'removed' | 'appointed' | 'dismissed' | 'transferred'
 }
 
+/** 群消息（P5 Step 3）：kind=user（用户群消息）/ agent（成员发言）/ sys（sysnote——建群、
+ *  成员缺席、轮转收敛等系统注记）。群 = 虚拟会话对象（groupId 进 transcript 键空间） */
+export interface GroupMessagePayload {
+  groupId: string
+  messageId: string
+  kind: 'user' | 'agent' | 'sys'
+  /** 'user' 或成员 agentId；sysnote 为 'system' */
+  from: string
+  text: string
+  runId?: string
+}
+
+/** 群清单变更（P5 Step 3）：群档案增删——renderer 拉取 v1.group.list 的时机信号 */
+export interface GroupStatePayload {
+  groupId: string
+  name: string
+  cause: 'created' | 'removed'
+}
+
 /** 事件类型 → payload 的唯一映射（v2 破坏性变更时另起 map） */
 export interface KernelEventMap {
   'v1.lifecycle.queued': LifecycleQueuedPayload
@@ -152,6 +171,8 @@ export interface KernelEventMap {
   'v1.message.user': MessageUserPayload
   'v1.message.agent': MessageAgentPayload
   'v1.message.a2a': MessageA2aPayload
+  'v1.group.message': GroupMessagePayload
+  'v1.group.state': GroupStatePayload
   'v1.box.state': BoxStatePayload
   'v1.box.exec': BoxExecPayload
   'v1.box.stats': BoxStatsPayload

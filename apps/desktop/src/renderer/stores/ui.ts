@@ -39,8 +39,10 @@ const resolveTheme = (pref: ThemePref): 'dark' | 'light' =>
 export const useUiStore = defineStore('ui', {
   state: () => ({
     currentView: 'console' as ViewName,
-    /** console 视图当前对话的 agent（默认管家） */
+    /** console 视图当前对话的 agent（默认管家）；群会话时置空（activeGroupId 在场） */
     activeAgentId: 'steward' as string,
+    /** 群会话（P5 Step 4）：非空=群聊流（与 activeAgentId 互斥——openGroup/openAgent 维护） */
+    activeGroupId: null as string | null,
     /** 输入草稿（视图切换不丢） */
     draft: '',
     /** 审批弹窗「稍后处理」的 nonce（只影响弹窗呈现，不碰内核挂起；流内 gate 卡与角标仍可见） */
@@ -55,6 +57,8 @@ export const useUiStore = defineStore('ui', {
     paletteOpen: false,
     /** 新建 agent 向导（P4 Step 5）：名册「+ 新建 agent」与命令面板动作共用开合 */
     wizardOpen: false,
+    /** 建群向导（P5 Step 4）：名册「+ 建群」与命令面板动作共用开合 */
+    groupWizardOpen: false,
     /** ctx 实况面板收起（P4 Step 6，原型 .console.no-ctx 语义）：三栏 ⇄ 两栏 */
     ctxCollapsed: false,
     /** ctx 档案模式（P4 Step 7，原型 ctxMode='settings'）：false=屏幕实况 / true=该会话的档案；
@@ -70,6 +74,18 @@ export const useUiStore = defineStore('ui', {
     switchView(view: ViewName) {
       this.currentView = view
     },
+    /** 进入 agent 会话（P5 Step 4：与群会话互斥） */
+    openAgent(agentId: string) {
+      this.activeAgentId = agentId
+      this.activeGroupId = null
+    },
+    /** 进入群会话（P5 Step 4）：agent 会话清空；未读按群键清零；档案是会话局部态切群回屏幕 */
+    openGroup(groupId: string) {
+      this.activeGroupId = groupId
+      this.activeAgentId = ''
+      this.clearUnread(groupId)
+      this.ctxSettings = false
+    },
     openPalette() {
       this.paletteOpen = true
     },
@@ -84,6 +100,12 @@ export const useUiStore = defineStore('ui', {
     },
     closeWizard() {
       this.wizardOpen = false
+    },
+    openGroupWizard() {
+      this.groupWizardOpen = true
+    },
+    closeGroupWizard() {
+      this.groupWizardOpen = false
     },
     toggleCtx() {
       this.ctxCollapsed = !this.ctxCollapsed

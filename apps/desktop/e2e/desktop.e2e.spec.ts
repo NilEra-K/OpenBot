@@ -430,14 +430,16 @@ test('@提及（P4 Step 4）：补全菜单键盘流 + 单提及路由 + 消息�
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
-    // —— 菜单弹出与过滤：@ 弹全员（管家=档案名 / worker1=name 缺席回退 id）；@w 只剩 worker1 ——
+    // —— 菜单弹出与过滤：@ 弹全员（P5 Step 2 起 @全员广播项置顶：全员+管家+worker1 三项；
+    //     管家=档案名 / worker1=name 缺席回退 id）；@w 只剩 worker1（全员项不匹配 w） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     const input = page.locator('.composer-box input')
     await expect(page.locator('.sh-name')).toHaveText('管家')
     await input.fill('@')
     const menu = page.locator('.mention-menu')
     await expect(menu).toBeVisible()
-    await expect(menu.locator('.m-item')).toHaveCount(2)
+    await expect(menu.locator('.m-item')).toHaveCount(3)
+    await expect(menu.locator('.m-item').first().locator('.mm-name')).toHaveText('@全员')
     await input.fill('@w')
     await expect(menu.locator('.m-item')).toHaveCount(1)
     await expect(menu.locator('.mm-name')).toHaveText('@worker1')
@@ -467,6 +469,163 @@ test('@提及（P4 Step 4）：补全菜单键盘流 + 单提及路由 + 消息�
     await expect(userChip).toHaveText('@worker1', { timeout: 15_000 })
     // agent 回复 md 路径：@管家 命中名册档案名
     await expect(page.locator('.m-text.md .mention')).toHaveText('@管家', { timeout: 15_000 })
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('广播扇出（P5 Step 2）：@全员补全 → 内核 fanout 全员到达 + toast + 多提及扇出 + 图谱边同源', async () => {
+  const mock = await startMockOpenAi([
+    // 管家与 worker1 各自的广播回复（共用端点：user 消息回固定文本——两 run 各取一次）
+    { match: (l) => l.role === 'user', text: '收到广播' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-fanout-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_EXTRA_AGENTS: 'worker1', OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // —— @全员补全（P5 Step 2）：@全 弹菜单（全员项首位）→ Enter 补全尾随空格 → 追加文本发送 ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    const input = page.locator('.composer-box input')
+    await input.fill('@全')
+    const menu = page.locator('.mention-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu.locator('.m-item').first().locator('.mm-name')).toHaveText('@全员')
+    await input.press('Enter')
+    await expect(input).toHaveValue('@全员 ')
+    await input.pressSequentially('各自查收')
+    await input.press('Enter')
+
+    // 扇出受理回执 → toast（一次命令原子扇出，非 UI 循环；hasText 过滤避开设置页残留 toast）
+    await expect(page.locator('.toast.success', { hasText: '已广播给 2 人' })).toBeVisible({ timeout: 15_000 })
+
+    // —— 到达面 1：worker1 会话（名册切换）——广播文本在场 + worker1 回复到达（md 路径） ——
+    await page.locator('.roster-item', { hasText: 'worker1' }).click()
+    await expect(page.locator('.m.user', { hasText: '各自查收' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.m-text.md', { hasText: '收到广播' })).toBeVisible({ timeout: 15_000 })
+
+    // —— 到达面 2：管家会话——同样收到广播与回复（顺序入队并发执行，两 run 独立） ——
+    await page.locator('.roster-item', { hasText: '管家' }).click()
+    await expect(page.locator('.m.user', { hasText: '各自查收' })).toBeVisible()
+    await expect(page.locator('.m-text.md', { hasText: '收到广播' })).toBeVisible({ timeout: 15_000 })
+
+    // —— 多提及扇出（@a @b 同一条 → fanout 提及者列表）：两成员各自收到 ——
+    await input.fill('@worker1 @管家 多提及查收')
+    await input.press('Enter')
+    await expect(page.locator('.toast.success', { hasText: '已广播给' }).last()).toBeVisible({ timeout: 15_000 })
+
+    // —— 图谱边同源：user↔worker1 与 user↔管家 两对关系由事件流自然驱动 ——
+    await page.getByRole('button', { name: '图谱', exact: true }).click()
+    await expect(page.locator('.graph-sum')).toContainText('2 对关系')
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮 → 全员 pass 收敛 → 群组节/ctx 群档案/菱形节点在场', async () => {
+  const mock = await startMockOpenAi([
+    // 旧轮（第1轮）成员响应：延迟中用户插话 → supersede；settle 后代际不匹配被内核静默丢弃
+    { match: (l) => l.role === 'user' && l.content.includes('· 第1轮]'), delayMs: 2600, text: '旧轮发言不该出现' },
+    // 新轮（第2轮）首位成员：即时发言（落群流——顺序轮转的第一声）
+    { match: (l) => l.role === 'user' && l.content.includes('· 第2轮]') && !l.content.includes('本轮已发言'), text: '新轮第一位发言' },
+    // 轮转后续成员（上下文含「本轮已发言」）：[pass]
+    { match: (l) => l.role === 'user' && l.content.includes('本轮已发言'), text: '[pass]' },
+    // 第3轮全员 [pass]：无人发言 → 收敛 sysnote（首位 pass 后上下文仍空，同此步命中）
+    { match: (l) => l.role === 'user' && l.content.includes('· 第3轮]') && !l.content.includes('本轮已发言'), text: '[pass]' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-group-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_EXTRA_AGENTS: 'worker1', OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // —— 建群：名册「＋ 建群」→ 群名 + 勾选管家与 worker1 → 创建（内核 sysnote 落群流）→ 跳群会话 ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.roster-new', { hasText: '建群' }).click()
+    const wiz = page.locator('.wiz-card')
+    await expect(wiz).toBeVisible()
+    await page.locator('#gwName').fill('评审组')
+    await page.locator('.gw-member', { hasText: '管家' }).click()
+    await page.locator('.gw-member', { hasText: 'worker1' }).click()
+    await wiz.getByRole('button', { name: /^建群/ }).click()
+
+    await expect(page.locator('.sh-name')).toHaveText('评审组', { timeout: 10_000 })
+    await expect(page.locator('.sysnote').first()).toContainText('群「评审组」建立')
+    await expect(page.locator('.sh-status .chip')).toContainText('群聊 · 2 成员')
+
+    // —— 第1条消息（第1轮，成员响应慢 2.6s）→ 400ms 后插话第2条：supersede ——
+    const input = page.locator('.composer-box input')
+    await input.fill('第一轮议题')
+    await input.press('Enter')
+    await page.waitForTimeout(400) // 首成员 turn 已受理（慢响应在途）
+    await input.fill('第二轮议题打断')
+    await input.press('Enter')
+
+    // supersede 注记 + 新轮首位成员发言（群聊流 md 路径）+ 用户两条气泡在场
+    await expect(page.locator('.sysnote', { hasText: '用户插话，本轮重新开始' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.m-text.md', { hasText: '新轮第一位发言' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.m.user', { hasText: '第二轮议题打断' })).toBeVisible()
+    await expect(page.locator('.m.user', { hasText: '第一轮议题' })).toBeVisible()
+
+    // —— 第3条消息（第3轮）：全员 [pass] → 收敛 sysnote ——
+    await input.fill('第三轮全员沉默')
+    await input.press('Enter')
+    await expect(page.locator('.sysnote', { hasText: '全员 pass，本轮收敛' })).toBeVisible({ timeout: 15_000 })
+
+    // 旧轮响应（延迟 2.6s）settle 后被代际丢弃——不落群流
+    await page.waitForTimeout(2600)
+    await expect(page.locator('.stream')).not.toContainText('旧轮发言不该出现')
+
+    // —— 名册群组节：条目在场且 active（群会话中） ——
+    await expect(page.locator('.roster-sec', { hasText: '群组' })).toBeVisible()
+    await expect(page.locator('.roster-item.active', { hasText: '评审组' })).toBeVisible()
+
+    // —— ctx 群状态屏（群无 Box 如实）+ 群档案（成员行 + 轮转边界 kv） ——
+    await expect(page.locator('.ctx-screen.is-static')).toContainText('群聊无 Box')
+    await page.getByTitle('会话档案（Settings）').click()
+    await expect(page.locator('.ctx-name')).toHaveText('评审组')
+    await expect(page.locator('.ctx-sec', { hasText: '成员' })).toBeVisible()
+    await expect(page.locator('.edge-row', { hasText: 'worker1' })).toBeVisible()
+    await expect(page.locator('.ctx .kv', { hasText: '群记录上限 200 条' })).toBeVisible()
+    await page.locator('.ctx-back').click()
+
+    // —— 图谱菱形节点：群节点（ggroup 菱形）+ 群边在场 ——
+    await page.getByRole('button', { name: '图谱', exact: true }).click()
+    await expect(page.locator('.ggroup')).toBeVisible()
+    await expect(page.locator('.gnode[aria-label*="评审组"]')).toBeVisible()
   } finally {
     await mock.close()
     await app.close()

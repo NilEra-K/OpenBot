@@ -9,7 +9,9 @@
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
+import type { GroupEntry } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
+import { useToastStore } from '../stores/toast'
 import { renderMarkdown } from '../lib/markdown'
 import { mentionify } from '../lib/mention'
 import RosterPanel from '../components/RosterPanel.vue'
@@ -20,6 +22,7 @@ import type { MentionItem } from '../components/MentionMenu.vue'
 import type { LiveStreamBlock } from '../stores/kernel'
 
 const kernel = useKernelStore()
+const toast = useToastStore()
 const ui = useUiStore()
 
 const streamEl = ref<HTMLElement | null>(null)
@@ -29,8 +32,59 @@ const activeAgent = computed(
   () => kernel.roster.find((a) => a.agentId === ui.activeAgentId) ?? null,
 )
 
+/** 群会话对象（P5 Step 4）：activeGroupId 在场时群聊流；与 agent 会话互斥 */
+const activeGroup = computed(() =>
+  ui.activeGroupId !== null ? (kernel.groups.find((g) => g.groupId === ui.activeGroupId) ?? null) : null,
+)
+
+/** 会话标题（stream-head）：群名或 agent 名 */
+const sessionTitle = computed(() => activeGroup.value?.name ?? activeAgent.value?.name ?? ui.activeAgentId)
+
+/** 群内任一成员有进行中 run（群聊流「轮转中」提示与三个点占位） */
+const groupBusy = computed(() => {
+  const g = activeGroup.value
+  if (!g) return false
+  return kernel.runs.some(
+    (r) => g.members.includes(r.agentId) && (r.state === 'queued' || r.state === 'running'),
+  )
+})
+
+/** 群流渲染单元（P5 Step 4）：群消息没有 think/exec 卡（过程归成员各自会话）——
+ *  日期分隔 + 用户气泡（group-user）+ 成员发言（group-agent，身份色署名）+ sysnote 系统注记 */
+interface GroupUnit {
+  key: string
+  at: number
+  kind: 'divider' | 'user' | 'agent' | 'sys'
+  msgIndex: number
+}
+
+const groupUnits = computed<GroupUnit[]>(() => {
+  const gid = ui.activeGroupId
+  if (gid === null) return []
+  const units: GroupUnit[] = []
+  let lastDay = ''
+  kernel.messages.forEach((m, i) => {
+    if (m.groupId !== gid) return
+    const day = new Date(m.at).toDateString()
+    if (day !== lastDay) {
+      lastDay = day
+      units.push({ key: `d${i}`, at: m.at, kind: 'divider', msgIndex: i })
+    }
+    units.push({
+      key: `m${i}`,
+      at: m.at,
+      kind: m.kind === 'group-user' ? 'user' : m.kind === 'group-agent' ? 'agent' : 'sys',
+      msgIndex: i,
+    })
+  })
+  return units
+})
+
 /** agent 首字母（头像用） */
 const initialOf = (id: string): string => (kernel.roster.find((a) => a.agentId === id)?.name ?? id).trim().charAt(0) || '?'
+
+/** agent 显示名（群成员署名等——name 缺席回退 id） */
+const nameOf = (id: string): string => kernel.roster.find((a) => a.agentId === id)?.name ?? id
 
 const fmtTime = (at: number): string =>
   new Date(at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -253,11 +307,15 @@ onMounted(() => {
   if (ui.composerFocus) consumeComposerFocus()
 })
 
-// 会话历史懒加载：切换会话或连接就绪时拉一次 transcript（内核重启后的持久真相；已覆盖时幂等跳过）
+// 会话历史懒加载：切换会话或连接就绪时拉一次 transcript（内核重启后的持久真相；已覆盖时幂等跳过）。
+// 群会话（P5 Step 4）：groupId 即 transcript 键——同一命令零新面；agent 会话空串（群在场）跳过
 watch(
-  () => [ui.activeAgentId, kernel.connected] as const,
-  ([agentId, connected]) => {
-    if (connected) void kernel.loadHistory(agentId).catch(() => {})
+  () => [ui.activeAgentId, ui.activeGroupId, kernel.connected] as const,
+  ([agentId, groupId, connected]) => {
+    if (!connected) return
+    const key = groupId ?? agentId
+    if (key === '') return
+    void kernel.loadHistory(key).catch(() => {})
   },
   { immediate: true },
 )
@@ -265,11 +323,18 @@ watch(
 /** 发送（乐观更新在 store；失败态由流内重试按钮处理） */
 const sending = ref(false)
 
-// ---- @提及（P4 Step 4）：补全菜单 + 单提及路由 + 名册命中高亮 ----
+// ---- @提及（P4 Step 4 + P5 Step 2 广播）：补全菜单 + 单提及路由 + @全员/多提及扇出 + 名册命中高亮 ----
+
+/** @全员补全 token（P5 Step 2）：保留字——全员判定优先于名册同名命中（语义明确不歧义） */
+const ALL_MENTION = '全员'
 
 /** 名册命中面（名字与 agentId 都可命中——新 agent name 缺席时 id 即名字） */
 const mentionNames = computed(
-  () => new Set(kernel.roster.flatMap((a) => (a.name ? [a.name, a.agentId] : [a.agentId]))),
+  () =>
+    new Set([
+      ...kernel.roster.flatMap((a) => (a.name ? [a.name, a.agentId] : [a.agentId])),
+      ...kernel.groups.map((g) => g.name), // 群对象（P5 Step 4）：@群名 高亮同面
+    ]),
 )
 
 const mention = ref<{ open: boolean; start: number; items: MentionItem[]; sel: number }>({
@@ -294,14 +359,27 @@ const onComposerInput = (): void => {
     return
   }
   const q = m[1]!.toLowerCase()
-  const items = kernel.roster
-    .map((a) => ({
-      agentId: a.agentId,
-      name: a.name ?? a.agentId,
-      sub: a.role === 'steward' ? '管家' : 'worker',
-      color: a.color,
-    }))
-    .filter((it) => it.name.toLowerCase().startsWith(q) || it.agentId.toLowerCase().startsWith(q))
+  // @全员项（P5 Step 2）：前缀命中「全员」即置顶——扇出权事实驱动（用户恒可发）
+  const items: MentionItem[] = []
+  if (ALL_MENTION.toLowerCase().startsWith(q)) {
+    items.push({ agentId: '__all__', name: ALL_MENTION, sub: '广播', color: 'var(--accent)' })
+  }
+  items.push(
+    ...kernel.roster
+      .map((a) => ({
+        agentId: a.agentId,
+        name: a.name ?? a.agentId,
+        sub: a.role === 'steward' ? '管家' : 'worker',
+        color: a.color,
+      }))
+      .filter((it) => it.name.toLowerCase().startsWith(q) || it.agentId.toLowerCase().startsWith(q)),
+  )
+  // 群对象（P5 Step 4，原型「产品评审组 · 群聊 · 有界轮转」同位）：@群名 → 消息发群并跟随跳转
+  items.push(
+    ...kernel.groups
+      .filter((g) => g.name.toLowerCase().startsWith(q))
+      .map((g) => ({ agentId: g.groupId, name: g.name, sub: '群聊 · 有界轮转', color: 'var(--ink3)' })),
+  )
   if (items.length === 0) {
     closeMention()
     return
@@ -363,16 +441,76 @@ const mentionedAgents = (text: string): string[] => {
   return [...found]
 }
 
+/** 文本中提及的群（P5 Step 4）：命中面=群名——@群名 → 消息发群（内核有界轮转）并跟随跳转 */
+const mentionedGroups = (text: string): GroupEntry[] => {
+  const found = new Set<string>()
+  for (const m of text.matchAll(/(?:^|[^一-龥A-Za-z0-9])@([一-龥A-Za-z0-9]+)/g)) {
+    const hit = kernel.groups.find((g) => g.name === m[1])
+    if (hit) found.add(hit.groupId)
+  }
+  return [...found].map((id) => kernel.groups.find((g) => g.groupId === id)!)
+}
+
+/** 文本含 @全员 token（P5 Step 2）：前置非名字字符 + 后置非名字字符（防「@全员们」误命中）；
+ *  全员 token 保留字——判定先于名册同名命中 */
+const mentionsAll = (text: string): boolean =>
+  new RegExp(`(?:^|[^一-龥A-Za-z0-9])@${ALL_MENTION}(?![一-龥A-Za-z0-9])`).test(text)
+
 const send = async (): Promise<void> => {
   const text = ui.draft.trim()
   if (text === '' || sending.value) return
-  // 单提及路由（裁定 C 的 P4 侧）：唯一提及且非当前会话对象 → 消息发给该 agent 并
-  // 跟随跳转（消息落进目标会话流，不发完失联）；多提及=广播语义，随 P5 广播协议
-  let to = ui.activeAgentId
+  // 群会话（P5 Step 4）：直达群命令（内核有界轮转——supersede/上限/幂等在编排层）；
+  // 群内 @提及是轮转优先信号（内核识别），不做单发路由
+  if (ui.activeGroupId !== null) {
+    const groupId = ui.activeGroupId
+    ui.draft = ''
+    sending.value = true
+    try {
+      await kernel.sendGroupMessage(groupId, text)
+    } catch {
+      // 失败已标记在消息条目上（流内显示重试——同用户消息路径）
+    } finally {
+      sending.value = false
+      draftEl.value?.focus()
+    }
+    return
+  }
+  // 扇出/群路由分流（P5 Step 2 裁定 C + P5 Step 4 群对象）：@全员（名册全量）、@多提及（提及者列表）
+  // → 内核 fanout 一次命令原子受理；@群名 → 消息发群（轮转）并跟随跳转；纯群提及不发给当前会话
+  // agent（意图是进群——与 P4 单提及路由同语义）；单提及路由（P4 语义）保持——唯一提及且非当前
+  // 会话对象则跳转跟随
+  const all = mentionsAll(text)
   const targets = mentionedAgents(text)
+  const groupTargets = mentionedGroups(text)
+  if (all || targets.length > 1 || groupTargets.length > 0) {
+    ui.draft = ''
+    sending.value = true
+    try {
+      for (const g of groupTargets) await kernel.sendGroupMessage(g.groupId, text)
+      if (all || targets.length > 1) {
+        const recipients = all ? kernel.roster.map((a) => a.agentId) : targets
+        const acc = await kernel.fanoutMessage(recipients, text)
+        const names = acc.recipients
+          .map((r) => kernel.roster.find((a) => a.agentId === r.agentId)?.name ?? r.agentId)
+          .join('、')
+        toast.push(`已广播给 ${acc.recipients.length} 人：${names}`, 'success')
+      } else if (targets.length === 1) {
+        // 单 agent 提及 + 群提及混合：agent 部分照常单发（跟随跳转交给群）
+        await kernel.sendUserMessage(targets[0]!, text)
+      }
+      if (groupTargets.length > 0) ui.openGroup(groupTargets[groupTargets.length - 1]!.groupId)
+    } catch (err) {
+      toast.push(`${all || targets.length > 1 ? '广播' : '发送'}失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
+    } finally {
+      sending.value = false
+      draftEl.value?.focus()
+    }
+    return
+  }
+  let to = ui.activeAgentId
   if (targets.length === 1 && targets[0] !== ui.activeAgentId) {
     to = targets[0]
-    ui.activeAgentId = to
+    ui.openAgent(to)
   }
   ui.draft = ''
   sending.value = true
@@ -386,11 +524,15 @@ const send = async (): Promise<void> => {
   }
 }
 
-/** 失败条目重试：同 nonce 重发（账本幂等，零双发） */
+/** 失败条目重试：同 nonce 重发（账本幂等，零双发）——群消息走群命令（P5 Step 4 分流） */
 const retry = (index: number): void => {
   const m = kernel.messages[index]
   if (!m || m.messageId[0] !== '~') return
   const nonce = m.messageId.slice(1)
+  if (m.kind === 'group-user' && m.groupId) {
+    void kernel.sendGroupMessage(m.groupId, m.text, nonce).catch(() => {})
+    return
+  }
   void kernel.sendUserMessage(m.to, m.text, nonce).catch(() => {})
 }
 
@@ -411,11 +553,14 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
 
     <div class="streamcol">
       <div class="stream-head">
-        <div class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
+        <div v-if="activeGroup" class="avatar" style="background: var(--accent)">群</div>
+        <div v-else class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
         <div class="sh-text">
-          <div class="sh-name">{{ activeAgent?.name ?? ui.activeAgentId }}</div>
+          <div class="sh-name">{{ sessionTitle }}</div>
           <div class="sh-status">
-            <span v-if="activeAgent?.role === 'steward'" class="chip chip-accent">管家</span>
+            <span v-if="activeGroup" class="chip chip-accent">群聊 · {{ activeGroup.members.length }} 成员 · 有界轮转</span>
+            <span v-if="activeGroup && groupBusy" class="sh-warn">轮转中…</span>
+            <span v-if="!activeGroup && activeAgent?.role === 'steward'" class="chip chip-accent">管家</span>
             <span v-if="!kernel.providerConfigured" class="sh-warn">provider 未配置——回复将失败，去「设置」配置</span>
             <span v-else-if="kernel.connected">已连接 · seq {{ kernel.lastSeq }}</span>
           </div>
@@ -447,6 +592,47 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
       <div ref="streamEl" class="stream">
         <div class="stream-inner">
           <p v-if="kernel.bootError" class="placeholder">内核未连接：{{ kernel.bootError }}</p>
+
+          <!-- 群聊流（P5 Step 4）：群消息没有 think/exec 卡（过程归成员各自会话）——
+               用户气泡 + 成员发言（身份色署名）+ sysnote 系统注记（建群/缺席/收敛） -->
+          <template v-else-if="activeGroup">
+            <p v-if="groupUnits.length === 0" class="placeholder">群聊开启——发消息触发成员轮转（有界：上限内依序响应，全员 pass 收敛）</p>
+            <template v-for="unit in groupUnits" :key="unit.key">
+              <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
+              <div v-else-if="unit.kind === 'sys'" class="sysnote">{{ kernel.messages[unit.msgIndex]!.text }}</div>
+              <div v-else-if="unit.kind === 'user'" class="m user">
+                <div class="avatar neutral">你</div>
+                <div class="m-body">
+                  <div class="m-meta">
+                    <span class="m-name">你</span>
+                    <span class="m-time">{{ fmtTime(unit.at) }}</span>
+                    <span v-if="kernel.messages[unit.msgIndex]!.pending" class="m-state">发送中…</span>
+                    <button v-else-if="kernel.messages[unit.msgIndex]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
+                  </div>
+                  <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
+                </div>
+              </div>
+              <div v-else class="m">
+                <div class="avatar" :style="{ background: kernel.colorOf(kernel.messages[unit.msgIndex]!.from) }">
+                  {{ initialOf(kernel.messages[unit.msgIndex]!.from) }}
+                </div>
+                <div class="m-body">
+                  <div class="m-meta">
+                    <span class="m-name" :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex]!.from) }">
+                      {{ nameOf(kernel.messages[unit.msgIndex]!.from) }}
+                    </span>
+                    <span class="m-time">{{ fmtTime(unit.at) }}</span>
+                  </div>
+                  <div class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
+                </div>
+              </div>
+            </template>
+            <!-- 轮转占位（与私聊同款结构——.m-text.typing .dot 三点动画） -->
+            <div v-if="groupBusy" class="m-text typing" aria-label="成员轮转中">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            </div>
+          </template>
+
           <p v-else-if="streamUnits.length === 0" class="placeholder">
             {{ kernel.stewardId ? '开始对话——你的消息永远最先（user lane）' : '管家空缺：等待首个 agent 被任命' }}
           </p>

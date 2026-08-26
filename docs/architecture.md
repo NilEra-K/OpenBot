@@ -8,4 +8,5 @@
 - P1：内核装配时序（cli 路径：coordinator in-process 装配图）、每包内部模块图
 - P2：桌面装配（main / preload / renderer 三角）、环回网关部署图
 - P3：Box 生命周期时序（create → exec → snapshot → teardown）
-- P5：relay 部署与跨用户协议时序
+- P5：广播扇出与群聊轮转协议时序、OCI 双壳装配
+- P7：relay 部署与跨用户协议时序

@@ -217,6 +217,21 @@
   flex: none;
 }
 
+/* 群档案头像（P5 Step 4，原型 .avatar-group 同款）：中性底 + chat 图标——聚合对象不取身份色 */
+.ctx-head .avatar-group {
+  background: var(--bg3);
+  color: var(--ink2);
+  border: 1px solid var(--line-strong);
+}
+
+/* 档案尾注（原型 .ctx-note 同源）：群档案 supersede 说明等弱化行 */
+.ctx-note {
+  font-size: 11.5px;
+  color: var(--ink3);
+  line-height: 1.7;
+  margin-top: 12px;
+}
+
 .ctx-head-text {
   min-width: 0;
 }

@@ -1,12 +1,13 @@
 # 平台与沙箱矩阵
 
-v1 做 **WSL2 + Docker + Podman + mock** 四个后端（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷）；
+v1 做 **WSL2 + Docker + Podman + mock** 四个后端（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；
+Docker/Podman 双壳 2026-08-26 裁定随 P5 兑现）；
 Windows Sandbox 降级为 Pro 用户可选（P4 后视需求）；
-Linux / macOS 后端 P4 进。接口按 caps 设计，永不按「最强后端都能做什么」设计（ARCHITECTURE.md §6）。
+Linux / macOS 后端 P6 进（2026-08-26 裁定顺延）。接口按 caps 设计，永不按「最强后端都能做什么」设计（ARCHITECTURE.md §6）。
 
 ## 后端能力矩阵
 
-| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (P4) | UTM (P4) | mock |
+| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (P6) | UTM (P6) | mock |
 |---|---|---|---|---|---|---|---|
 | 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓ | ✓ | 假装 ✓ |
 | 快照 | --export 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓ | ✓ | ✓ |

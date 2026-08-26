@@ -1,25 +1,37 @@
 <script setup lang="ts">
 /**
- * 名册面板（prototype.html 迁移）：「成员」头 + 本地 agents 分节 + 管家徽标 + 状态机。
+ * 名册面板（prototype.html 迁移）：「成员」头 + 本地 agents 分节 + 管家徽标 + 状态机 +
+ * 群组分节（P5 Step 4，原型 sec('群组')——群档案事实来自 v1.group.list，条目点击进群聊流）。
  * P2 真实数据：roster 事实来自事件流快照；「工作中/空闲」由 runs 投影（休眠/远端是 P4/P5 语义，数据到了再显示）。
  */
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
-import type { RosterEntry } from '../stores/kernel'
+import type { GroupEntry, RosterEntry } from '../stores/kernel'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
 
 const initialOf = (id: string, name?: string): string => (name ?? id).trim().charAt(0) || '?'
 
+/** 群成员显示名列表（档案 name 缺席回退 id——与 agent 同规则） */
+const memberNames = (g: GroupEntry): string =>
+  g.members.map((id) => kernel.roster.find((a) => a.agentId === id)?.name ?? id).join(' + ')
+
 /** agent 是否有 running run（lane 排他保证同一 agent 至多一个活跃 turn） */
 const isWorking = (agentId: string): boolean =>
   kernel.runs.some((r) => r.agentId === agentId && r.state === 'running')
+
+/** 群内任一成员轮转中（群条目 sub——过程归成员，群本身无 run） */
+const groupWorking = (g: GroupEntry): boolean =>
+  g.members.some((id) => isWorking(id))
 
 const subOf = (agent: RosterEntry): string => {
   const base = agent.role === 'steward' ? '管家 · 默认对话者' : 'worker'
   return isWorking(agent.agentId) ? `工作中 · ${base}` : base
 }
+
+/** 群图标（prototype ICONS.chat 同源 path；视图 0 0 24 24） */
+const CHAT_ICON = '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
 </script>
 
 <template>
@@ -30,8 +42,8 @@ const subOf = (agent: RosterEntry): string => {
       v-for="agent in kernel.roster"
       :key="agent.agentId"
       class="roster-item"
-      :class="{ active: ui.activeAgentId === agent.agentId }"
-      @click="ui.activeAgentId = agent.agentId"
+      :class="{ active: ui.activeGroupId === null && ui.activeAgentId === agent.agentId }"
+      @click="ui.openAgent(agent.agentId)"
     >
       <span class="avatar" :style="{ background: kernel.colorOf(agent.agentId) }">
         {{ initialOf(agent.agentId, agent.name) }}
@@ -50,6 +62,30 @@ const subOf = (agent: RosterEntry): string => {
     <!-- 新建 agent 入口（P4 Step 5；原型 .roster-new 同款）——向导经命令面注册 -->
     <button class="roster-new" type="button" @click="ui.openWizard()">＋ 新建 agent</button>
     <div v-if="kernel.roster.length === 0" class="roster-empty">名册为空——等待 agent 注册</div>
+
+    <!-- 群组分节（P5 Step 4，原型 sec('群组')）：群档案事实驱动——无群时只有建群入口 -->
+    <div class="roster-sec">群组</div>
+    <button
+      v-for="g in kernel.groups"
+      :key="g.groupId"
+      class="roster-item"
+      :class="{ active: ui.activeGroupId === g.groupId }"
+      @click="ui.openGroup(g.groupId)"
+    >
+      <span class="avatar avatar-group">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="CHAT_ICON"></svg>
+        <span class="stat-dot" :class="groupWorking(g) ? 'working' : 'idle'"></span>
+      </span>
+      <span class="ri-text">
+        <span class="ri-name">{{ g.name }}</span>
+        <span class="ri-sub">{{ memberNames(g) }}</span>
+      </span>
+      <!-- 未读徽标：群成员发言/群 sysnote 按群计数（进入群会话清零） -->
+      <span v-if="(ui.unread[g.groupId] ?? 0) > 0" class="ri-badge" :aria-label="`${ui.unread[g.groupId]} 条未读`">
+        {{ ui.unread[g.groupId] }}
+      </span>
+    </button>
+    <button class="roster-new" type="button" @click="ui.openGroupWizard()">＋ 建群</button>
   </aside>
 </template>
 
@@ -117,6 +153,13 @@ const subOf = (agent: RosterEntry): string => {
   font-weight: 600;
   color: #141414;
   flex: none;
+}
+
+/* 群头像（P5 Step 4，原型 .avatar-group 同款）：中性底 + chat 图标——群是聚合对象不取身份色 */
+.avatar-group {
+  background: var(--bg3);
+  color: var(--ink2);
+  border: 1px solid var(--line-strong);
 }
 
 /* 头像右下角状态点（原型 .avatar .stat-dot；数据来自 runs 投影，非装饰） */
@@ -220,7 +263,7 @@ const subOf = (agent: RosterEntry): string => {
   flex: none;
 }
 
-/* 新建 agent 入口（P4 Step 5）：虚线边框弱化按钮——非事实行，视觉与名册条目区分 */
+/* 新建入口（P4 Step 5 agent / P5 Step 4 群）：虚线边框弱化按钮——非事实行，视觉与名册条目区分 */
 .roster-new {
   height: 34px;
   margin-top: 6px;

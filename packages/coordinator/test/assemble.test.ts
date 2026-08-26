@@ -127,6 +127,39 @@ describe('assembleKernel 组织模型命令', () => {
     ])
   })
 
+  it('v1.message.fanout（P5 Step 1）：steward 扇出命令面全链（去重/零新事件族）+ worker 扇出权拒绝', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    const events: KernelEvent[] = []
+    client.subscribe((e) => events.push(e))
+    await kernel.addAgent({ agentId: 'st', steward: true })
+    await kernel.addAgent({ agentId: 'w1' })
+    await kernel.addAgent({ agentId: 'w2' })
+
+    // steward 扇出（收件含重复与 steward 自己——服务层去重 + 发起者自排除）
+    const acc = await client.call<{ recipients: Array<{ agentId: string }>; first: boolean }>('v1.message.fanout', {
+      from: 'st',
+      toAgentIds: ['w1', 'w2', 'w1', 'st'],
+      text: '分头去做',
+      nonce: 'n1',
+    })
+    expect(acc.recipients.map((r) => r.agentId)).toEqual(['w1', 'w2'])
+    expect(acc.first).toBe(true)
+    await waitIdle(kernel)
+    // 零新事件族：逐成员复用 v1.message.a2a
+    expect(events.filter((e) => e.type === 'v1.message.a2a')).toHaveLength(2)
+
+    // worker 发起扇出：稳定码拒绝（扇出权仅用户与 steward——§3.5）
+    await expect(
+      client.call('v1.message.fanout', { from: 'w1', toAgentIds: ['w2'], text: 'x', nonce: 'n2' }),
+    ).rejects.toMatchObject({ code: 'MSG_BROADCAST_FORBIDDEN' })
+
+    // zod wire 校验：空收件列表拒绝
+    await expect(
+      client.call('v1.message.fanout', { from: 'user', toAgentIds: [], text: 'x', nonce: 'n3' }),
+    ).rejects.toThrow()
+  })
+
   it('listAgents 返回项带专属 Box 归属（注册即创建的领域事实）', async () => {
     const kernel = makeKernel()
     const client = kernel.transport.createClient()

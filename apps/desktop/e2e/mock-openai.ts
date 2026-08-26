@@ -14,6 +14,8 @@ interface ScriptStep {
   match: (last: { role: string; content: string }, lastToolName: string | null) => boolean
   toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>
   text?: string
+  /** 响应延迟毫秒（P5 Step 4：制造慢响应——群 supersede 等时序场景；流式与 JSON 同效） */
+  delayMs?: number
 }
 
 export interface MockOpenAi {
@@ -61,34 +63,13 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
       }
 
       responseSeq += 1
-      if (body.stream === true) {
-        respondSse(res, step, responseSeq)
+      ;(res as unknown as { __mockStream?: boolean }).__mockStream = body.stream === true
+      // 慢响应（delayMs）：延迟到达后照常应答——请求留痕不延迟（时序断言仍可对账）
+      if (step.delayMs !== undefined && step.delayMs > 0) {
+        setTimeout(() => respond(res, step, responseSeq), step.delayMs)
         return
       }
-      const message: Record<string, unknown> = { role: 'assistant' }
-      if (step.toolCalls?.length) {
-        message['tool_calls'] = step.toolCalls.map((c) => ({
-          id: c.id,
-          type: 'function',
-          function: { name: c.name, arguments: JSON.stringify(c.args) },
-        }))
-      } else {
-        message['content'] = step.text ?? ''
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(
-        JSON.stringify({
-          id: `mock-${responseSeq}`,
-          choices: [
-            {
-              index: 0,
-              message,
-              finish_reason: step.toolCalls?.length ? 'tool_calls' : 'stop',
-            },
-          ],
-          usage: {},
-        }),
-      )
+      respond(res, step, responseSeq)
     })
   })
 
@@ -99,6 +80,45 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
     requests,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   }
+}
+
+/** 响应分发：按请求体 stream 与否走 SSE / JSON（delayMs 场景经 setTimeout 延迟调用） */
+function respond(res: import('node:http').ServerResponse, step: ScriptStep, seq: number): void {
+  // socket 已断（客户端放弃等待）时写出会抛——静默吞掉，测试按事件面断言
+  res.on('error', () => {})
+  if (isStreamRequest(res)) {
+    respondSse(res, step, seq)
+    return
+  }
+  const message: Record<string, unknown> = { role: 'assistant' }
+  if (step.toolCalls?.length) {
+    message['tool_calls'] = step.toolCalls.map((c) => ({
+      id: c.id,
+      type: 'function',
+      function: { name: c.name, arguments: JSON.stringify(c.args) },
+    }))
+  } else {
+    message['content'] = step.text ?? ''
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' })
+  res.end(
+    JSON.stringify({
+      id: `mock-${seq}`,
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: step.toolCalls?.length ? 'tool_calls' : 'stop',
+        },
+      ],
+      usage: {},
+    }),
+  )
+}
+
+/** stream 判据经 query 传递（handler 匹配处把 body.stream 挂到 res 上——闭包参数最小化） */
+function isStreamRequest(res: import('node:http').ServerResponse): boolean {
+  return (res as unknown as { __mockStream?: boolean }).__mockStream === true
 }
 
 /** SSE 流式响应（chat completions stream 面；与 openai-compat consumeSse 双向对照） */

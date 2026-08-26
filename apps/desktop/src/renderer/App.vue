@@ -18,6 +18,7 @@ import BoxOps from './components/BoxOps.vue'
 import ToastHost from './components/ToastHost.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import AgentWizard from './components/AgentWizard.vue'
+import GroupWizard from './components/GroupWizard.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -67,24 +68,28 @@ const views: Array<{ id: ViewName; label: string; icon: string; component: unkno
 /** 面包屑：当前视图名（原型 tb-crumb 语义） */
 const currentViewLabel = computed(() => views.find((v) => v.id === ui.currentView)?.label ?? '')
 
-// ---- 名册未读徽标（P4 Step 6）：呈现关注点——App 层 watch 消息流驱动 ui.unread，不进内核 ----
-// messages 只增不减（append-only 呈现面）：按长度差取新增段，agent 回复且非当前会话 +1
+// ---- 名册未读徽标（P4 Step 6 + P5 Step 4 群）：呈现关注点——App 层 watch 消息流驱动 ui.unread，不进内核 ----
+// messages 只增不减（append-only 呈现面）：按长度差取新增段，agent/群回复且非当前会话 +1
 watch(
   () => kernel.messages.length,
   (len, prev) => {
     let sawAgent = false
     for (let i = prev ?? 0; i < len; i++) {
       const m = kernel.messages[i]
-      if (m && m.kind === 'agent') {
+      if (m?.kind === 'agent') {
         sawAgent = true
         if (m.from !== ui.activeAgentId) ui.bumpUnread(m.from)
+      }
+      // 群消息（群成员发言/群 sysnote）：未读按群计（bump 键=groupId）
+      if (m && (m.kind === 'group-agent' || m.kind === 'group-sys') && m.groupId && m.groupId !== ui.activeGroupId) {
+        ui.bumpUnread(m.groupId)
       }
     }
     // agent 回复落地 = 一轮 chat 刚结束——拉取当轮生效端点事实（回退降级 per-request，状态栏如实）
     if (sawAgent) void kernel.refreshLlmStatus().catch(() => {})
   },
 )
-// 进入会话即清零（跨视图派单/relay 点击/名册点击统一走 activeAgentId）；档案模式是会话局部态，切会话回屏幕
+// 进入会话即清零（agent 会话经 activeAgentId；群会话经 openGroup 内联清零）；档案模式是会话局部态，切会话回屏幕
 watch(
   () => ui.activeAgentId,
   (id) => {
@@ -255,6 +260,9 @@ onUnmounted(() => kernel.shutdown())
 
     <!-- 新建 agent 向导（P4 Step 5）：名册入口与命令面板动作共用 -->
     <AgentWizard />
+
+    <!-- 建群向导（P5 Step 4）：名册「+ 建群」与命令面板动作共用 -->
+    <GroupWizard />
   </div>
 </template>
 

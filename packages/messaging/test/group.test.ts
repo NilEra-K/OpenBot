@@ -1,0 +1,233 @@
+import { describe, expect, it } from 'vitest'
+import { AgentScheduler, EventBus, KernelError } from '@openbot/core'
+import type { ActiveRun, KernelEvent } from '@openbot/core'
+import { IdempotencyLedger, InMemoryFs, TranscriptStore } from '@openbot/state'
+import { GroupService, MAX_GROUP_RECORDS } from '../src/index.js'
+
+/** 成员 turn 门：挂起模拟执行中；resolve 值即 RunOutcome.result（turn 终答 { text }） */
+interface Gate {
+  run: ActiveRun
+  resolve: (result?: unknown) => void
+}
+
+function makeHarness() {
+  let t = 0
+  let msgCounter = 0
+  let runCounter = 0
+  const fs = new InMemoryFs()
+  const bus = new EventBus({ now: () => t })
+  const events: KernelEvent[] = []
+  bus.on('*', (e) => events.push(e))
+  const transcript = new TranscriptStore({ fs, root: 'data', now: () => t })
+  const ledger = new IdempotencyLedger({ fs, root: 'data', now: () => t })
+  const gates: Gate[] = []
+  const schedulers = new Map<string, AgentScheduler>()
+  const makeScheduler = (agentId: string): AgentScheduler =>
+    new AgentScheduler({
+      agentId,
+      now: () => t,
+      nextRunId: () => `${agentId}-run-${++runCounter}`,
+      bus,
+      execute: (run) =>
+        new Promise((resolve) => {
+          gates.push({ run, resolve })
+          run.signal.addEventListener('abort', () => resolve(undefined))
+        }),
+    })
+  const service = new GroupService({
+    bus,
+    now: () => t,
+    nextMessageId: () => `msg-${++msgCounter}`,
+    transcript,
+    ledger,
+    fs,
+    root: 'data',
+    schedulerOf: (agentId) => {
+      const s = schedulers.get(agentId)
+      if (!s) throw new KernelError('STATE_AGENT_NOT_FOUND', `未注册 agent：${agentId}`)
+      return s
+    },
+  })
+  return {
+    service,
+    events,
+    gates,
+    transcript,
+    fs,
+    register: (agentId: string) => {
+      const s = makeScheduler(agentId)
+      schedulers.set(agentId, s)
+      return s
+    },
+    flush: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+  }
+}
+
+const kinds = (events: KernelEvent[], type: string): number => events.filter((e) => e.type === type).length
+
+describe('GroupService 建群', () => {
+  it('建群：sysnote 落群流 + v1.group.state 事件 + 群清单持久化（load 恢复）', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: '项目组', memberAgentIds: ['a1', 'a2'] })
+    expect(group.groupId).toBe('group-1')
+    expect(group.members).toEqual(['a1', 'a2'])
+    const records = await h.transcript.readAll('group-1')
+    expect(records[0]?.kind).toBe('group-sys')
+    expect((records[0]?.payload as { text: string }).text).toContain('项目组')
+    expect(kinds(h.events, 'v1.group.state')).toBe(1)
+    // 重启恢复：新实例同一 fs load 群清单
+    const reborn = new GroupService({
+      bus: new EventBus({ now: () => 0 }),
+      now: () => 0,
+      nextMessageId: () => 'msg-x',
+      transcript: h.transcript,
+      ledger: new IdempotencyLedger({ fs: h.fs, root: 'data', now: () => 0 }),
+      fs: h.fs,
+      root: 'data',
+      schedulerOf: (id) => {
+        throw new Error(`未注册 agent：${id}`)
+      },
+    })
+    await reborn.load()
+    expect((await reborn.list()).map((g) => g.groupId)).toEqual(['group-1'])
+  })
+
+  it('成员不在名册：建群按稳定码拒绝', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    await expect(h.service.createGroup({ name: 'x', memberAgentIds: ['a1', 'ghost'] })).rejects.toMatchObject({
+      code: 'STATE_AGENT_NOT_FOUND',
+    })
+  })
+})
+
+describe('GroupService 有界轮转', () => {
+  // 群终答落群流（kind=group-agent）由 runner 的 turn session 写——messaging 层只测编排：
+  // 成员依序、上下文传递、pass/失败路径、supersede 代际、收敛边界（群流笔迹归 runner 测试）
+
+  it('用户消息 → 成员依序 turn（顺序保证）→ 上下文随发言传递 → 收敛不再入队', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    const acc = await h.service.sendUserMessage({ groupId: 'group-1', text: '各自说说', nonce: 'n1' })
+    expect(acc.messageId).not.toBe('')
+    // 第一个成员 turn 在队（顺序：成员序；lane=agent、kind=group）
+    expect(h.gates[0]?.run.agentId).toBe('a1')
+    expect(h.gates[0]?.run.kind).toBe('group')
+    h.gates[0]?.resolve({ text: '我先说' })
+    await h.flush()
+    // a1 发言后 a2 接棒，且 a2 的 turn 上下文含 a1 发言（轮转传递）
+    expect(h.gates[1]?.run.agentId).toBe('a2')
+    const payload = h.gates[1]!.run.payload as { context: string[] }
+    expect(payload.context).toEqual(['a1：我先说'])
+    h.gates[1]?.resolve({ text: '我补充' })
+    await h.flush()
+    // 全员结算完毕：收敛，不再有新 turn 入队
+    expect(h.gates).toHaveLength(2)
+    // 用户消息进群流（受理侧写——这个属 messaging）；agent 私聊流零污染
+    expect((await h.transcript.readAll('group-1')).some((r) => r.kind === 'group-user')).toBe(true)
+    expect(await h.transcript.readAll('a1')).toHaveLength(0)
+    expect(kinds(h.events, 'v1.group.message')).toBe(2) // sys(建群) + user；agent 发言归 runner
+  })
+
+  it('[pass] 收敛：全员 pass 记 sysnote、群流不增发言', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: 'group-1', text: '有补充吗', nonce: 'n1' })
+    h.gates[0]?.resolve({ text: '[pass]' })
+    await h.flush()
+    h.gates[1]?.resolve({ text: '[pass] ' }) // trim 后判定
+    await h.flush()
+    const records = await h.transcript.readAll('group-1')
+    expect(records.filter((r) => r.kind === 'group-agent')).toHaveLength(0)
+    expect(records.at(-1)?.kind).toBe('group-sys')
+    expect((records.at(-1)?.payload as { text: string }).text).toContain('全员 pass')
+  })
+
+  it('成员 turn 失败：sysnote 如实记缺席，轮转继续下一员', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: 'group-1', text: 'x', nonce: 'n1' })
+    h.gates[0]?.resolve(undefined) // outcome.result=undefined → 文本空 → 缺席路径
+    await h.flush()
+    const records = await h.transcript.readAll('group-1')
+    expect(records.some((r) => r.kind === 'group-agent')).toBe(false)
+    expect(h.gates[1]?.run.agentId).toBe('a2') // 轮转继续
+    h.gates[1]?.resolve({ text: '我说两句' })
+    await h.flush()
+    expect(h.gates).toHaveLength(2) // 收敛
+  })
+
+  it('supersede：轮转中用户插话 → 旧轮成员 settle 后静默丢弃（不推进），新轮接管', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: 'group-1', text: '第一问', nonce: 'n1' })
+    // a1 挂起中（gates[0] 未 resolve）——用户插话（supersede sysnote 如实入群流）
+    await h.service.sendUserMessage({ groupId: 'group-1', text: '改问这个', nonce: 'n2' })
+    expect((await h.transcript.readAll('group-1')).some((r) => (r.payload as { text?: string }).text === '用户插话，本轮重新开始（supersede）')).toBe(true)
+    // 旧 a1 turn 结算（gen 已不匹配）——静默丢弃：不推进 a2、不重复入队
+    h.gates[0]?.resolve({ text: '旧轮回复' })
+    await h.flush()
+    expect(h.gates).toHaveLength(2) // 只有旧 a1 + 新轮 a1——旧轮未把 a2 拉进来
+    // 新轮接管：新 a1 turn 在队（同成员新一轮，round=2、新文本）
+    const newPayload = h.gates[1]!.run.payload as { text: string; round: number }
+    expect(newPayload.text).toBe('改问这个')
+    expect(newPayload.round).toBe(2)
+    h.gates[1]?.resolve({ text: '新轮回复' })
+    await h.flush()
+    // 新轮 a2 接棒（旧轮永远不会再推进）
+    expect(h.gates[2]?.run.agentId).toBe('a2')
+    h.gates[2]?.resolve({ text: '[pass]' })
+    await h.flush()
+  })
+
+  it('@提及优先：点名成员先发言', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: 'group-1', text: '@a2 你来说', nonce: 'n1' })
+    expect(h.gates[0]?.run.agentId).toBe('a2')
+    h.gates[0]?.resolve({ text: '好' })
+    await h.flush()
+    expect(h.gates[1]?.run.agentId).toBe('a1')
+    h.gates[1]?.resolve({ text: '[pass]' })
+    await h.flush()
+  })
+
+  it('幂等：同 nonce 重试回放（零新事件零新 run）', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1'] })
+    await h.service.sendUserMessage({ groupId: 'group-1', text: 'x', nonce: 'n1' })
+    h.gates[0]?.resolve({ text: '回复' })
+    await h.flush()
+    const before = { events: h.events.length, gates: h.gates.length }
+    const retry = await h.service.sendUserMessage({ groupId: 'group-1', text: 'x', nonce: 'n1' })
+    expect(retry.messageId).not.toBe('')
+    expect(h.events.length).toBe(before.events)
+    expect(h.gates.length).toBe(before.gates)
+  })
+
+  it('群消息上限：GROUP_LIMIT 稳定码拒绝', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1'] })
+    // 预填至上限（建群 sys 已 1 条——补 MAX-1 达到上限）
+    for (let i = 0; i < MAX_GROUP_RECORDS - 1; i++) {
+      await h.transcript.append('group-1', 'group-sys', { messageId: `m${i}`, from: 'system', text: 'x', at: 0 })
+    }
+    await expect(h.service.sendUserMessage({ groupId: 'group-1', text: 'y', nonce: 'n1' })).rejects.toMatchObject({
+      code: 'GROUP_LIMIT',
+    })
+  })
+})

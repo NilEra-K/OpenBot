@@ -2,7 +2,7 @@
 /**
  * @提及补全菜单（P4 Step 4，原型 .mention-menu 迁移）：呈现层组件——
  * 开合/过滤/选中态归 ConsoleView（键盘事件必须在 composer input 里先行消费，
- * 这里只渲染与点击上报）。@全员/群组/远端不出现（裁定 C：广播随 P5 广播协议）。
+ * 这里只渲染与点击上报）。@全员项随 P5 Step 2 广播协议出现（P4 裁定 C 兑现）。
  */
 import { agentColor } from '../lib/agent-color'
 

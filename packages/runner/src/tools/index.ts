@@ -238,6 +238,31 @@ export function sendMessageTool(messaging: A2aService): Tool {
   }
 }
 
+/** send_broadcast：向多个 agent 扇出广播（仅 steward——扇出权在内核 BroadcastService 校验兜底，
+ *  worker 调用按 MSG_BROADCAST_FORBIDDEN 如实报错）。幂等键派生自 originMessageId+toolCallId */
+export function sendBroadcastTool(broadcast: Pick<import('@openbot/messaging').BroadcastService, 'broadcast'>): Tool {
+  return {
+    spec: {
+      name: 'send_broadcast',
+      description: '向多个 agent 广播消息（扇出调度，仅管家可用；toAgentIds 传收件列表）',
+    },
+    async execute(ctx, args) {
+      const record = asRecord(args)
+      const toAgentIds = Array.isArray(record['toAgentIds']) ? record['toAgentIds'].map(String) : []
+      const text = requireString(record, 'text')
+      const acceptance = await broadcast.broadcast({
+        from: ctx.agentId,
+        toAgentIds,
+        text,
+        nonce: `${ctx.originMessageId}:${ctx.toolCallId}`,
+      })
+      return acceptance.first
+        ? `已扇出 ${acceptance.recipients.length} 人（${acceptance.recipients.map((r) => r.agentId).join('、')}）`
+        : '重复发送已忽略（原已受理）'
+    },
+  }
+}
+
 /** host_fetch：宿主网络访问桩——出 Box 操作，必须过闸（gated 包装后注册） */
 export function hostFetchTool(): Tool {
   return {

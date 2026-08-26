@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
  * 社交图谱视图（prototype.html 迁移）：谁在和谁说话。
- * 节点 = user + roster（身份色圆盘 + 工作状态点——runs 投影，P4 Step 12）；弧线宽度 ∝ 消息量；
- * user↔agent 消息边（灰）与 agent↔agent 委派边（accent）视觉区分；
+ * 节点 = user + roster（身份色圆盘 + 工作状态点——runs 投影，P4 Step 12）+ 群（菱形 + chat 图标，
+ * P5 Step 4——群成员边聚合，ggroup 语义）；弧线宽度 ∝ 消息量；user↔agent 消息边（灰）与
+ * agent↔agent 委派边（accent）视觉区分（群边=灰，群内发言非委派）；
  * hover/键盘聚焦预览退隐（无关元素淡出），点击进侧栏详情（退隐钉住），点空白/Esc 退出。
- * P2 无群组/远端节点（rooms 属后续）——数据有什么画什么；点击节点/连线聚焦，点空白/Esc 退出。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
@@ -17,6 +17,9 @@ const CX = 450
 const CY = 262
 const ORBIT = 192
 
+/** 群图标（prototype ICONS.chat 同源 path） */
+const CHAT_ICON = '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
+
 interface NodeGeom {
   id: string
   label: string
@@ -25,6 +28,8 @@ interface NodeGeom {
   y: number
   r: number
   isUser: boolean
+  /** 群节点（P5 Step 4）：菱形渲染——无状态点/首字母，chat 图标居中 */
+  isGroup: boolean
 }
 
 interface EdgeGeom {
@@ -34,24 +39,29 @@ interface EdgeGeom {
   count: number
   d: string
   width: number
-  kind: 'user' | 'a2a'
+  kind: 'user' | 'a2a' | 'group'
 }
 
-/** user 居中、agents 环形均布（原型为手工摆位，Vue 版按真实 roster 计算） */
+const isGroupId = (id: string): boolean => kernel.groups.some((g) => g.groupId === id)
+
+/** user 居中、agents + 群环形均布（原型为手工摆位，Vue 版按真实数据计算——群同轨混布） */
 const nodes = computed<NodeGeom[]>(() => {
-  const list: NodeGeom[] = [{ id: 'user', label: '你', initial: '你', x: CX, y: CY, r: 26, isUser: true }]
-  const agents = kernel.roster
-  agents.forEach((a, i) => {
-    const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(agents.length, 1)
-    const label = a.name ?? a.agentId
+  const list: NodeGeom[] = [{ id: 'user', label: '你', initial: '你', x: CX, y: CY, r: 26, isUser: true, isGroup: false }]
+  const ring: Array<{ id: string; label: string }> = [
+    ...kernel.roster.map((a) => ({ id: a.agentId, label: a.name ?? a.agentId })),
+    ...kernel.groups.map((g) => ({ id: g.groupId, label: g.name })),
+  ]
+  ring.forEach((it, i) => {
+    const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(ring.length, 1)
     list.push({
-      id: a.agentId,
-      label,
-      initial: label.trim().charAt(0) || '?',
+      id: it.id,
+      label: it.label,
+      initial: it.label.trim().charAt(0) || '?',
       x: CX + ORBIT * Math.cos(angle),
       y: CY + ORBIT * Math.sin(angle),
       r: 24,
       isUser: false,
+      isGroup: isGroupId(it.id),
     })
   })
   return list
@@ -91,7 +101,8 @@ const edgeGeoms = computed<EdgeGeom[]>(() => {
       count: e.count,
       d: `M${a.x} ${a.y} Q${(mx - (dy / len) * off).toFixed(1)} ${(my + (dx / len) * off).toFixed(1)} ${b.x} ${b.y}`,
       width: Math.min(1.5 + Math.sqrt(e.count) * 0.9, 6.5),
-      kind: e.a === 'user' || e.b === 'user' ? 'user' : 'a2a',
+      // 端点含 user=消息边；含群=群聊边（群内发言非委派——灰与消息边同族）；否则 A2A 委派
+      kind: e.a === 'user' || e.b === 'user' ? 'user' : isGroupId(e.a) || isGroupId(e.b) ? 'group' : 'a2a',
     })
   })
   return out
@@ -111,6 +122,16 @@ const ranking = computed(() => [...edgeGeoms.value].sort((a, b) => b.count - a.c
 
 const labelOf = (id: string): string => nodes.value.find((n) => n.id === id)?.label ?? id
 const isSteward = (id: string): boolean => kernel.stewardId === id
+
+/** 节点取色（排行/详情 dot）：user 中性深灰、群中性 ink3（菱形不取身份色）、agent 身份色 */
+const nodeColor = (id: string): string =>
+  id === 'user' ? 'var(--ink2)' : isGroupId(id) ? 'var(--ink3)' : kernel.colorOf(id)
+
+/** 聚焦群的档案（P5 Step 4）：成员显示名列表 */
+const groupMembersOf = (id: string): string[] => {
+  const g = kernel.groups.find((x) => x.groupId === id)
+  return g ? g.members.map((m) => kernel.roster.find((a) => a.agentId === m)?.name ?? m) : []
+}
 
 /** agent 工作中集合（P4 Step 12 状态点：runs 投影——该 agent 有 running run 即工作中；
  *  与 BoxesView 归属 chip 同源事实）。user 节点无 run 概念，不取状态点。 */
@@ -175,9 +196,10 @@ const onKey = (e: KeyboardEvent): void => {
 onMounted(() => document.addEventListener('keydown', onKey))
 onUnmounted(() => document.removeEventListener('keydown', onKey))
 
-/** 进入会话（user 节点无会话可进） */
-const goTo = (agentId: string): void => {
-  ui.activeAgentId = agentId
+/** 进入会话（user 节点无会话可进；群走 openGroup——与 agent 会话互斥） */
+const goTo = (id: string): void => {
+  if (isGroupId(id)) ui.openGroup(id)
+  else ui.openAgent(id)
   ui.switchView('console')
 }
 </script>
@@ -226,25 +248,45 @@ const goTo = (agentId: string): void => {
           @focus="hover = { type: 'node', key: n.id }"
           @blur="hover = null"
         >
-          <circle
-            class="gdisc"
-            :cx="n.x"
-            :cy="n.y"
-            :r="n.r"
-            :style="{ fill: n.isUser ? 'var(--ink2)' : kernel.colorOf(n.id) }"
-            filter="url(#gshadow)"
-          ></circle>
-          <text class="ginit" :x="n.x" :y="n.y + 4.5">{{ n.initial }}</text>
-          <!-- 状态点（P4 Step 12：runs 投影 working/idle——steward 徽标点退役，
-               管家区分保留在详情「角色」kv 与名册；user 节点无 run 概念不取点） -->
-          <circle
-            v-if="!n.isUser"
-            class="gstatus"
-            :class="workingAgentIds.has(n.id) ? 'working' : 'idle'"
-            :cx="n.x + n.r * 0.74"
-            :cy="n.y + n.r * 0.74"
-            r="4.5"
-          ></circle>
+          <!-- 群节点（P5 Step 4，原型 ggroup）：菱形（rotate 45 方块）+ chat 图标居中——
+               无状态点（群无 run 概念，过程归成员）与首字母（聚合对象非身份） -->
+          <template v-if="n.isGroup">
+            <g :transform="`rotate(45 ${n.x} ${n.y})`">
+              <rect
+                class="gdisc ggroup"
+                :x="n.x - n.r * 0.86"
+                :y="n.y - n.r * 0.86"
+                :width="n.r * 1.72"
+                :height="n.r * 1.72"
+                rx="7"
+                filter="url(#gshadow)"
+              ></rect>
+            </g>
+            <g class="gicon" :transform="`translate(${n.x - 7} ${n.y - 7}) scale(0.583)`">
+              <path :d="CHAT_ICON"></path>
+            </g>
+          </template>
+          <template v-else>
+            <circle
+              class="gdisc"
+              :cx="n.x"
+              :cy="n.y"
+              :r="n.r"
+              :style="{ fill: n.isUser ? 'var(--ink2)' : kernel.colorOf(n.id) }"
+              filter="url(#gshadow)"
+            ></circle>
+            <text class="ginit" :x="n.x" :y="n.y + 4.5">{{ n.initial }}</text>
+            <!-- 状态点（P4 Step 12：runs 投影 working/idle——steward 徽标点退役，
+                 管家区分保留在详情「角色」kv 与名册；user 节点无 run 概念不取点） -->
+            <circle
+              v-if="!n.isUser"
+              class="gstatus"
+              :class="workingAgentIds.has(n.id) ? 'working' : 'idle'"
+              :cx="n.x + n.r * 0.74"
+              :cy="n.y + n.r * 0.74"
+              r="4.5"
+            ></circle>
+          </template>
           <text class="glabel" :x="n.x" :y="n.y + n.r + 17">{{ n.label }}</text>
           <text class="gcount" :x="n.x" :y="n.y + n.r + 30">×{{ nodeMsg[n.id] ?? 0 }}</text>
         </g>
@@ -258,21 +300,22 @@ const goTo = (agentId: string): void => {
       <template v-if="!focus">
         <div class="graph-title">社交图谱</div>
         <p class="graph-sub">
-          谁在和谁说话：节点是会话对象（身份色圆盘 + 工作状态点），弧线宽度是消息量。
+          谁在和谁说话：节点是会话对象（身份色圆盘 + 工作状态点，群是菱形），弧线宽度是消息量。
           点击节点或连线聚焦详情，点空白处或 Esc 退出；进入会话用详情里的按钮。
         </p>
         <div class="side-sec">图例</div>
         <div class="graph-sum mono">{{ edgeGeoms.length }} 对关系 · {{ kernel.edges.reduce((s, e) => s + e.count, 0) }} 条消息</div>
         <div class="legend-row"><span class="lg-line user"></span>你 ↔ agent · 消息边</div>
         <div class="legend-row"><span class="lg-line a2a"></span>agent ↔ agent · 委派边（A2A）</div>
+        <div class="legend-row"><span class="lg-diamond"></span>菱形 = 群聊 · 群内发言计入灰边</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>状态点 = 工作中（脉冲）</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--ink3)"></span>状态点 = 空闲</div>
 
         <div v-if="ranking.length" class="side-sec">对话量排行</div>
         <div v-for="e in ranking" :key="e.key" class="rank-row">
           <span class="rank-dots">
-            <span class="lg-dot" :style="{ background: e.from === 'user' ? 'var(--ink2)' : kernel.colorOf(e.from) }"></span>
-            <span class="lg-dot" :style="{ background: e.to === 'user' ? 'var(--ink2)' : kernel.colorOf(e.to) }"></span>
+            <span class="lg-dot" :style="{ background: nodeColor(e.from) }"></span>
+            <span class="lg-dot" :style="{ background: nodeColor(e.to) }"></span>
           </span>
           <span class="rank-label">{{ labelOf(e.from) }} ↔ {{ labelOf(e.to) }}</span>
           <span class="rcnt mono">×{{ e.count }}</span>
@@ -286,14 +329,21 @@ const goTo = (agentId: string): void => {
           <span class="graph-title">关系详情</span>
         </div>
         <div class="detail-title">
-          <span :style="{ color: focusedEdge.from === 'user' ? 'var(--ink2)' : kernel.colorOf(focusedEdge.from) }">{{ labelOf(focusedEdge.from) }}</span>
+          <span :style="{ color: nodeColor(focusedEdge.from) }">{{ labelOf(focusedEdge.from) }}</span>
           ↔
-          <span :style="{ color: focusedEdge.to === 'user' ? 'var(--ink2)' : kernel.colorOf(focusedEdge.to) }">{{ labelOf(focusedEdge.to) }}</span>
+          <span :style="{ color: nodeColor(focusedEdge.to) }">{{ labelOf(focusedEdge.to) }}</span>
         </div>
         <div class="kv"><span class="k">累计消息</span><span class="v mono">×{{ focusedEdge.count }}</span></div>
-        <div class="kv"><span class="k">边类型</span><span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ agent）' : '委派边（A2A）' }}</span></div>
+        <div class="kv">
+          <span class="k">边类型</span>
+          <span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ agent）' : focusedEdge.kind === 'group' ? '群聊边（↔ 群）' : '委派边（A2A）' }}</span>
+        </div>
         <p class="ctx-note">
-          {{ focusedEdge.kind === 'user' ? '本地边：你对 agent 的指挥与回复共同计入。' : '本地边：agent 间的 A2A 派发与回执共同计入（双侧 transcript 镜像）。' }}
+          {{ focusedEdge.kind === 'user'
+            ? '本地边：你对 agent 的指挥与回复共同计入。'
+            : focusedEdge.kind === 'group'
+              ? '本地边：群内发言共同计入（发起者的用户消息与成员回复，sysnote 不计）。'
+              : '本地边：agent 间的 A2A 派发与回执共同计入（双侧 transcript 镜像）。' }}
         </p>
       </template>
 
@@ -304,10 +354,16 @@ const goTo = (agentId: string): void => {
           <span class="graph-title">节点详情</span>
         </div>
         <div class="detail-title">
-          <span class="lg-dot" :style="{ background: focus.key === 'user' ? 'var(--ink2)' : kernel.colorOf(focus.key) }"></span>
+          <span class="lg-dot" :style="{ background: nodeColor(focus.key) }"></span>
           {{ labelOf(focus.key) }}
         </div>
         <div v-if="focus.key === 'user'" class="kv"><span class="k">身份</span><span class="v">本机主人 · 所有对话的起点</span></div>
+        <!-- 群节点详情（P5 Step 4）：类型/成员/消息量——群无角色与状态点（leaderless，过程归成员） -->
+        <template v-else-if="isGroupId(focus.key)">
+          <div class="kv"><span class="k">类型</span><span class="v">群聊 · 有界轮转 · leaderless</span></div>
+          <div class="kv"><span class="k">成员</span><span class="v">{{ groupMembersOf(focus.key).join('、') }}</span></div>
+          <div class="kv"><span class="k">消息量</span><span class="v mono">×{{ nodeMsg[focus.key] ?? 0 }}</span></div>
+        </template>
         <template v-else>
           <div class="kv"><span class="k">角色</span><span class="v">{{ isSteward(focus.key) ? '管家（默认路由）' : 'worker' }}</span></div>
           <div class="kv"><span class="k">状态</span><span class="v">{{ statusTextOf(focus.key) }}</span></div>
@@ -321,7 +377,7 @@ const goTo = (agentId: string): void => {
           class="rank-row clickable"
           @click="focus = { type: 'edge', key: e.key }"
         >
-          <span class="lg-dot" :style="{ background: (e.from === focus.key ? e.to : e.from) === 'user' ? 'var(--ink2)' : kernel.colorOf(e.from === focus.key ? e.to : e.from) }"></span>
+          <span class="lg-dot" :style="{ background: nodeColor(e.from === focus.key ? e.to : e.from) }"></span>
           <span class="rank-label">{{ labelOf(e.from === focus.key ? e.to : e.from) }}</span>
           <span class="rcnt mono">×{{ e.count }}</span>
         </div>

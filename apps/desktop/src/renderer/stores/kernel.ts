@@ -52,15 +52,25 @@ export interface RosterEntry {
 
 export interface ChatMessage {
   messageId: string
-  kind: 'user' | 'agent' | 'a2a'
+  kind: 'user' | 'agent' | 'a2a' | 'group-user' | 'group-agent' | 'group-sys'
   from: string
   to: string
   text: string
   at: number
+  /** 群消息（P5 Step 4）：所属群——群会话流按此过滤 */
+  groupId?: string
   /** 乐观占位：命令响应/事件到达前为 true（UI 显示发送中态） */
   pending?: boolean
   /** 发送失败（网络/领域错误）：UI 显示重试 */
   failed?: boolean
+}
+
+/** 群档案（P5 Step 4，v1.group.list 返回） */
+export interface GroupEntry {
+  groupId: string
+  name: string
+  members: string[]
+  createdAt: number
 }
 
 export interface PendingApproval {
@@ -200,6 +210,8 @@ export const useKernelStore = defineStore('kernel', {
     bootError: null as string | null,
     roster: [] as RosterEntry[],
     stewardId: null as string | null,
+    /** 群清单（P5 Step 4）：boot 与 v1.group.state 事件时刷新 */
+    groups: [] as GroupEntry[],
     messages: [] as ChatMessage[],
     pendingApprovals: [] as PendingApproval[],
     execs: [] as ExecCard[],
@@ -272,6 +284,7 @@ export const useKernelStore = defineStore('kernel', {
         this.caps = await client.call<NonNullable<typeof this.caps>>('v1.boxes.caps')
         if (this.caps?.snapshot) await this.refreshSnapshots()
         await this.refreshSandbox()
+        await this.refreshGroups()
         this.connected = true
       } catch (err) {
         this.bootError = err instanceof Error ? err.message : String(err)
@@ -324,6 +337,50 @@ export const useKernelStore = defineStore('kernel', {
     async restoreBox(boxId: string, snapshotId: string): Promise<void> {
       await this.call('v1.boxes.restore', { boxId, snapshotId })
       await this.refreshSnapshots()
+    },
+    /** 广播扇出（P5 Step 2）：@全员与 @多提及同一命令——UI 只构造收件列表，扇出调度在内核
+     *  （worker 经此命令发起会被 MSG_BROADCAST_FORBIDDEN 拒绝——用户态恒 from='user'） */
+    async fanoutMessage(toAgentIds: string[], text: string): Promise<{ recipients: Array<{ agentId: string }>; first: boolean }> {
+      const acceptance = await this.call<{ recipients: Array<{ agentId: string }>; first: boolean }>('v1.message.fanout', {
+        from: 'user',
+        toAgentIds,
+        text,
+        nonce: crypto.randomUUID(),
+      })
+      return acceptance
+    },
+    /** 群清单重拉（P5 Step 4：boot 与 v1.group.state 事件时） */
+    async refreshGroups(): Promise<void> {
+      this.groups = await this.call<GroupEntry[]>('v1.group.list')
+    },
+    /** 建群（成员名册在位校验在内核）→ 刷新清单，返回 groupId（跳群会话用） */
+    async createGroup(name: string, memberAgentIds: string[]): Promise<string> {
+      const created = await this.call<GroupEntry>('v1.group.create', { name, memberAgentIds })
+      await this.refreshGroups()
+      return created.groupId
+    },
+    /** 群消息（P5 Step 4）：乐观更新 + nonce 幂等（与用户消息同款收敛） */
+    async sendGroupMessage(groupId: string, text: string, reuseNonce?: string): Promise<void> {
+      const nonce = reuseNonce ?? crypto.randomUUID()
+      const placeholderId = `~${nonce}`
+      if (!this.messages.some((m) => m.messageId === placeholderId)) {
+        this.messages.push({ messageId: placeholderId, kind: 'group-user', from: 'user', to: groupId, text, at: Date.now(), groupId, pending: true })
+      }
+      try {
+        const acceptance = await this.call<{ messageId: string }>('v1.group.send', { groupId, text, nonce })
+        const idx = this.messages.findIndex((m) => m.messageId === placeholderId)
+        if (idx >= 0) {
+          if (this.messages.some((m, i) => i !== idx && m.messageId === acceptance.messageId)) {
+            this.messages.splice(idx, 1) // 事件已先到
+          } else {
+            this.messages[idx] = { ...this.messages[idx]!, messageId: acceptance.messageId, pending: false }
+          }
+        }
+      } catch (err) {
+        const idx = this.messages.findIndex((m) => m.messageId === placeholderId)
+        if (idx >= 0) this.messages[idx] = { ...this.messages[idx]!, pending: false, failed: true }
+        throw err
+      }
     },
     /**
      * 发送用户消息（乐观更新 + nonce 幂等）：本地占位 → 命令受理（messageId 升级占位）→
@@ -510,7 +567,7 @@ export const useKernelStore = defineStore('kernel', {
           }
           continue
         }
-        // ---- 领域消息映射（user/agent/a2a） ----
+        // ---- 领域消息映射（user/agent/a2a + 群 kinds——P5 Step 4；agentId 参数即会话键，群传 groupId） ----
         const msg = p as { messageId?: string; text?: string; from?: string; to?: string }
         if (typeof msg.messageId !== 'string' || typeof msg.text !== 'string') continue
         if (this.messages.some((m) => m.messageId === msg.messageId)) continue // 事件流已覆盖
@@ -523,7 +580,13 @@ export const useKernelStore = defineStore('kernel', {
                 ? { messageId: msg.messageId, kind: 'a2a', from: agentId, to: msg.to, text: msg.text, at: record.at }
                 : record.kind === 'a2a-in' && typeof msg.from === 'string'
                   ? { messageId: msg.messageId, kind: 'a2a', from: msg.from, to: agentId, text: msg.text, at: record.at }
-                  : null
+                  : record.kind === 'group-user'
+                    ? { messageId: msg.messageId, kind: 'group-user', from: 'user', to: agentId, text: msg.text, at: record.at, groupId: agentId }
+                    : record.kind === 'group-agent' && typeof msg.from === 'string'
+                      ? { messageId: msg.messageId, kind: 'group-agent', from: msg.from, to: agentId, text: msg.text, at: record.at, groupId: agentId }
+                      : record.kind === 'group-sys'
+                        ? { messageId: msg.messageId, kind: 'group-sys', from: 'system', to: agentId, text: msg.text, at: record.at, groupId: agentId }
+                        : null
         if (mapped) this.messages.push(mapped)
       }
       this.messages.sort((a, b) => a.at - b.at)
@@ -580,6 +643,27 @@ export const useKernelStore = defineStore('kernel', {
             text: event.payload.text,
             at: event.at,
           })
+          return
+        case 'v1.group.message': {
+          // 群边投影（P5 Step 4）：user/agent 消息计入「会话对象↔群」关系（菱形节点数据源）；
+          // sys 注记非对话不计。bumpEdge 先于事件去重——响应先到路径同 v1.message.user 语义
+          const p = event.payload
+          if (p.kind === 'user') this.bumpEdge('user', p.groupId)
+          else if (p.kind === 'agent') this.bumpEdge(p.from, p.groupId)
+          if (this.messages.some((m) => m.messageId === p.messageId)) return
+          this.messages.push({
+            messageId: p.messageId,
+            kind: p.kind === 'user' ? 'group-user' : p.kind === 'agent' ? 'group-agent' : 'group-sys',
+            from: p.from,
+            to: p.groupId,
+            text: p.text,
+            at: event.at,
+            groupId: p.groupId,
+          })
+          return
+        }
+        case 'v1.group.state':
+          void this.refreshGroups() // 群清单变更（created/removed）——拉快照为准
           return
         case 'v1.approval.requested': {
           // nonce 幂等：重放/重试不双弹窗

@@ -88,6 +88,22 @@
   stroke-width: 1.5;
 }
 
+/* 群节点菱形（P5 Step 4，原型 .ggroup 同源）：中性底 + ink3 描边——聚合对象不取身份色 */
+.gdisc.ggroup {
+  fill: var(--bg2);
+  stroke: var(--ink3);
+}
+
+/* 菱形内 chat 图标（原型 .gicon）：线性 stroke 与壳图标体系一致 */
+.gicon {
+  fill: none;
+  stroke: var(--ink2);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
 .gnode:hover .gdisc,
 .gnode.is-focus .gdisc {
   stroke: var(--ink);
@@ -242,6 +258,17 @@
   width: 9px;
   height: 9px;
   border-radius: 50%;
+  flex: none;
+}
+
+/* 图例菱形（P5 Step 4）：与画布 ggroup 同视觉（rotate 45 方块） */
+.lg-diamond {
+  width: 9px;
+  height: 9px;
+  background: var(--bg2);
+  border: 1.5px solid var(--ink3);
+  border-radius: 2px;
+  transform: rotate(45deg);
   flex: none;
 }
 

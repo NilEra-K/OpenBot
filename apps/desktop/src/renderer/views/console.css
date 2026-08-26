@@ -684,3 +684,11 @@
   font-size: 11px;
   color: var(--ink3);
 }
+
+/* 群聊系统注记（P5 Step 4，原型 .sysnote 同源）：建群/成员缺席/插话/收敛等居中弱化行 */
+.sysnote {
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--ink3);
+  margin: 6px 0 18px;
+}

@@ -384,8 +384,9 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | **P2 桌面** | Electron 壳 + 网关(SSE/WS) + Vue renderer 五视图接真数据 + 闸门 UI + caps UI | 原型视觉对齐；Playwright `_electron` E2E 绿 |
 | **P3 真实后端** | backend-wsl + backend-docker + backend-podman（OCI 底座共用）+ 快照/资源统计/磁盘压力告警 + 流式双线（llm/exec/PTY）+ Windows 打包签名 | 真实 Box 内完成一次「改项目→构建」任务并产出 diff；操作台 PTY 真机可用 |
 | **P4 原型对齐收敛** | 差距清零：命令面板（Ctrl K）/ @提及 / toast / 状态栏 / 新建 agent 向导 / Box 休眠与快照回滚 / ctx 档案 / 演示值清扫（2026-08-25 用户裁定重定位——原「平台扩展」顺延 P5、relay 顺延 P6；细案 [docs/plan-p4.md](docs/plan-p4.md)） | prototype.html 差距盘点逐项「已实现 / 记档裁定」二态收敛；三命令 + E2E 全绿 |
-| **P5 平台扩展** | Linux（nspawn/原生 docker + deb/AppImage）、macOS（UTM + dmg） | 三平台矩阵如实标注，capabilities 驱动 UI |
-| **P6 relay** | 跨用户房间公网 host、CrossUserRelay 实现 | P2P/Tailscale 优先叙事落地 |
+| **P5 消息域收敛 + OCI 双壳** | 广播（@全员/@多提及——扇出调度是内核语义）+ 群聊（有界轮转/sysnote/群组节点）+ backend-docker/backend-podman（OCI 底座共用两薄壳——v1 四后端收官；细案 [docs/plan-p5.md](docs/plan-p5.md)）（2026-08-26 用户裁定重排——原「平台扩展」顺延 P6、relay 顺延 P7） | @全员与群聊 E2E 全链路；四后端矩阵如实标注；三命令 + E2E 全绿 |
+| **P6 平台扩展与分发** | Linux（nspawn/原生 docker + deb/AppImage）、macOS（UTM + dmg）、electron-builder 三平台打包（win nsis/portable 随轮兑现——P3 遗留） | 三平台矩阵如实标注，capabilities 驱动 UI；打包产物真内核冒烟 |
+| **P7 relay** | 跨用户房间公网 host、CrossUserRelay 实现 | P2P/Tailscale 优先叙事落地 |
 
 注：P1 是八包结构直接送的礼物——**不装 Electron 就能验证整个内核**，这是保留包边界的直接回报。
 

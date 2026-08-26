@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { AgentScheduler, EventBus, KernelError } from '@openbot/core'
 import type { KernelEvent, RunExecutor } from '@openbot/core'
 import { IdempotencyLedger, InMemoryFs, TranscriptStore } from '@openbot/state'
-import { A2aService } from '@openbot/messaging'
+import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
 import { MockChatProvider } from '@openbot/llm'
 import type { MockStep } from '@openbot/llm'
 import { MockBoxBackend } from '@openbot/boxes'
@@ -13,6 +13,7 @@ import {
   gated,
   hostFetchTool,
   sendMessageTool,
+  sendBroadcastTool,
   ToolRegistry,
   TurnRunner,
 } from '../src/index.js'
@@ -69,11 +70,36 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
       return s
     },
   })
+  // 广播（P5 Step 2）：steward 集合由测试标记（扇出权事实）——工具面与内核同一校验路径
+  const stewards = new Set<string>()
+  const broadcast = new BroadcastService({
+    a2a: messaging,
+    isSteward: async (agentId) => stewards.has(agentId),
+    assertAgent: (agentId) => {
+      if (!schedulers.has(agentId)) throw new KernelError('STATE_AGENT_NOT_FOUND', `未注册 agent：${agentId}`)
+    },
+  })
 
   const gate = new AutoApprovalGate({ bus, ledger, now: () => t, nextApprovalId: () => `appr-${++approvalCounter}` })
+  // 群聊编排（P5 Step 3）：真 transcript/ledger/schedulerOf——群 turn 经 run.kind 'group' 回到本 runner
+  const groups = new GroupService({
+    bus,
+    now: () => t,
+    nextMessageId: () => `msg-${++msgCounter}`,
+    transcript,
+    ledger,
+    fs,
+    root: 'data',
+    schedulerOf: (agentId) => {
+      const s = schedulers.get(agentId)
+      if (!s) throw new KernelError('STATE_AGENT_NOT_FOUND', `未注册 agent：${agentId}`)
+      return s
+    },
+  })
   const tools = new ToolRegistry()
     .register(execTool({ backend, bus, onStream: options.onStream, transcript }))
     .register(sendMessageTool(messaging))
+    .register(sendBroadcastTool(broadcast))
     .register(gated(hostFetchTool(), { gate }))
 
   const runner = new TurnRunner({
@@ -90,6 +116,8 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     systemPrompt: '你是 OpenBot 测试 agent',
     maxToolRounds: options.maxToolRounds,
     onStream: options.onStream,
+    // 与 assemble 同构（P5 Step 4 修复）：supersede 旧轮终答写入前拦截
+    isGroupTurnStale: (p) => groups.isStale(p),
   })
   executeRef.current = runner.execute
 
@@ -99,12 +127,14 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     transcript,
     backend,
     llms,
+    stewards,
     register: async (agentId: string) => {
       schedulers.set(agentId, makeScheduler(agentId))
       boxes.set(agentId, await backend.create({ image: 'default' }))
       return schedulers.get(agentId)!
     },
     messaging,
+    groups,
   }
 }
 
@@ -322,6 +352,111 @@ describe('TurnRunner A2A 链路（chat → send_message → 对端 turn → box 
     const provider = h.llms.get('a1')!
     const second = provider.requests[1]?.messages ?? []
     expect(second[second.length - 1]?.content).toContain('宿主网络桩')
+  })
+
+  it('send_broadcast（P5 Step 2）：steward 工具扇出全员——逐成员 a2a 事件与入信；worker 调用被内核扇出权拒绝', async () => {
+    const h = makeHarness({
+      st: [
+        { toolCalls: [{ id: 'c1', name: 'send_broadcast', args: { toAgentIds: ['w1', 'w2'], text: '分头去做' } }] },
+        { text: '已通知全员' },
+      ],
+      w1: [{ text: 'w1 收到' }],
+      w2: [
+        // worker 也尝试扇出（LLM 可调）——内核 MSG_BROADCAST_FORBIDDEN 拒绝，错误回喂后终答
+        { toolCalls: [{ id: 'c9', name: 'send_broadcast', args: { toAgentIds: ['w1'], text: '我也广播' } }] },
+        { text: '我不能广播' },
+      ],
+    })
+    const st = await h.register('st')
+    const w1 = await h.register('w1')
+    const w2 = await h.register('w2')
+    h.stewards.add('st')
+    await h.messaging.sendUserMessage({ toAgentId: 'st', text: '通知大家', nonce: 'n1' })
+    await waitIdle([st, w1, w2])
+
+    // steward 扇出落达：w1/w2 各一条入信 + 两条 a2a 事件
+    expect((await h.transcript.readAll('w1'))[0]?.kind).toBe('a2a-in')
+    expect((await h.transcript.readAll('w2'))[0]?.kind).toBe('a2a-in')
+    expect(kinds(h.events, 'v1.message.a2a')).toBe(2)
+    // w2 的 worker 扇出被拒：无第三条 a2a（错误回喂后 w2 终答），w1 仍只有一条入信
+    //（w1 transcript 另有自己的 thinking/agent 终答记录——只数 a2a-in）
+    const w2Provider = h.llms.get('w2')!
+    const w2Second = w2Provider.requests[1]?.messages ?? []
+    expect(w2Second[w2Second.length - 1]?.content).toContain('worker 不能扇出')
+    expect((await h.transcript.readAll('w1')).filter((r) => r.kind === 'a2a-in')).toHaveLength(1)
+  })
+
+  it('群轮转全链（P5 Step 3）：用户群消息 → 成员依序 turn → 终答写群流（私聊零污染）+ [pass] 不落', async () => {
+    const h = makeHarness({
+      a1: [{ text: 'a1 的群发言' }],
+      a2: [{ text: '[pass]' }],
+    })
+    const s1 = await h.register('a1')
+    const s2 = await h.register('a2')
+    const group = await h.groups.createGroup({ name: '项目组', memberAgentIds: ['a1', 'a2'] })
+    await h.groups.sendUserMessage({ groupId: group.groupId, text: '各自说说', nonce: 'n1' })
+    await waitIdle([s1, s2])
+
+    // 群流：建群 sys + user + a1 发言（a2 [pass] 不落群流）
+    expect((await h.transcript.readAll(group.groupId)).map((r) => r.kind)).toEqual([
+      'group-sys',
+      'group-user',
+      'group-agent',
+    ])
+    const agentRecord = (await h.transcript.readAll(group.groupId))[2]?.payload as { from: string; text: string }
+    expect(agentRecord).toMatchObject({ from: 'a1', text: 'a1 的群发言' })
+    // 私聊流零污染：群里说的话不出现在 1:1 会话（过程 thinking 归 agent 不算领域消息）
+    expect((await h.transcript.readAll('a1')).filter((r) => r.kind === 'agent')).toHaveLength(0)
+    // 事件族：group.message = sys + user + agent（[pass] 不发）
+    expect(h.events.filter((e) => e.type === 'v1.group.message')).toHaveLength(3)
+    // a2 的 turn 输入：群前缀 + a1 已发言上下文（轮转传递）+ [pass] 指令
+    const p2 = h.llms.get('a2')!
+    const last = p2.requests[0]?.messages.at(-1)?.content ?? ''
+    expect(last).toContain(`[群 ${group.groupId}`)
+    expect(last).toContain('a1 的群发言')
+    expect(last).toContain('[pass]')
+  })
+
+  it('supersede 写入拦截（P5 Step 4 修复）：旧代际 turn 终答不落群流不发事件（防线在写入点）', async () => {
+    const h = makeHarness({
+      a1: [{ text: '第一轮发言' }, { text: '第二轮发言' }, { text: '迟到发言不该出现' }],
+    })
+    const s1 = await h.register('a1')
+    const group = await h.groups.createGroup({ name: 'g', memberAgentIds: ['a1'] })
+    // 两条消息：gen 推进到 2（两轮发言各消费一个 step 正常落流）
+    await h.groups.sendUserMessage({ groupId: group.groupId, text: '第一轮', nonce: 'n1' })
+    await waitIdle([s1])
+    await h.groups.sendUserMessage({ groupId: group.groupId, text: '第二轮', nonce: 'n2' })
+    await waitIdle([s1])
+
+    // 手动入队「旧代际」group run——模拟第1轮 turn 在第2条消息后才 settle 的在途时序
+    // （E2E 实测抓到的缺陷路径：编排层 onSettled 拦不住先行的 transcript/事件写入）
+    const ticket = s1.enqueue({
+      lane: 'agent',
+      kind: 'group',
+      payload: {
+        messageId: 'msg-stale',
+        groupId: group.groupId,
+        gen: 1,
+        round: 1,
+        text: '第一轮',
+        context: [],
+        mentioned: [],
+      },
+      summary: '旧代际在途 turn（supersede 写入拦截）',
+    })
+    await ticket.settled
+
+    // 旧轮终答静默丢弃：群流 group-agent 只有各轮正常发言——「迟到发言」不落
+    const texts = (await h.transcript.readAll(group.groupId))
+      .filter((r) => r.kind === 'group-agent')
+      .map((r) => (r.payload as { text: string }).text)
+    expect(texts).toEqual(['第一轮发言', '第二轮发言'])
+    // 事件族同样拦截：agent 发言事件只有两条
+    const agentEvents = h.events.filter(
+      (e) => e.type === 'v1.group.message' && (e.payload as { kind: string }).kind === 'agent',
+    )
+    expect(agentEvents).toHaveLength(2)
   })
 })
 
