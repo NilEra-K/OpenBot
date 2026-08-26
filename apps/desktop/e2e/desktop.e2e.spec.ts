@@ -858,3 +858,79 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('Boxes/图谱小项（P4 Step 12）：归属 chip + box-claim shield + 节点状态点 + hover 退隐 + 详情 kv', async () => {
+  const mock = await startMockOpenAi([
+    // 单步：host_fetch 触发审批闸门 → run 稳定挂 running（归属 chip / 状态点的稳定工作中事实源）
+    { match: (l) => l.role === 'user', toolCalls: [{ id: 'c1', name: 'host_fetch', args: { url: 'https://example.com/' } }] },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-p4s12-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      // 第二节点：worker1 无消息无边——hover 退隐断言的「无关节点」来源（免走向导）
+      OPENBOT_EXTRA_AGENTS: 'worker1',
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider（真走 settings 命令面与 safeStorage 链路）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // 发消息 → 审批挂起（run 稳定 running）；「稍后处理」收掉模态
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.composer-box input').fill('抓个网页')
+    await page.locator('.composer-box input').press('Enter')
+    const modal = page.locator('.approval-modal', { hasText: 'host_fetch' })
+    await expect(modal).toBeVisible({ timeout: 30_000 })
+    await modal.getByRole('button', { name: '稍后处理' }).click()
+
+    // —— Box 卡归属 chip（roster.boxId × runs 投影）：管家工作中 + stat-dot 身份色在场 ——
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    const ownerChip = page.locator('.boxcard .chip', { hasText: '管家工作中' })
+    await expect(ownerChip).toBeVisible({ timeout: 15_000 })
+    await expect(ownerChip.locator('.stat-dot')).toBeVisible()
+
+    // box-claim：shield 形态（svg 图标 + 如实叙事在场）
+    await expect(page.locator('.box-claim svg')).toBeVisible()
+    await expect(page.locator('.box-claim')).toContainText('本机云电脑')
+
+    // —— 图谱状态点（runs 投影）：管家 working（run 挂起中）/ worker1 idle ——
+    await page.getByRole('button', { name: '图谱', exact: true }).click()
+    const gnodeOf = (label: string) => page.locator('.graph-canvas .gnode', { hasText: label })
+    await expect(gnodeOf('管家').locator('.gstatus.working')).toBeVisible({ timeout: 15_000 })
+    await expect(gnodeOf('worker1').locator('.gstatus.idle')).toBeVisible()
+
+    // hover 退隐：悬停无关系的 worker1 → 非邻接的 user/管家淡出，自身保持
+    await gnodeOf('worker1').hover()
+    await expect(gnodeOf('你')).toHaveClass(/is-dim/)
+    await expect(gnodeOf('管家')).toHaveClass(/is-dim/)
+    await expect(gnodeOf('worker1')).not.toHaveClass(/is-dim/)
+    // 移开回落：无聚焦态时全亮（hover 清空）
+    await page.locator('.graph-canvas').hover({ position: { x: 8, y: 8 } })
+    await expect(gnodeOf('你')).not.toHaveClass(/is-dim/)
+
+    // 节点详情 kv：状态=工作中（run summary 附注不误伤前缀断言）+ 模型=继承全局主力（provider 真值）
+    await gnodeOf('管家').click()
+    const side = page.locator('.graph-side')
+    await expect(side.locator('.kv', { hasText: '状态' })).toContainText('工作中')
+    await expect(side.locator('.kv', { hasText: '模型' })).toContainText('继承全局主力（E2E mock · mock-model）')
+  } finally {
+    await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

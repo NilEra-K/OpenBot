@@ -103,11 +103,31 @@
   pointer-events: none;
 }
 
+/* 节点状态点（P4 Step 12：runs 投影）——working 脉冲 / idle 灰点；
+   reduced-motion 全局关动画时 working 退化为静态 accent 点（颜色仍表达状态） */
 .gstatus {
-  fill: var(--accent);
   stroke: var(--bg0);
   stroke-width: 2;
   pointer-events: none;
+}
+
+.gstatus.working {
+  fill: var(--accent);
+  animation: graph-pulse 1.6s var(--ease) infinite;
+}
+
+.gstatus.idle {
+  fill: var(--ink3);
+}
+
+@keyframes graph-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .glabel {

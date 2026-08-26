@@ -160,10 +160,28 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
     不放假外链，2026-08-25 用户裁定）；状态栏 LLM 行：当轮回退如实标注「（当轮回退：model）」、配置未触发标
     「回退就绪」；E2E 新用例（坏主力 http://127.0.0.1:9 快速连接拒绝 → 回退 mock 回复到达 + 状态栏当轮回退 +
     数据区块路径与按钮在场 + 协议分段交互），14 用例全绿；单测 227 全绿
-- [ ] 12. **Boxes/图谱小项 + 收官**：Box 卡「某某工作中」归属 chip（roster.boxId × runs 投影推导）+ box-claim
+- [x] 12. **Boxes/图谱小项 + 收官**：Box 卡「某某工作中」归属 chip（roster.boxId × runs 投影推导）+ box-claim
   安全叙事条（shield·「Box 即本机云电脑…」）+ 图谱节点状态点（runs 投影：working/idle）/ hover 退隐 / 节点详情 kv
   补状态与模型（模型=继承全局，如实）+ **原型逐视图复查表**（附录 A 全项核对归档进本文档）+ 文档同步
   （ARCHITECTURE §11 已随裁定 A 更新；plan-p4 勾选与实测教训补记）
+  - 实施（2026-08-26）：**零内核改动收官**（同 Step 3 先例——全部 renderer 投影既有 store 事实）。归属 chip：
+    `ownerChips` computed（roster.boxId 反查归属 agent × runs running 投影）——**只在工作中呈现**（空闲不渲染；
+    归属常量事实已在 ctx 档案 kv，不重复；原型「卡帕工作中」语义）。box-claim 补 shield 内联 SVG（stroke 风格
+    与 App 图标体系一致）+ flex 形态对齐原型（solid line 边框）；**文案保持如实版**——原型「断网自动切本地
+    Ollama / 设置中批准的策略」与实现不符（回退端点是自定义 provider 非 Ollama、权限分级记档后置）不照搬。
+    图谱 `.gstatus` **语义归位**：P2 迁移时挪用作「管家徽标点」→ 回归原型状态点（working=accent 脉冲 /
+    idle=ink3；reduced-motion 全局关动画退化为静态 accent 点）；steward 区分保留在详情「角色」kv 与名册，
+    图例行改「状态点 = 工作中（脉冲）/ 空闲」。hover 退隐：`hover` ref（类型同 focus）+ 节点/边
+    mouseenter/mouseleave 与 focus/blur（键盘可达同原型）；keepSet 活动源 = **hover ?? focus**（hover 在场
+    按 hover 算，离开自然回落聚焦态——原型 graphApplyDim/graphRestoreFocusVisual 同语义）。节点详情 kv 补
+    状态（`工作中 · {run.summary}`——summary 在场才附注）与模型（`继承全局主力（provider · model）`——
+    裁定 F 如实；未配置显示「未配置」）。E2E 新用例（`OPENBOT_EXTRA_AGENTS: 'worker1'` 免走向导注入第二
+    节点；审批挂起制造稳定 running）：归属 chip + stat-dot 在场 / shield svg 在场 / 管家 working·worker1 idle
+    双态 / hover worker1（无关系节点）→ user·管家 is-dim + 自身保持 + 移开回落 / 详情 kv 状态工作中 + 模型
+    真值，15 用例全绿；单测 227 全绿。**实测坑：vite 产物 grep 验证新代码时 JS 局部标识符（ownerChips）被
+    minify 混淆不命中——用模板字面量（「工作中」「继承全局主力」）与 CSS 动画名（graph-pulse）grep 才有效**
+    （P4 Step 8「grep 关键标识符进产物」教训的补全：标识符要选不被压缩的）。附录 A 五项勾销 + 收官复查表
+    归档（见文末）；apps/desktop/package.json 版本同步 0.0.24
 
 ## 设计要点（开工前逐条细化，先记已知决策）
 
@@ -247,8 +265,8 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 | 快照链 chips + 从快照回滚 | ✅ 已实现（Step 9） |
 | 暂停/重启/唤醒（休眠语义） | ✅ 已实现（Step 8；重启=休眠+唤醒组合） |
 | per-Box 磁盘配额/资源限额 | 记档：随 OCI 后端与 box-catalog（与裁定 B 同族） |
-| Box 卡归属 chip「某某工作中」 | Step 12 |
-| box-claim 安全叙事条 | Step 12 |
+| Box 卡归属 chip「某某工作中」 | ✅ 已实现（Step 12：roster.boxId × runs 投影，工作中才呈现） |
+| box-claim 安全叙事条 | ✅ 已实现（Step 12：shield 形态对齐；文案保持如实版——原型 Ollama/策略叙事不照搬） |
 | 仪表形态（三列 meters/warn 色档） | ✅ 已实现（Step 10：内存/磁盘只报数值，CPU 真比例条；色档等资源限额后端） |
 | ctx 屏 is-asleep 灰化 | ✅ 已实现（Step 8） |
 
@@ -256,9 +274,9 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 
 | 差距项 | 处置 |
 |---|---|
-| 节点状态点（working/idle） | Step 12 |
-| hover 退隐（悬停淡出） | Step 12 |
-| 节点详情状态/模型 kv | Step 12（模型=继承全局，如实） |
+| 节点状态点（working/idle） | ✅ 已实现（Step 12：runs 投影；gstatus 从管家徽标点语义归位） |
+| hover 退隐（悬停淡出） | ✅ 已实现（Step 12：hover ?? focus 活动源，键盘 focus 同路径） |
+| 节点详情状态/模型 kv | ✅ 已实现（Step 12：模型=继承全局主力，如实） |
 | 群组菱形节点 / 远端蓝虚线 | 记档：P5+/P6（数据无来源） |
 
 ### 五、排程视图
@@ -292,3 +310,84 @@ computer-use（后续版本）、task 卡步骤轨迹与产物 diff chips（内�
 
 审批全局弹窗+流内 gate 双呈现、消息失败重试（nonce 幂等）、思考块折叠与过程持久化、PTY 真终端、
 provider CRUD+safeStorage+代理、沙箱三级探测降级、磁盘压力角标/警示条、stats 真数据仪表、流式打字机+贴底跟随。
+
+## 收官复查表（Step 12，2026-08-26：原型逐视图核对归档）
+
+> 逐视图对照 prototype.html 结构块与实现（视图文件 + 实施步骤号）；「记档」项已在附录 A 注明去向。
+> 复查方法：原型每视图区块 class 清单 × 实现文件 grep 对照 + E2E 覆盖确认。
+
+### 一、控制台（ConsoleView + CtxPanel + RosterPanel + MentionMenu）
+
+| 原型块 | 实现 | 状态 |
+|---|---|---|
+| view-head（视图标题/副题） | ConsoleView stream-head + crumb | ✅ Step 1 |
+| 消息流（用户/agent/typing 三点/thinking 折叠/审批 gate 卡/失败重试） | ConsoleView | ✅（P2/P3 各步） |
+| @提及菜单 + 消息内高亮 | MentionMenu + lib/mention | ✅ Step 4 |
+| A2A 中继行 | ConsoleView | ✅（P1 全链路） |
+| 名册（身份色/未读徽标/新建入口） | RosterPanel | ✅ Step 5/6 |
+| ctx 面板（档案模式/协作对象/收起开关/Box 屏灰化） | CtxPanel | ✅ Step 6/7/8 |
+| stream-head 操作区 | ctxToggle + 档案按钮（通知/会话信息图标裁剪记档） | ✅ Step 6/7 |
+| task 卡步骤轨迹/产物 diff chips | — | 记档：内核无步骤/产物事实（附录 A 二） |
+| 群聊 sysnote/自动化条 | — | 记档：P5+/backlog（附录 A 二） |
+
+### 二、排程（TasksView）
+
+| 原型块 | 实现 | 状态 |
+|---|---|---|
+| 三 lane 队列（user/agent/background，lane-head 计数） | TasksView LANES | ✅（P2） |
+| run 卡（状态/attempts/中止） | TasksView | ✅（P3） |
+| run-progress | indeterminate 流光 | ✅ Step 10 |
+| background lane 数据源 | — | 记档：automations/subagent backlog（附录 A 五） |
+
+### 三、Boxes（BoxesView + BoxOps）
+
+| 原型块 | 实现 | 状态 |
+|---|---|---|
+| box-sum 汇总行 | BoxesView | ✅（P2） |
+| Box 卡（状态 chip/归属 chip/caps 按钮） | BoxesView | ✅ 归属 chip=Step 12 |
+| 资源仪表 | CPU 真比例条/内存磁盘数值 | ✅ Step 6/10 |
+| 快照链 chips + 回滚二段确认 | BoxesView | ✅ Step 9 |
+| 休眠/唤醒 | BoxesView + ctx 灰化 | ✅ Step 8 |
+| 近期执行 | BoxesView | ✅（P3） |
+| box-claim 叙事条 | shield 形态 | ✅ Step 12 |
+| 磁盘配额/资源限额 | — | 记档：随 OCI 后端（附录 A 三） |
+
+### 四、图谱（GraphView）
+
+| 原型块 | 实现 | 状态 |
+|---|---|---|
+| 节点（身份色圆盘/初始字/消息计数） | GraphView | ✅（P2） |
+| 节点状态点（working 脉冲/idle） | runs 投影 | ✅ Step 12 |
+| hover 退隐 | hover ?? focus | ✅ Step 12 |
+| 边（宽度∝消息量/user↔a2a 双色/点击详情） | GraphView | ✅（P2） |
+| 节点详情 kv（角色/状态/模型/关系/进入会话） | GraphView 侧栏 | ✅ 状态/模型=Step 12 |
+| Esc/点空白退出 | GraphView | ✅（P2） |
+| 图例 + 对话量排行 | GraphView 侧栏（排行无 topic——内核无边主题事实，不造假） | ✅/记档 |
+| 群组菱形/远端蓝虚线 | — | 记档：P5+/P6（附录 A 四） |
+
+### 五、设置（SettingsView）
+
+| 原型块 | 实现 | 状态 |
+|---|---|---|
+| LLM 推理（provider CRUD/主力/协议分段） | SettingsView | ✅（P3 + Step 11 协议） |
+| 断网回退端点 | per-request 降级不粘滞 | ✅ Step 11 |
+| 沙箱后端（三级探测/偏好） | SettingsView + 降级引导（裁定 D） | ✅（P3 + Step 11） |
+| 权限策略 | 如实呈现 Manual 现状（不放假开关） | ✅ 现状呈现（分级=后续版本记档） |
+| 数据（路径/打开文件夹） | 裁定 E 一期只读 | ✅ Step 11（导出/清空记档后置） |
+| 外观（主题） | 三选即时生效 | ✅（P2） |
+| 关于（版本真值） | app.getVersion() | ✅ Step 1 |
+| computer-use | — | 记档：后续版本（附录 A 六） |
+
+### 六、壳层（App + CommandPalette + ToastHost + ApprovalModal + AgentWizard）
+
+| 原型块 | 实现 | 状态 |
+|---|---|---|
+| 标题栏（omnibox 居中/主题切换/win 控件/双击最大化） | App | ✅ Step 1/3 |
+| rail（图标导航/你头像）+ crumb | App | ✅ Step 1 |
+| 状态栏（内核/LLM/沙箱/本地执行——全真数据） | App | ✅ Step 1/11 |
+| 命令面板（Ctrl K）+ omnibox | CommandPalette | ✅ Step 3 |
+| Toast | ToastHost | ✅ Step 2 |
+| 审批模态 + AgentWizard 三步向导 | ApprovalModal/AgentWizard | ✅（P1/P3 + Step 5） |
+| prefers-reduced-motion 全局降级 | App 全局媒体查询 | ✅ Step 1 |
+
+**复查结论**：附录 A 全项「已实现 / 记档裁定」二态收敛，无第三态悬空——P4 验收达成。

@@ -41,6 +41,18 @@ const fmtMb = (mb: number): string => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} G
 const agentOfRun = (runId?: string): string | null =>
   runId !== undefined && runId.includes('-run-') ? (runId.split('-run-')[0] ?? null) : null
 
+/** 每盒归属 chip 事实（P4 Step 12，原型「卡帕工作中」语义）：roster.boxId 反查归属 agent ×
+ *  runs 投影（有 running run 即工作中）——只在工作中呈现；空闲不渲染
+ *  （归属常量事实已在 ctx 档案「Box 归属」kv，不重复；图谱状态点同源 runs 投影）。 */
+const ownerChips = computed(() => {
+  const working = new Set(kernel.runs.filter((r) => r.state === 'running').map((r) => r.agentId))
+  const by: Record<string, { agentId: string; label: string }> = {}
+  for (const a of kernel.roster) {
+    if (a.boxId && working.has(a.agentId)) by[a.boxId] = { agentId: a.agentId, label: `${a.name ?? a.agentId}工作中` }
+  }
+  return by
+})
+
 /** 该 Box 最近完成的执行（倒序最多 3 条；进行中的以 started 兜底展示） */
 const execsOf = (boxId: string) =>
   kernel.execs
@@ -179,6 +191,10 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
               <div class="box-sub">image={{ box.image }} · {{ box.state }}</div>
             </div>
             <span class="chip" :class="stateChip(box.state).cls">{{ stateChip(box.state).label }}</span>
+            <span v-if="ownerChips[box.boxId]" class="chip" title="归属 agent 正在此 Box 工作">
+              <span class="stat-dot" :style="{ background: kernel.colorOf(ownerChips[box.boxId]!.agentId) }"></span>
+              {{ ownerChips[box.boxId]!.label }}
+            </span>
             <div class="box-actions">
               <button class="btn btn-secondary btn-sm" @click="ui.openBoxOps(box.boxId)">操作台</button>
               <button
@@ -267,7 +283,17 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
       <p v-if="kernel.boxes.length === 0" class="placeholder">暂无 Box——注册 agent 时内核自动创建（mock 后端）</p>
 
       <div class="box-claim">
-        Box 即本机云电脑。agent 在 Box 内自由执行；触碰宿主机文件或出网，经审批闸门逐条批准（对话流内 gate 卡）。
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        ><path d="M12 3l7 3v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z"></path></svg>
+        <span>Box 即本机云电脑。agent 在 Box 内自由执行；触碰宿主机文件或出网，经审批闸门逐条批准（对话流内 gate 卡）。</span>
       </div>
     </div>
   </section>

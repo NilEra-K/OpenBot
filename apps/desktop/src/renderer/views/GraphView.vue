@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
  * 社交图谱视图（prototype.html 迁移）：谁在和谁说话。
- * 节点 = user + roster（身份色圆盘，steward 带徽标点）；弧线宽度 ∝ 消息量；
- * user↔agent 消息边（灰）与 agent↔agent 委派边（accent）视觉区分。
+ * 节点 = user + roster（身份色圆盘 + 工作状态点——runs 投影，P4 Step 12）；弧线宽度 ∝ 消息量；
+ * user↔agent 消息边（灰）与 agent↔agent 委派边（accent）视觉区分；
+ * hover/键盘聚焦预览退隐（无关元素淡出），点击进侧栏详情（退隐钉住），点空白/Esc 退出。
  * P2 无群组/远端节点（rooms 属后续）——数据有什么画什么；点击节点/连线聚焦，点空白/Esc 退出。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -111,13 +112,38 @@ const ranking = computed(() => [...edgeGeoms.value].sort((a, b) => b.count - a.c
 const labelOf = (id: string): string => nodes.value.find((n) => n.id === id)?.label ?? id
 const isSteward = (id: string): boolean => kernel.stewardId === id
 
-// ---- 聚焦（点击节点/连线进侧栏详情 + 无关元素退隐；点空白/Esc 退出） ----
+/** agent 工作中集合（P4 Step 12 状态点：runs 投影——该 agent 有 running run 即工作中；
+ *  与 BoxesView 归属 chip 同源事实）。user 节点无 run 概念，不取状态点。 */
+const workingAgentIds = computed(() => {
+  const s = new Set<string>()
+  for (const r of kernel.runs) if (r.state === 'running') s.add(r.agentId)
+  return s
+})
+
+/** 节点详情状态行（原型 statusText 语义）：run summary 在场则附注一句 */
+const statusTextOf = (agentId: string): string => {
+  const run = kernel.runs.find((r) => r.agentId === agentId && r.state === 'running')
+  return run ? `工作中${run.summary ? ` · ${run.summary}` : ''}` : '空闲'
+}
+
+/** 节点详情模型行：per-agent 覆盖后置（裁定 F）——继承全局主力，如实呈现 */
+const modelLabel = computed(() => {
+  const p = kernel.providers.find((x) => x.name === kernel.defaultProvider)
+  return p ? `继承全局主力（${p.name} · ${p.model}）` : '未配置'
+})
+
+// ---- 聚焦与退隐（点击节点/连线进侧栏详情 + 无关元素退隐；点空白/Esc 退出；
+//      hover/键盘 focus 先行预览退隐——离开自然回落聚焦态，原型 graphApplyDim 同语义） ----
 
 type Focus = { type: 'node'; key: string } | { type: 'edge'; key: string } | null
 const focus = ref<Focus>(null)
+const hover = ref<Focus>(null)
+
+/** 退隐保持集的活动源：hover 优先（在场时按 hover 算），离开回落 focus */
+const active = computed<Focus>(() => hover.value ?? focus.value)
 
 const keepSet = computed<Set<string> | null>(() => {
-  const f = focus.value
+  const f = active.value
   if (!f) return null
   if (f.type === 'node') {
     const keep = new Set([f.key])
@@ -176,6 +202,10 @@ const goTo = (agentId: string): void => {
           tabindex="0"
           @click.stop="focus = { type: 'edge', key: e.key }"
           @keydown.enter.prevent="focus = { type: 'edge', key: e.key }"
+          @mouseenter="hover = { type: 'edge', key: e.key }"
+          @mouseleave="hover = null"
+          @focus="hover = { type: 'edge', key: e.key }"
+          @blur="hover = null"
         >
           <path class="gedge" :class="e.kind" :d="e.d" :stroke-width="e.width.toFixed(1)"></path>
           <path class="gedge-hit" :d="e.d"></path>
@@ -191,6 +221,10 @@ const goTo = (agentId: string): void => {
           tabindex="0"
           @click.stop="focus = focus?.type === 'node' && focus.key === n.id ? null : { type: 'node', key: n.id }"
           @keydown.enter.prevent="focus = { type: 'node', key: n.id }"
+          @mouseenter="hover = { type: 'node', key: n.id }"
+          @mouseleave="hover = null"
+          @focus="hover = { type: 'node', key: n.id }"
+          @blur="hover = null"
         >
           <circle
             class="gdisc"
@@ -201,7 +235,16 @@ const goTo = (agentId: string): void => {
             filter="url(#gshadow)"
           ></circle>
           <text class="ginit" :x="n.x" :y="n.y + 4.5">{{ n.initial }}</text>
-          <circle v-if="!n.isUser && isSteward(n.id)" class="gstatus" :cx="n.x + n.r * 0.74" :cy="n.y + n.r * 0.74" r="4.5"></circle>
+          <!-- 状态点（P4 Step 12：runs 投影 working/idle——steward 徽标点退役，
+               管家区分保留在详情「角色」kv 与名册；user 节点无 run 概念不取点） -->
+          <circle
+            v-if="!n.isUser"
+            class="gstatus"
+            :class="workingAgentIds.has(n.id) ? 'working' : 'idle'"
+            :cx="n.x + n.r * 0.74"
+            :cy="n.y + n.r * 0.74"
+            r="4.5"
+          ></circle>
           <text class="glabel" :x="n.x" :y="n.y + n.r + 17">{{ n.label }}</text>
           <text class="gcount" :x="n.x" :y="n.y + n.r + 30">×{{ nodeMsg[n.id] ?? 0 }}</text>
         </g>
@@ -215,14 +258,15 @@ const goTo = (agentId: string): void => {
       <template v-if="!focus">
         <div class="graph-title">社交图谱</div>
         <p class="graph-sub">
-          谁在和谁说话：节点是会话对象（身份色圆盘 + 管家徽标点），弧线宽度是消息量。
+          谁在和谁说话：节点是会话对象（身份色圆盘 + 工作状态点），弧线宽度是消息量。
           点击节点或连线聚焦详情，点空白处或 Esc 退出；进入会话用详情里的按钮。
         </p>
         <div class="side-sec">图例</div>
         <div class="graph-sum mono">{{ edgeGeoms.length }} 对关系 · {{ kernel.edges.reduce((s, e) => s + e.count, 0) }} 条消息</div>
         <div class="legend-row"><span class="lg-line user"></span>你 ↔ agent · 消息边</div>
         <div class="legend-row"><span class="lg-line a2a"></span>agent ↔ agent · 委派边（A2A）</div>
-        <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>徽标点 = 管家</div>
+        <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>状态点 = 工作中（脉冲）</div>
+        <div class="legend-row"><span class="lg-dot" style="background: var(--ink3)"></span>状态点 = 空闲</div>
 
         <div v-if="ranking.length" class="side-sec">对话量排行</div>
         <div v-for="e in ranking" :key="e.key" class="rank-row">
@@ -266,6 +310,8 @@ const goTo = (agentId: string): void => {
         <div v-if="focus.key === 'user'" class="kv"><span class="k">身份</span><span class="v">本机主人 · 所有对话的起点</span></div>
         <template v-else>
           <div class="kv"><span class="k">角色</span><span class="v">{{ isSteward(focus.key) ? '管家（默认路由）' : 'worker' }}</span></div>
+          <div class="kv"><span class="k">状态</span><span class="v">{{ statusTextOf(focus.key) }}</span></div>
+          <div class="kv"><span class="k">模型</span><span class="v">{{ modelLabel }}</span></div>
           <div class="kv"><span class="k">消息量</span><span class="v mono">×{{ nodeMsg[focus.key] ?? 0 }}</span></div>
         </template>
         <div class="side-sec">主要关系</div>

@@ -50,6 +50,7 @@
 .chip {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   height: 18px;
   padding: 0 7px;
   border-radius: 9px;
@@ -343,17 +344,25 @@
   flex: none;
 }
 
-/* ---- 底部说明 ---- */
+/* ---- 底部说明（P4 Step 12：shield 形态对齐原型——flex + accent 图标；文案保持如实版，
+        原型「断网自动切本地 Ollama / 设置中批准的策略」与实现不符不照搬） ---- */
 
 .box-claim {
   margin-top: 16px;
   padding: 12px 14px;
-  border: 1px dashed rgba(var(--accent-rgb), 0.3);
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--accent-weak);
   font-size: 12.5px;
   color: var(--ink2);
   line-height: 1.7;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.box-claim svg {
+  color: var(--accent);
+  flex: none;
 }
 
 /* ---- 快照链与回滚（P4 Step 9）：chips 点击展开详情，回滚二段确认 ---- */
