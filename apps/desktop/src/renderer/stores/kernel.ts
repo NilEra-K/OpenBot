@@ -115,6 +115,9 @@ export interface BoxCard {
   image: string
   state: 'active' | 'sleeping' | 'snapshot'
   createdAt: number
+  /** 资源限额（spec 留档——色档分母；resourceLimits=false 的后端创建时也不落，如实缺席） */
+  cpus?: number
+  memoryMb?: number
 }
 
 /** 图谱边（消息量；a2a 双向 + 用户↔agent） */
@@ -279,8 +282,15 @@ export const useKernelStore = defineStore('kernel', {
         this.approvalMode = (await client.call<{ mode: 'manual' | 'auto' }>('v1.approval.mode')).mode
         await this.refreshSettings()
         await this.refreshLlmStatus()
-        const boxes = await client.call<Array<{ boxId: string; spec: { image: string }; state: BoxCard['state']; createdAt: number }>>('v1.boxes.list')
-        this.boxes = boxes.map((b) => ({ boxId: b.boxId, image: b.spec.image, state: b.state, createdAt: b.createdAt }))
+        const boxes = await client.call<Array<{ boxId: string; spec: { image: string; cpus?: number; memoryMb?: number }; state: BoxCard['state']; createdAt: number }>>('v1.boxes.list')
+        this.boxes = boxes.map((b) => ({
+          boxId: b.boxId,
+          image: b.spec.image,
+          state: b.state,
+          createdAt: b.createdAt,
+          ...(b.spec.cpus !== undefined ? { cpus: b.spec.cpus } : {}),
+          ...(b.spec.memoryMb !== undefined ? { memoryMb: b.spec.memoryMb } : {}),
+        }))
         this.caps = await client.call<NonNullable<typeof this.caps>>('v1.boxes.caps')
         if (this.caps?.snapshot) await this.refreshSnapshots()
         await this.refreshSandbox()

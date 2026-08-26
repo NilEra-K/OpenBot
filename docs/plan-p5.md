@@ -47,20 +47,20 @@
 - [x] 4. **群聊 UI**：RosterPanel 群组节（名册独立分组——原型「群聊」节）+ 群聊流视图（sysnote 系统注记：
   建群 / 入群 / 轮转收敛）+ 图谱**菱形节点**（P4 记档数据源激活——群成员边聚合）+ ctx 群档案 +
   @提及菜单群对象；E2E（建群 → 消息轮转收敛 → supersede → sysnote / 菱形节点在场）
-- [ ] 5. **OCI 底座 + backend-docker**：底座共用一套 OCI CLI 实现（**构造注入命令名与探测函数**——
+- [x] 5. **OCI 底座 + backend-docker**：底座共用一套 OCI CLI 实现（**构造注入命令名与探测函数**——
   plan-p3 Step 4 设计记档直接复用）导出薄壳；容器即 Box：`run -d --cpus --memory` / `exec` / `commit`
   快照 / `stats --no-stream --format json` / pause-unpause；caps 如实（persistent 需卷挂载弱呈现、
   resourceLimits ✓、isolation medium、suspendable ✓）；单测注入脚本化 CLI（mock 同构）
-- [ ] 6. **backend-podman 薄壳 + 装配接真后端**：podman 与 docker 同构共用底座（差异只在命令名与探测）；
+- [x] 6. **backend-podman 薄壳 + 装配接真后端**：podman 与 docker 同构共用底座（差异只在命令名与探测）；
   沙箱三级探测降级 P3 已就位（设置页选项在场）——本轮接真后端；装配偏好路径核验；
   地雷对照 platforms.md（CLI 子进程方案天然屏蔽命名管道/unix socket 端点差异；podman machine 占一个
   WSL2 发行版——资源告警全局视角）
-- [ ] 7. **仪表与色档解锁**：BoxStats cpuPercent/memoryMb 真值进 Box 卡（OCI 后端可测；**WSL 维持如实缺席**）+
+- [x] 7. **仪表与色档解锁**：BoxStats cpuPercent/memoryMb 真值进 Box 卡（OCI 后端可测；**WSL 维持如实缺席**）+
   **warn 色档**（resourceLimits 真上限——P3 Step 6 记档「等资源限额后端」兑现，按 --memory/--cpus 限额档位）；
   E2E（mock 确定值路径既有——补色档断言）
-- [ ] 8. **真机验收（人工）**：Docker Desktop / podman machine 各走一遍「exec → stats → 快照 → 休眠唤醒」
+- [x] 8. **真机验收（人工）**：Docker Desktop / podman machine 各走一遍「exec → stats → 快照 → 休眠唤醒」
   链路；结论与实测坑记档 plan-p5（机器条件不满足时如实标注「未验收」——不造假）
-- [ ] 9. **收官文档**：plan-p5 勾选与实测记档；ARCHITECTURE §11 重排核对（2026-08-26 已随本计划同步）；
+- [x] 9. **收官文档**：plan-p5 勾选与实测记档；ARCHITECTURE §11 重排核对（2026-08-26 已随本计划同步）；
   package.json 版本随出货提交同步
 
 ## 设计要点（开工前逐条细化，先记已知决策）
@@ -96,7 +96,7 @@
   会话对象族，无法塞进 a2a——实现时按最小事件集定）。
 - 命令面 zod 先例沿用（registerAgent/settings 同款）；错误稳定码族按既有前缀扩展。
 
-### 实施记档（Step 1–4，2026-08-26）
+### 实施记档（Step 1–9，2026-08-26）
 
 - **Step 1 广播内核**：BroadcastService 薄层复用单发管线（a2a 两个受理方法）——事件/transcript 镜像/
   lane 入队语义同源，**零新事件族兑现**；子 nonce `${nonce}#${i}` 各自幂等（整体重试只回放不双发）；
@@ -130,6 +130,55 @@
   修复=防线前移到写入点：GroupService.isStale 公开代际判定 → assemble 注入 TurnRunner.isGroupTurnStale
   → session.stale() 在终答写入前拦截（不写群 transcript 不发事件，turn 正常 finish）；与 #onSettled
   构成双层防线。turn.test.ts 补「旧代际在途 turn 终答丢弃」用例锁该路径。
+- **Step 5 OCI 底座 + Docker 薄壳**：`OciBoxBackend` 一套全量实现，`DockerBoxBackend` 只注入
+  `id/cli` 两字段（podman Step 6 同法）。容器即 Box：`run -d`（`--cpus/--memory` 原生上限 + `sleep
+  infinity` 常驻）/ exec（`-w/-e/--` 注入）/ `commit` 镜像即快照（`openbot-snap:N`，CLI 默认自动
+  pause 冻结文件系统——与 wsl terminate-再-export 同一致性语义）/ stats / pause-unpause / restore
+  （**先校验快照镜像在场再删容器**——失败窗口比 wsl 版更小）/ openShell（容器内 `script` 分配
+  PTY，与 WSL 同构——Windows 侧零原生模块）。caps 如实：persistent **false**（容器可写层随容器
+  存活，真持久需卷挂载——一期未挂，UI 弱呈现）；interactive true 待 Step 8 真机验收，不通用如实降
+  caps 记档。
+- **Step 5 状态机要点**：`#ensureRunning` 先查后动（ps 查态再 unpause/start——podman 对运行中容器
+  start 报错而 docker 是 no-op，不盲调组合）；create 跨重启幂等（容器已存在跳过 run，桌面重启复用
+  ——名册 agent 重建 Box 不会同名冲突）；list 前缀精确过滤（`openbot-box-` 前缀，用户自建容器不碰）。
+- **Step 5 probeDocker 收紧**：`docker version` Client 段（CLI 在即通过——太宽松）→ `docker info`
+  Server 段（Engine 运行态校验），Docker Desktop 未启动时 available=false 带「启动后重试」指引。
+  kernel 装配 implemented 白名单加 docker；默认镜像 `ubuntu:24.04`，`OPENBOT_DOCKER_IMAGE` env
+  覆盖（国内网络/私有 registry 确定性）。E2E 走 `OPENBOT_SANDBOX=mock` env 覆盖，确定性不受影响。
+- **Step 5 测试坑记档**：①定向失败替身必须放行 create 初始化链（ps + mkdir）——一刀切失败会先炸在
+  `BOX_STATE_QUERY_FAILED`/create 的 mkdir，测不到目标错误码（收尾时修 3 例）；②create 存在路径是
+  双重 ps 查询（create 查一次 + ensureRunning 再查）——与 exec 先查后动同构的防御式设计，断言用
+  find 式不锁索引。真实套件 `OPENBOT_TEST_DOCKER=1` 门控（默认 CI 零 Docker 依赖）+ afterAll 兜底
+  清理孤儿容器/快照镜像（防下轮同名冲突）——Step 8 真机验收直接复用。
+- **Step 6 podman 薄壳**：`PodmanBoxBackend` 与 Docker 完全同构（底座差异只剩注入的 cli 命令名）；
+  kernel 装配 implemented 加 podman（`OPENBOT_PODMAN_IMAGE` env 覆盖）——四后端矩阵齐。
+  **probePodman 收紧与实测坑**：`podman info` 在 machine 停止时仍 exit 0 返回 client 侧信息（OS:
+  windows/amd64）——探不出运行态；`podman machine list` 同样恒 exit 0（machine 停止时）——必须
+  **解析内容**：`machine list --format json` 的 `Running` 字段（实测样本来自本机 podman 6.0.1，
+  machine 从未启动：LastUp 零值、Running:false）。`parseMachineList` 纯函数导出，probe.test.ts 9 例
+  锁样本（含损坏输出/非数组/字段异常 → null 如实不可用）。probeCli 补全一处：exit 非 0 分支同样拼
+  unavailableNote（Step 5 注释宣称「带指引」与实现不符的修正——CLI 在但 Engine 停是最常见不可用态）。
+- **Step 7 仪表与色档**：默认限额档 **cpus:2 / memoryMb:2048**（assemble addAgent——工程默认而非演示值：
+  resourceLimits 后端真实落为 `--cpus/--memory`；WSL caps.resourceLimits=false 如实忽略；mock 忽略但
+  spec 留档供呈现分母；后续可配化记 backlog）。内存比例条 = `stats.memoryMb`（用量）∩ `spec.memoryMb`
+  （限额）双在场才画——分母是真实限额非编造刻度，任一缺席维持只报数值（P4 Step 10 纪律延续：磁盘无
+  上限事实不变）；CPU/内存 ≥80% → `gauge-warn`（--warning 色，fill 与数值同变色）。WSL 反向不造假
+  兑现：stats 无 cpu/mem 字段仪表自然不渲染。mock `options.stats` 整包覆盖 + kernel env
+  `OPENBOT_MOCK_CPU/MEM/DISK`（数字合法才注入——E2E 高值档位的确定性来源）；renderer BoxCard 投影
+  扩 cpus?/memoryMb?（v1.boxes.list 本就全量透传 spec，收窄在 renderer 投影层）。
+- **Step 7 E2E**：新用例「warn 色档」（OPENBOT_MOCK_CPU=87 → CPU warn 类 + width 87%；
+  OPENBOT_MOCK_MEM=1900 ÷ 2048 → 92.77% warn + 文案「1.9 GB / 2.0 GB」用量带真实上限）。P4 Step 10
+  旧用例断言更新：内存 `.gauge-bar` 0→1 + `/ 2.0 GB` 文案——**预期内行为变更**（上限事实进场，P4
+  「无上限不画条」的前提不再成立）；磁盘断言不动。实测坑：Vue style 绑定按**完整精度**下发 width
+  （92.7734%）——正则断言要 `92\.77\d*%` 而非精确两位（首跑抓到）。
+- **Step 8 真机验收（如实：未验收）**：Docker Desktop 本机未安装（`where docker` 无命中）；podman
+  6.0.1 CLI 在、machine `podman-machine-default`（hyperv，配置 14C/2GiB）存在但**从未启动**——用户
+  裁定不启动 machine（Hyper-V VM 资源占用 + 首次拉镜像网络成本），真机链路（exec → stats → 快照 →
+  休眠唤醒）未验收。真实套件已参数化：`OPENBOT_TEST_OCI=1` + `OPENBOT_TEST_CLI=docker|podman`
+  （afterAll 清理命令同步二态）——机器条件就绪时直接复跑。CLI 语义已由脚本化单测锁死（底座 18 例 +
+  probe 9 例，含 docker/podman 双 stats 格式样本），真机验收剩余风险只在 CLI 版本行为漂移。
+- **Step 9 收官**：单测 275 通过 + 4 skipped（真实套件门控）；E2E 18 用例全绿（P5 净增 1：色档）；
+  package.json 版本 0.0.26。
 
 ## 风险与地雷
 

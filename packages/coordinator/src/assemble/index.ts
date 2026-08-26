@@ -397,7 +397,9 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
         await agentStore.register(registration.agentId, registration.name, registration.color)
       }
       llms.set(registration.agentId, registration.llm ?? new MockChatProvider({ steps: [] }))
-      const boxId = await backend.create({ image: 'default' })
+      // 默认限额档（P5 Step 7 色档分母 + OCI 后端 --cpus/--memory 落地）：工程默认 2 核 / 2GB——
+      // caps.resourceLimits=false 的后端（wsl）如实忽略；mock 忽略（但 spec 留档供 renderer 呈现上限）
+      const boxId = await backend.create({ image: 'default', cpus: 2, memoryMb: 2048 })
       boxes.set(registration.agentId, boxId)
       const scheduler = new AgentScheduler({
         agentId: registration.agentId,

@@ -37,6 +37,15 @@ const fmtGb = (bytes: number): string => `${(bytes / (1024 * 1024 * 1024)).toFix
 /** 磁盘占用展示档（GB/MB 分档——vhdx 动辄 GB 级） */
 const fmtMb = (mb: number): string => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`)
 
+/** 内存上限事实（Step 7 色档分母）：spec.memoryMb 在场且用量也在场才成立——
+ *  resourceLimits=false 的后端（WSL）spec 不带限额 / stats 无内存值，均如实返回 null（只报数值） */
+const memLimitOf = (box: { boxId: string; memoryMb?: number }): number | null =>
+  box.memoryMb !== undefined && kernel.boxStats[box.boxId]?.memoryMb !== undefined ? box.memoryMb : null
+
+/** 内存用量占限额百分比（仅在有上限事实时调用——渲染路径已被 memLimitOf 守门） */
+const memPctOf = (box: { boxId: string; memoryMb?: number }): number =>
+  ((kernel.boxStats[box.boxId]?.memoryMb ?? 0) / (box.memoryMb ?? 1)) * 100
+
 /** runId 的 agent 前缀（P1 约定 `${agentId}-run-N`；ConsoleView 同款推断） */
 const agentOfRun = (runId?: string): string | null =>
   runId !== undefined && runId.includes('-run-') ? (runId.split('-run-')[0] ?? null) : null
@@ -217,14 +226,25 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
           </div>
 
           <!-- 资源仪表（Step 6）：字段在场才渲染（缺席=不可测，不造假）。CPU 百分比自带 0-100 真比例画条；
-               内存/磁盘无上限事实——只报数值不画比例条（Step 10 演示值清扫：去假刻度基数；warn 色档等资源限额后端） -->
+               内存比例条（Step 7 色档解锁）：用量 ∩ spec.memoryMb 真限额都在场才画（分母是 resourceLimits
+               后端 --memory 落地值），≥80% 转 warn 色；上限缺席维持只报数值（Step 10 纪律：无上限事实不画
+               假比例）。磁盘无上限事实不变。WSL 的 stats 无 cpu/mem 字段自然不渲染。 -->
           <div v-if="kernel.boxStats[box.boxId]" class="box-gauges">
-            <div v-if="kernel.boxStats[box.boxId]!.cpuPercent !== undefined" class="gauge">
+            <div
+              v-if="kernel.boxStats[box.boxId]!.cpuPercent !== undefined"
+              class="gauge"
+              :class="{ 'gauge-warn': kernel.boxStats[box.boxId]!.cpuPercent! >= 80 }"
+            >
               <span class="gauge-k">CPU</span>
               <span class="gauge-bar"><span class="gauge-fill" :style="{ width: `${Math.min(100, kernel.boxStats[box.boxId]!.cpuPercent!)}%` }"></span></span>
               <span class="gauge-v mono">{{ Math.round(kernel.boxStats[box.boxId]!.cpuPercent!) }}%</span>
             </div>
-            <div v-if="kernel.boxStats[box.boxId]!.memoryMb !== undefined" class="gauge gauge--plain">
+            <div v-if="memLimitOf(box)" class="gauge" :class="{ 'gauge-warn': memPctOf(box) >= 80 }">
+              <span class="gauge-k">内存</span>
+              <span class="gauge-bar"><span class="gauge-fill" :style="{ width: `${Math.min(100, memPctOf(box))}%` }"></span></span>
+              <span class="gauge-v mono">{{ fmtMb(kernel.boxStats[box.boxId]!.memoryMb!) }} / {{ fmtMb(memLimitOf(box)!) }}</span>
+            </div>
+            <div v-else-if="kernel.boxStats[box.boxId]!.memoryMb !== undefined" class="gauge gauge--plain">
               <span class="gauge-k">内存</span>
               <span class="gauge-v mono">{{ fmtMb(kernel.boxStats[box.boxId]!.memoryMb!) }}</span>
             </div>

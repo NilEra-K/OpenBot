@@ -172,6 +172,16 @@
   transition: width 400ms var(--ease);
 }
 
+/* warn 色档（P5 Step 7）：用量 ≥80% 上限——fill 与数值转警示色（CPU 分母天然 100；
+   内存分母 = spec.memoryMb 真实限额——resourceLimits 后端的 --memory 落地值） */
+.gauge-warn .gauge-fill {
+  background: var(--warning);
+}
+
+.gauge-warn .gauge-v {
+  color: var(--warning);
+}
+
 .gauge-v {
   font-size: 10.5px;
   color: var(--ink2);

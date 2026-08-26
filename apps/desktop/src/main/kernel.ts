@@ -24,8 +24,8 @@ import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
 import type { ResolvedProvider } from '@openbot/state'
 import { ManualApprovalGate } from '@openbot/runner'
-import { MockBoxBackend, WslBoxBackend, probeAll, runProcess } from '@openbot/boxes'
-import type { BackendProbe, BoxBackend } from '@openbot/boxes'
+import { DockerBoxBackend, MockBoxBackend, PodmanBoxBackend, WslBoxBackend, probeAll, runProcess } from '@openbot/boxes'
+import type { BackendProbe, BoxBackend, BoxStats } from '@openbot/boxes'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
 
@@ -191,6 +191,19 @@ const hostDiskProbe = (path: string) => async (): Promise<DiskFact | null> => {
   }
 }
 
+/** mock stats 的 env 注入（P5 Step 7 色档 E2E 的确定性来源）：OPENBOT_MOCK_CPU/MEM/DISK——
+ *  数字合法才注入对应字段（非法/缺席 = 缺省确定值 {12/256/1200}，既有 E2E 断言不动） */
+function mockStatsEnv(): { stats?: BoxStats } {
+  const cpu = Number(process.env.OPENBOT_MOCK_CPU)
+  const mem = Number(process.env.OPENBOT_MOCK_MEM)
+  const disk = Number(process.env.OPENBOT_MOCK_DISK)
+  const stats: BoxStats = {}
+  if (Number.isFinite(cpu)) stats.cpuPercent = cpu
+  if (Number.isFinite(mem)) stats.memoryMb = mem
+  if (Number.isFinite(disk)) stats.diskMb = disk
+  return Object.keys(stats).length > 0 ? { stats } : {}
+}
+
 /** 装配桌面内核（app ready 后调用；safeStorage 依赖 ready 状态） */
 export async function assembleDesktop(): Promise<DesktopKernel> {
   // NodeFs 路径约定 posix 风格（Windows 同样接受 '/'）
@@ -207,16 +220,23 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // rootfs 查找顺序：env OPENBOT_WSL_ROOTFS > userData/box-rootfs.tar.gz
   const rootfsPath = process.env.OPENBOT_WSL_ROOTFS ?? `${userDataRoot}/box-rootfs.tar.gz`
   const rootfsReady = await fileExists(rootfsPath)
+  // OCI 默认镜像（P5 Step 5/6）：env 按后端分别覆盖（国内网络/私有 registry 确定性）
+  const dockerImage = process.env.OPENBOT_DOCKER_IMAGE ?? 'ubuntu:24.04'
+  const podmanImage = process.env.OPENBOT_PODMAN_IMAGE ?? 'ubuntu:24.04'
   const probes = await probeAll(runProcess)
   const chosen = chooseBackend(preference, probes, {
     wslRootfs: rootfsReady,
-    // docker/podman 属 Step 4（OCI 后端）：CLI 在也不选——诚实降级带原因
-    implemented: ['mock', 'wsl'],
+    // docker/podman 随 P5 Step 5/6 兑现（OCI 底座 + 同构薄壳）——四后端矩阵齐
+    implemented: ['mock', 'wsl', 'docker', 'podman'],
   })
   const backend: BoxBackend =
     chosen.backendId === 'wsl'
       ? new WslBoxBackend({ rootfs: rootfsPath, dir: `${userDataRoot}/boxes`, now: Date.now })
-      : new MockBoxBackend({ now: Date.now })
+      : chosen.backendId === 'docker'
+        ? new DockerBoxBackend({ image: dockerImage, now: Date.now })
+        : chosen.backendId === 'podman'
+          ? new PodmanBoxBackend({ image: podmanImage, now: Date.now })
+          : new MockBoxBackend({ now: Date.now, ...mockStatsEnv() })
   // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
   const sandboxStatus: SandboxStatus = {
     preference,

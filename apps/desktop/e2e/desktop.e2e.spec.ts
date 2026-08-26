@@ -898,7 +898,7 @@ test('快照链与回滚（P4 Step 9）：chips 链 + 点击详情 + 二段确�
   }
 })
 
-test('演示值清扫（P4 Step 10）：run-progress 全宽流光无假进度 + 内存/磁盘仪表只报数值', async () => {
+test('演示值清扫（P4 Step 10 → P5 Step 7 限额解锁）：run-progress 流光 + 内存限额比例条 + 磁盘只报数值', async () => {
   const mock = await startMockOpenAi([
     // 单步：host_fetch 触发审批闸门 → run 稳定挂 running（流光断言的稳定活跃窗口）
     { match: (l) => l.role === 'user', toolCalls: [{ id: 'c1', name: 'host_fetch', args: { url: 'https://example.com/' } }] },
@@ -940,20 +940,59 @@ test('演示值清扫（P4 Step 10）：run-progress 全宽流光无假进度 + 
     const iw = (await track.locator('i').boundingBox())!.width
     expect(Math.abs(tw - iw)).toBeLessThanOrEqual(1)
 
-    // 仪表：内存/磁盘无上限事实——不画比例条只报数值；CPU 百分比保留真比例（mock 确定值 12%）
+    // 仪表（P5 Step 7 行为变更）：内存比例条随默认限额解锁（spec.memoryMb=2048 真分母 + mock 256MB
+    // → 12.5% 常规色，非 warn）；磁盘无上限事实维持只报数值；CPU 百分比真比例（mock 确定值 12%）
     await page.getByRole('button', { name: 'Box', exact: true }).click()
     const memGauge = page.locator('.boxcard .gauge', { hasText: '内存' })
     const diskGauge = page.locator('.boxcard .gauge', { hasText: '磁盘' })
     await expect(memGauge).toBeVisible({ timeout: 15_000 })
-    await expect(memGauge.locator('.gauge-bar')).toHaveCount(0)
-    await expect(diskGauge.locator('.gauge-bar')).toHaveCount(0)
-    await expect(memGauge.locator('.gauge-v')).toContainText(/MB|GB/)
+    await expect(memGauge.locator('.gauge-bar')).toHaveCount(1) // 上限在场 → 真比例条（P4 断言 0 已过时）
+    await expect(memGauge).not.toHaveClass(/gauge-warn/) // 12.5% 常规档
+    await expect(memGauge.locator('.gauge-v')).toContainText(/\/ 2\.0 GB/) // 文案带真实上限
+    await expect(diskGauge.locator('.gauge-bar')).toHaveCount(0) // 磁盘无上限事实——只报数值不动摇
     await expect(diskGauge.locator('.gauge-v')).toContainText(/MB|GB/)
     const cpuFill = page.locator('.boxcard .gauge', { hasText: 'CPU' }).locator('.gauge-fill')
     await expect(cpuFill).toBeVisible()
     await expect(cpuFill).toHaveAttribute('style', /width:\s*12%/)
   } finally {
     await mock.close()
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('warn 色档（P5 Step 7）：高值仪表转警示色 + 内存用量按限额真分母（OPENBOT_MOCK_CPU/MEM 注入）', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-warn-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    // CPU 87%（≥80 warn）/ 内存 1900MB ÷ 2048MB 限额 ≈ 92.8%（warn）——mock 确定性注入（不涉 LLM 链路）
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+      OPENBOT_MOCK_CPU: '87',
+      OPENBOT_MOCK_MEM: '1900',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+
+    // CPU：87% ≥ 80 → gauge-warn 色档 + width 87%
+    const cpuGauge = page.locator('.boxcard .gauge', { hasText: 'CPU' })
+    await expect(cpuGauge).toBeVisible({ timeout: 15_000 })
+    await expect(cpuGauge).toHaveClass(/gauge-warn/)
+    await expect(cpuGauge.locator('.gauge-fill')).toHaveAttribute('style', /width:\s*87%/)
+
+    // 内存：1900/2048 ≈ 92.7734%（Vue 按完整精度下发 width）→ warn 档；文案「1.9 GB / 2.0 GB」用量带真实上限
+    const memGauge = page.locator('.boxcard .gauge', { hasText: '内存' })
+    await expect(memGauge).toHaveClass(/gauge-warn/)
+    await expect(memGauge.locator('.gauge-fill')).toHaveAttribute('style', /width:\s*92\.77\d*%/)
+    await expect(memGauge.locator('.gauge-v')).toContainText('1.9 GB / 2.0 GB')
+  } finally {
     await app.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }

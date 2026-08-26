@@ -45,6 +45,8 @@ export interface MockBoxBackendOptions {
   nextBoxId?: () => BoxId
   /** 自定义 exec 行为；默认 exit 0、stdout = 'mock: <command>' */
   exec?: (boxId: BoxId, spec: ExecSpec) => ExecResult | Promise<ExecResult>
+  /** 整包覆盖 stats 确定值（缺省 {cpu 12/mem 256/disk 1200}）——E2E 色档高值档位的注入面（P5 Step 7） */
+  stats?: BoxStats
 }
 
 interface MockBox {
@@ -67,6 +69,7 @@ export class MockBoxBackend implements BoxBackend {
   readonly #now: () => number
   readonly #nextBoxId: () => BoxId
   readonly #execImpl: (boxId: BoxId, spec: ExecSpec) => ExecResult | Promise<ExecResult>
+  readonly #statsImpl: BoxStats
   readonly #boxes = new Map<BoxId, MockBox>()
   readonly #snapshots = new Map<SnapshotId, MockSnapshot>()
   #snapshotCounter = 0
@@ -83,6 +86,7 @@ export class MockBoxBackend implements BoxBackend {
         stdout: `mock: ${spec.command.join(' ')}`,
         stderr: '',
       }))
+    this.#statsImpl = options.stats ?? { cpuPercent: 12, memoryMb: 256, diskMb: 1200 }
   }
 
   caps(): BoxCaps {
@@ -247,8 +251,9 @@ export class MockBoxBackend implements BoxBackend {
 
   async stats(_boxId: BoxId): Promise<BoxStats> {
     this.#require(_boxId)
-    // 模拟后端的设计本分：确定性假值（Step 6 仪表与 E2E 断言的地基——mock 不造假给谁看？给测试看）
-    return { cpuPercent: 12, memoryMb: 256, diskMb: 1200 }
+    // 模拟后端的设计本分：确定性假值（Step 6 仪表与 E2E 断言的地基——mock 不造假给谁看？给测试看）；
+    // options.stats 整包覆盖（E2E 高值档位注入，P5 Step 7）
+    return { ...this.#statsImpl }
   }
 
   async teardown(boxId: BoxId): Promise<void> {
