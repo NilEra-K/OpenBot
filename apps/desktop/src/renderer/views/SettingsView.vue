@@ -308,45 +308,53 @@ const wslHelpNeeded = computed(() => {
       </div>
       <p v-if="kernel.providers.length === 0" class="settings-empty">还没有模型端点——添加一个开始对话</p>
 
-      <!-- 添加/编辑表单 -->
-      <div v-if="formOpen" class="provider-form">
-        <div class="field">
-          <label class="field-label" for="pfName">显示名称</label>
-          <input id="pfName" v-model="form.name" class="field-input" :disabled="editingName !== null" placeholder="例：DeepSeek" autocomplete="off" maxlength="16" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="pfUrl">Base URL</label>
-          <input id="pfUrl" v-model="form.baseUrl" class="field-input mono" :placeholder="urlPlaceholder" autocomplete="off" spellcheck="false" />
-        </div>
-        <div class="field">
-          <span class="field-label">协议</span>
-          <div class="proto-seg" role="radiogroup" aria-label="协议族">
-            <label class="proto-opt" :class="{ 'is-on': form.protocol === 'openai-compat' }">
-              <input type="radio" name="pf-proto" value="openai-compat" v-model="form.protocol" />
-              OpenAI 兼容
-            </label>
-            <label class="proto-opt" :class="{ 'is-on': form.protocol === 'anthropic' }">
-              <input type="radio" name="pf-proto" value="anthropic" v-model="form.protocol" />
-              Anthropic
-            </label>
+      <!-- 添加/编辑表单（模态——AgentWizard/GroupWizard 容器同款；字段 id 全保留：E2E 定位与路径不变） -->
+      <div v-if="formOpen" class="wiz-overlay" @mousedown.self="closeForm()">
+        <div class="wiz-card" role="dialog" aria-label="模型端点配置" @keydown.escape="closeForm">
+          <div class="wiz-head">
+            <span class="wiz-title">{{ editingName !== null ? '编辑模型端点' : '添加模型端点' }}</span>
+            <button class="wiz-close" type="button" aria-label="关闭" @click="closeForm()">✕</button>
           </div>
-        </div>
-        <div class="field">
-          <label class="field-label" for="pfModel">模型 ID</label>
-          <input id="pfModel" v-model="form.model" class="field-input mono" placeholder="例：deepseek-chat" autocomplete="off" spellcheck="false" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="pfKey">API Key</label>
-          <input id="pfKey" v-model="form.apiKey" class="field-input mono" type="password" :placeholder="editingName !== null ? '留空保留原密文' : '端点无需 key 时留空'" autocomplete="off" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="pfProxy">代理（可选）</label>
-          <input id="pfProxy" v-model="form.proxyUrl" class="field-input mono" placeholder="http://127.0.0.1:7890" autocomplete="off" spellcheck="false" />
-        </div>
-        <p v-if="formError" class="form-error">{{ formError }}</p>
-        <div class="form-actions">
-          <button class="btn btn-primary" :disabled="!formValid || saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
-          <button class="btn btn-ghost" @click="closeForm">取消</button>
+          <div class="wiz-body provider-form">
+            <div class="field">
+              <label class="field-label" for="pfName">显示名称</label>
+              <input id="pfName" v-model="form.name" class="field-input" :disabled="editingName !== null" placeholder="例：DeepSeek" autocomplete="off" maxlength="16" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="pfUrl">Base URL</label>
+              <input id="pfUrl" v-model="form.baseUrl" class="field-input mono" :placeholder="urlPlaceholder" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field">
+              <span class="field-label">协议</span>
+              <div class="proto-seg" role="radiogroup" aria-label="协议族">
+                <label class="proto-opt" :class="{ 'is-on': form.protocol === 'openai-compat' }">
+                  <input type="radio" name="pf-proto" value="openai-compat" v-model="form.protocol" />
+                  OpenAI 兼容
+                </label>
+                <label class="proto-opt" :class="{ 'is-on': form.protocol === 'anthropic' }">
+                  <input type="radio" name="pf-proto" value="anthropic" v-model="form.protocol" />
+                  Anthropic
+                </label>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="pfModel">模型 ID</label>
+              <input id="pfModel" v-model="form.model" class="field-input mono" placeholder="例：deepseek-chat" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="pfKey">API Key</label>
+              <input id="pfKey" v-model="form.apiKey" class="field-input mono" type="password" :placeholder="editingName !== null ? '留空保留原密文' : '端点无需 key 时留空'" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="pfProxy">代理（可选）</label>
+              <input id="pfProxy" v-model="form.proxyUrl" class="field-input mono" placeholder="http://127.0.0.1:7890" autocomplete="off" spellcheck="false" />
+            </div>
+            <p v-if="formError" class="form-error">{{ formError }}</p>
+          </div>
+          <div class="wiz-foot">
+            <button class="btn btn-primary" :disabled="!formValid || saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+            <button class="btn btn-ghost" @click="closeForm">取消</button>
+          </div>
         </div>
       </div>
 

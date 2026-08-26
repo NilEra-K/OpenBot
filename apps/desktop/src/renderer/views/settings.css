@@ -209,12 +209,88 @@
 
 /* ---- 添加/编辑表单 ---- */
 
+/* 模态 body 内的字段容器（原内联卡片样式随模态化退役——卡片形态由 wiz-card 承担） */
 .provider-form {
-  background: var(--bg1);
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* ---- 端点表单模态（AgentWizard/GroupWizard 容器同款 wiz 族——弹层形态一致） ---- */
+
+.wiz-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  animation: wiz-in 140ms var(--ease);
+}
+
+.wiz-card {
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  background: var(--bg2);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  padding: 16px;
-  margin: 4px 0 12px;
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.wiz-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.wiz-title {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.wiz-close {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.wiz-close:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.wiz-body {
+  padding: 16px 18px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+
+.wiz-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  border-top: 1px solid var(--line);
+}
+
+@keyframes wiz-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .field {

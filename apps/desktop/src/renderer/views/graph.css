@@ -182,13 +182,16 @@
   margin-bottom: 6px;
 }
 
+/* 返回图例按钮：对齐 ctx-back 形态（无边框幽灵、grid 居中、hover 底色——弹层返回键统一手感） */
 .back-btn {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink2);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink3);
   cursor: pointer;
   font-size: 12px;
 }

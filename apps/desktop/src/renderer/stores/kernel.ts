@@ -265,6 +265,9 @@ export const useKernelStore = defineStore('kernel', {
           return
         }
         client = createGatewayClient(endpoint)
+        // 图谱边底账先行（P5 后修复）：transcript 聚合在订阅事件**之前**落地——其后到达的消息
+        // 事件实时叠加，次序天然正确（快照覆盖/事件迟到重复两类竞态一并消解）
+        this.edges = await client.call<Array<{ from: string; to: string; count: number }>>('v1.graph.edges')
         unsubscribe = client.subscribe((event) => this.onEvent(event))
         // run 实况流（WS /stream）：断线自动重连、不补历史（事实走 SSE 事件流）；
         // pty 会话流同线 multiplex（终端组件经 onPtyEvent 订阅）

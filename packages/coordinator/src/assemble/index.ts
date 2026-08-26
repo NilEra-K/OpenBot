@@ -228,6 +228,36 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       const agents = await agentStore.list()
       return agents.map((agent) => ({ ...agent, boxId: boxes.get(agent.agentId) ?? null }))
     })
+    // ---- 图谱边聚合（P5 后修复：重启重建）——transcript 是 append-only 底账，此处只读聚合。
+    //      计数语义与 renderer 实时 bumpEdge 逐 kind 对齐（事件等价物计数）：user 出信 +1(user→agent)、
+    //      agent 终答 +1(agent→user)、a2a-out +1(from→to)（接收侧 a2a-in 是同次投递镜像不重复计）、
+    //      group-user/group-agent +1(成员→群)；thinking/group-sys 非消息事件等价物不计。
+    //      键空间 = agentStore ∪ 群档案（id 均服务端生成无空格——聚合键用空格拼接安全） ----
+    .register('v1.graph.edges', async () => {
+      const counts = new Map<string, number>()
+      const bump = (from: string, to: string): void => {
+        const key = `${from} ${to}`
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      const keys = [
+        ...(await agentStore.list()).map((a) => a.agentId),
+        ...(await groups.list()).map((g) => g.groupId),
+      ]
+      for (const key of keys) {
+        for (const rec of await transcript.readAll(key)) {
+          const p = rec.payload as Record<string, unknown>
+          if (rec.kind === 'user') bump('user', key)
+          else if (rec.kind === 'agent') bump(key, 'user')
+          else if (rec.kind === 'a2a-out' && typeof p.to === 'string') bump(key, p.to)
+          else if (rec.kind === 'group-user') bump('user', key)
+          else if (rec.kind === 'group-agent' && typeof p.from === 'string') bump(p.from, key)
+        }
+      }
+      return [...counts.entries()].map(([key, count]) => {
+        const [from, to] = key.split(' ')
+        return { from: from ?? '', to: to ?? '', count }
+      })
+    })
     .register('v1.system.getSteward', async () => agentStore.findSteward())
     .register('v1.system.appointSteward', async (payload) => {
       const { agentId } = payload as { agentId: string }

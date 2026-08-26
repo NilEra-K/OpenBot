@@ -633,6 +633,77 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
   }
 })
 
+test('重启恢复（P5 后修复）：自建 agent 调度器重建（建群可用）+ 图谱边从 transcript 底账重建', async () => {
+  const mock = await startMockOpenAi([
+    { match: (l) => l.role === 'user', text: '会话恢复确认' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-restart-'))
+  const launchOpts = {
+    args: ['.'] as const,
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  }
+
+  // —— 第一段会话：配 provider → 新建 agent（持久化名册）→ 与管家对话一轮（建边）——
+  const app1 = await _electron.launch(launchOpts)
+  const page1 = await app1.firstWindow()
+  page1.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page1.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    await page1.getByRole('button', { name: '设置', exact: true }).click()
+    await page1.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page1.locator('#pfName').fill('E2E mock')
+    await page1.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page1.locator('#pfModel').fill('mock-model')
+    await page1.getByRole('button', { name: '保存', exact: true }).click()
+    await page1.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    await page1.getByRole('button', { name: '控制台', exact: true }).click()
+    await page1.getByRole('button', { name: '＋ 新建 agent' }).click()
+    const card = page1.locator('.wiz-card')
+    await page1.locator('#wizName').fill('恢复员')
+    await card.getByRole('button', { name: '下一步' }).click()
+    await card.getByRole('button', { name: '下一步' }).click()
+    await card.getByRole('button', { name: '创建 agent' }).click()
+    await expect(page1.locator('.toast', { hasText: '恢复员」已创建' })).toBeVisible({ timeout: 15_000 })
+
+    // 与管家对话一轮：用户出信 + 管家终答 → user↔管家两条有向边（图谱底账素材）
+    await page1.locator('.roster-item', { hasText: '管家' }).click()
+    const input1 = page1.locator('.composer-box input')
+    await input1.fill('重启前的对话')
+    await input1.press('Enter')
+    await expect(page1.locator('.m-text.md', { hasText: '会话恢复确认' })).toBeVisible({ timeout: 15_000 })
+  } finally {
+    await app1.close()
+  }
+
+  // —— 第二段会话（同 userData 重启）：修复 2 名册重建 + 修复 4 图谱边底账重建 ——
+  const app2 = await _electron.launch(launchOpts)
+  const page2 = await app2.firstWindow()
+  page2.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 图谱边从 transcript 聚合重建：一轮对话 = user↔管家 1 对 · 2 条（出信 + 终答——count 聚合同数）
+    await page2.getByRole('button', { name: '图谱', exact: true }).click()
+    await expect(page2.locator('.graph-sum')).toContainText('1 对关系', { timeout: 15_000 })
+    await expect(page2.locator('.graph-sum')).toContainText('2 条消息')
+
+    // 自建 agent 建群：调度器已重建——不再「未注册 agent」，创建成功跳群会话
+    await page2.getByRole('button', { name: '控制台', exact: true }).click()
+    await page2.locator('.roster-new', { hasText: '建群' }).click()
+    await page2.locator('#gwName').fill('重启验证组')
+    await page2.locator('.gw-member', { hasText: '恢复员' }).click()
+    await page2.locator('.wiz-card').getByRole('button', { name: /^建群/ }).click()
+    await expect(page2.locator('.sh-name')).toHaveText('重启验证组', { timeout: 10_000 })
+    await expect(page2.locator('.wiz-error')).toHaveCount(0) // 未注册 agent 错误不再出现
+  } finally {
+    await app2.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
 test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → @提及收录 → 注册即建 Box', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-wizard-'))
   const app = await _electron.launch({

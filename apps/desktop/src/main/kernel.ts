@@ -387,6 +387,20 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })
 
+  // boot 恢复持久化名册的运行时态（P5 后修复）：agentStore 是唯一真相，但调度器/Box/llm 是内存态——
+  // 重启后不重建则自建 agent「名册在、调度器无」：建群/发消息按 STATE_AGENT_NOT_FOUND 拒绝。
+  // addAgent 幂等分支只重建内存态（名册不重复写）；steward 已上方装配（跳过防 mock 后端二次建 Box）
+  for (const profile of await kernel.agentStore.list()) {
+    if (profile.agentId === 'steward') continue
+    await kernel.addAgent({
+      agentId: profile.agentId,
+      name: profile.name,
+      ...(profile.color !== undefined ? { color: profile.color } : {}),
+      llm: provider,
+      steward: profile.role === 'steward',
+    })
+  }
+
   // 装配配置（E2E/演示用）：附加 worker agent——A2A 需要至少两名成员；共享同一
   // SwitchableChatProvider（主力模型切换对管家与全部 agent 生效，符合设置页语义）。
   const extraAgents = (process.env.OPENBOT_EXTRA_AGENTS ?? '')
