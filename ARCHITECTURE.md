@@ -130,7 +130,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 
 ### 3.2 `state` —— 持久化
 
-- 每 agent 独立目录：`transcript.jsonl / memory.json / automations.json / profile.json / settings.json / group.json`。
+- 每 agent 独立目录：`transcript.jsonl / memory.json / automations.json / profile.json / settings.json / group.json`（memory 已实现——backlog ①：可演化工作集与 transcript 的 append-only 账本语义分界）。
 - **角色与唯一性事务**：profile 增加 `role`（steward 管家 / worker 工人，默认 worker）；任命 / 罢免 / 转移为排他事务（复用排他变更锁），**全局唯一 steward 不变量在 store 层强制**——同一册内第二个任命直接拒绝（见 §3.5 主从模型）。
 - **幂等账本**：clientNonce + inputDigest，超时重试零双发。durable acceptance 使发送与执行解耦。
 - etag 钩子保留（条件写），**BCS 多端同步整块推 P6**。
@@ -175,7 +175,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - turn 执行、SendMessage 解析、SessionRuntime / GroupMemberRunner 装配。
 - **工具层为 OpenBot 重写**：
   - *in-box 工具族*（默认）：exec / fs 读写 / 构建 / snapshot，全部经 boxes 在沙箱内执行，Box 内自由。
-  - *host 最小工具集*：仅限进程自身状态（读 transcript、消息收发），**出 Box（宿主文件/网络）一律过闸门**。
+  - *host 最小工具集*：仅限进程自身状态（读 transcript、消息收发、**记忆 save/recall**——backlog ①：agent 自己的工作集，不出 Box 概念面），**出 Box（宿主文件/网络）一律过闸门**。
 - **闸门（gate）在本包**：审批流 = runner 拦截 → transport 发 `approval` 事件 → renderer 弹窗 → 结果回写。
   审批复用 state 幂等账本（nonce）——重试不双弹窗、不双执行。原版账本设计为 OpenBot 闸门服务，是架构继承里最划算的回收。
 

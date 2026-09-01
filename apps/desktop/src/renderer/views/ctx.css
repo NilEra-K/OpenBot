@@ -339,3 +339,25 @@
   filter: saturate(0.4) brightness(0.75);
   cursor: pointer; /* 仍可进入操作台（PTY 会自然唤醒——休眠不是禁用） */
 }
+
+/* ---- 记忆条目行（backlog ①）：kind 徽标 + 文本，与 edge-row 同族形态 ---- */
+
+.mem-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 2px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mem-kind {
+  flex: none;
+  font-size: 10px;
+}
+
+.mem-text {
+  min-width: 0;
+  word-break: break-word;
+  color: var(--ink);
+}

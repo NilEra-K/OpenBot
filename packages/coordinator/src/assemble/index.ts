@@ -5,14 +5,14 @@
  */
 import { AgentScheduler, EventBus, KernelError } from '@openbot/core'
 import type { LifecycleFinishedPayload, RunExecutor } from '@openbot/core'
-import { AgentStore, IdempotencyLedger, InMemoryFs, TranscriptStore } from '@openbot/state'
-import type { FsAdapter } from '@openbot/state'
+import { AgentStore, IdempotencyLedger, InMemoryFs, TranscriptStore, formatMemoryPrompt } from '@openbot/state'
+import type { FsAdapter, MemoryStore } from '@openbot/state'
 import { MockChatProvider } from '@openbot/llm'
 import type { ChatProvider } from '@openbot/llm'
 import { BoxRegistry, BoxesErrorCodes, MockBoxBackend } from '@openbot/boxes'
 import type { BoxBackend } from '@openbot/boxes'
 import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
-import { AutoApprovalGate, execTool, gated, hostFetchTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner } from '@openbot/runner'
+import { AutoApprovalGate, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
 import { StreamHub } from '../stream-hub/index.js'
@@ -39,6 +39,11 @@ export interface AssembleOptions {
    */
   approvalGateFactory?: (deps: { bus: EventBus; ledger: IdempotencyLedger }) => ApprovalGate
   systemPrompt?: string | ((agentId: string) => string)
+  /**
+   * 记忆存储（backlog ①）：注入即启用——注册 save/recall 工具 + systemPrompt 每轮拼
+   * 「此前记忆」（读内存缓存）。缺省不启用（CLI 冒烟最小面）。
+   */
+  memory?: Pick<MemoryStore, 'append' | 'list' | 'listSync' | 'ensureLoaded'>
   maxToolRounds?: number
   /**
    * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
@@ -67,6 +72,8 @@ export interface AgentRegistration {
 /** 装配产物：壳经 transport 拿客户端；测试/CLI 经辅助面观察与驱动 */
 export interface AssembledKernel {
   readonly bus: EventBus
+  /** 记忆存储（backlog ①；未注入 memory 选项时为 undefined——CLI 冒烟最小面） */
+  readonly memory: AssembleOptions['memory']
   readonly transport: InProcessTransport
   readonly agentStore: AgentStore
   readonly transcript: TranscriptStore
@@ -196,6 +203,23 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     .register(sendBroadcastTool(broadcast))
     .register(gated(hostFetchTool(), { gate }))
 
+  // 记忆（backlog ①）：注入即启用——save/recall 工具 + systemPrompt 每轮求值时拼「此前记忆」
+  // （TurnRunner 的函数形态 systemPrompt 每 turn 同步调用——读 MemoryStore 内存缓存，
+  // save_memory 落缓存后下一轮自动带上；agent 注册路径经 ensureLoaded 预载）
+  const memory = options.memory
+  if (memory !== undefined) {
+    tools.register(saveMemoryTool({ memory })).register(recallMemoryTool({ memory }))
+  }
+  const basePrompt = options.systemPrompt
+  const systemPrompt: string | ((agentId: string) => string) | undefined =
+    memory === undefined
+      ? basePrompt
+      : (agentId: string): string => {
+          const base = typeof basePrompt === 'function' ? basePrompt(agentId) : basePrompt
+          const section = formatMemoryPrompt(memory.listSync(agentId))
+          return section === '' ? (base ?? '') : `${base ?? ''}\n\n${section}`
+        }
+
   const runner = new TurnRunner({
     bus,
     transcript,
@@ -203,7 +227,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     tools,
     boxOf: (agentId) => boxes.get(agentId) ?? null,
     nextMessageId,
-    systemPrompt: options.systemPrompt,
+    systemPrompt,
     maxToolRounds: options.maxToolRounds,
     onStream,
     // 群轮转代际过期判定（P5 Step 4 修复）：supersede 后旧轮终答写入前拦截（GroupService 同判兜底）
@@ -407,6 +431,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   return {
     bus,
     transport,
+    memory,
     agentStore,
     transcript,
     ledger,
@@ -426,6 +451,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       if (!registered) {
         await agentStore.register(registration.agentId, registration.name, registration.color)
       }
+      // 记忆预载（backlog ①）：listSync 注入路径的缓存就绪（append 后自动最新）
+      if (memory !== undefined) await memory.ensureLoaded(registration.agentId)
       llms.set(registration.agentId, registration.llm ?? new MockChatProvider({ steps: [] }))
       // 默认限额档（P5 Step 7 色档分母 + OCI 后端 --cpus/--memory 落地）：工程默认 2 核 / 2GB——
       // caps.resourceLimits=false 的后端（wsl）如实忽略；mock 忽略（但 spec 留档供 renderer 呈现上限）

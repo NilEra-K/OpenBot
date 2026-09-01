@@ -32,3 +32,10 @@ for (const [label, command] of steps) {
     process.exit(r.status ?? 1)
   }
 }
+
+// 根治（backlog ① 坑⑩）：bundle 覆盖 tsc 的 dist/main/index.js 后，tsbuildinfo 仍认为输出
+// 最新（不校验存在性/体量）——下次 tsc 增量跳过、electron 永远加载 bundle 快照。
+// 删 tsbuildinfo 强制下次全量重编，恢复开发态。
+import { rmSync } from 'node:fs'
+rmSync(new URL('../tsconfig.tsbuildinfo', import.meta.url), { force: true })
+console.log('[dist] tsbuildinfo 已清——下次 tsc 全量重编 main（防 bundle 产物占位致增量跳过）')

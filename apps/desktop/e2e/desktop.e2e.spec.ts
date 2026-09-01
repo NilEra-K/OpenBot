@@ -875,7 +875,7 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
 
     // 空缺态如实（记忆/自动化无数据源不放占位）；worker1 档案的协作对象也应有回边
     await page.locator('.sh-icon[title="会话档案（Settings）"]').click()
-    await expect(ctx.locator('.mem-empty').first()).toContainText('后续版本')
+    await expect(ctx.locator('.mem-empty').first()).toContainText('尚无记忆')
     const backEdge = ctx.locator('.edge-row', { hasText: '管家' })
     await expect(backEdge).toBeVisible()
     await ctx.locator('.ctx-back').click()
@@ -1235,6 +1235,73 @@ test('平台裁剪（P6 Step 5）：win 上 nspawn/UTM 不出现——探测列�
     await expect(page.locator('.sandbox-probe')).toHaveCount(0)
   } finally {
     await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('记忆（backlog ①）：save_memory 落盘 → 重启注入新会话系统提示 → ctx 档案呈现', async () => {
+  const SAVED = '用户偏好深色主题与简洁回复'
+  const mock = await startMockOpenAi([
+    // 第一段：管家收到「记住我的偏好」→ 调 save_memory → 终答（剧本按首命中取——两段 user 消息按内容区分）
+    {
+      match: (l) => l.role === 'user' && l.content === '记住我的偏好',
+      toolCalls: [{ id: 'c1', name: 'save_memory', args: { text: SAVED, kind: '偏好' } }],
+    },
+    { match: (_l, t) => t === 'save_memory', text: '已记住你的偏好。' },
+    // 第二段（重启后）：新会话开场——终答即可（系统提示断言走 mock.requests 留痕）
+    { match: (l) => l.role === 'user' && l.content === '新会话开场', text: '重启后的新对话' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-memory-'))
+  const launchOpts = {
+    args: ['.'] as const,
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  }
+
+  // 第一段：对话中 save_memory
+  const app1 = await _electron.launch(launchOpts)
+  const page1 = await app1.firstWindow()
+  try {
+    await expect(page1.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    // 配 provider（mock 端点）——其余用例同款
+    await page1.getByRole('button', { name: '设置', exact: true }).click()
+    await page1.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page1.locator('#pfName').fill('E2E mock')
+    await page1.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page1.locator('#pfModel').fill('mock-model')
+    await page1.getByRole('button', { name: '保存', exact: true }).click()
+    await page1.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+    await page1.getByRole('button', { name: '控制台', exact: true }).click()
+    await page1.locator('.composer-box input').fill('记住我的偏好')
+    await page1.locator('.composer-box input').press('Enter')
+    await expect(page1.locator('.m-text', { hasText: '已记住你的偏好' })).toBeVisible({ timeout: 30_000 })
+    // ctx 档案：记忆节呈现该条（kind 徽标 + 文本）
+    await page1.getByTitle('会话档案（Settings）').click()
+    await expect(page1.locator('.mem-row', { hasText: SAVED })).toBeVisible({ timeout: 10_000 })
+    await expect(page1.locator('.mem-row .mem-kind', { hasText: '偏好' })).toBeVisible()
+  } finally {
+    await app1.close()
+  }
+
+  // 第二段：重启（同 userData）→ 新对话 → 系统提示注入「此前记忆」
+  const app2 = await _electron.launch(launchOpts)
+  const page2 = await app2.firstWindow()
+  try {
+    await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    const reqBefore = mock.requests.length
+    await page2.locator('.composer-box input').fill('新会话开场')
+    await page2.locator('.composer-box input').press('Enter')
+    await expect(page2.locator('.m-text', { hasText: '重启后的新对话' })).toBeVisible({ timeout: 30_000 })
+    // 新会话的系统提示（messages[0].role=system）含注入节与保存文本
+    const later = mock.requests.slice(reqBefore)
+    const system = later.map((r) => r.messages[0]).find((m) => (m as { role?: string }).role === 'system')
+    expect(JSON.stringify(system)).toContain('## 此前记忆')
+    expect(JSON.stringify(system)).toContain(SAVED)
+    // 重启后 ctx 记忆节同样在场（持久化真相）
+    await page2.getByTitle('会话档案（Settings）').click()
+    await expect(page2.locator('.mem-row', { hasText: SAVED })).toBeVisible({ timeout: 10_000 })
+  } finally {
+    await app2.close()
+    await mock.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })

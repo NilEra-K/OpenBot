@@ -275,3 +275,58 @@ export function hostFetchTool(): Tool {
     },
   }
 }
+
+// ---- 记忆工具族（backlog ① Step 2）——进程自身状态，不过闸（记忆是 agent 自己的工作集，
+//      不属「出 Box」概念面；save 的校验在 MemoryStore 侧） ----
+
+export interface MemoryToolDeps {
+  /** 每代理记忆存储（装配注入） */
+  memory: Pick<import('@openbot/state').MemoryStore, 'append' | 'list'>
+}
+
+/** save_memory：agent 自存一条记忆（跨会话保留；会话装配时自动注入新会话） */
+export function saveMemoryTool(deps: MemoryToolDeps): Tool {
+  return {
+    spec: {
+      name: 'save_memory',
+      description:
+        '保存一条跨会话记忆（重要事实才存：每条一句自然语言，重复保存无害但不鼓励）。kind 三选一：事实/偏好/技能（缺省=事实）',
+    },
+    async execute(ctx, args) {
+      const record = asRecord(args)
+      const text = requireString(record, 'text')
+      const kindRaw = typeof record['kind'] === 'string' ? record['kind'] : '事实'
+      if (kindRaw !== '事实' && kindRaw !== '偏好' && kindRaw !== '技能') {
+        throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, `参数 kind 必须是 事实/偏好/技能 之一（收到：${kindRaw}）`)
+      }
+      const entry = await deps.memory.append(ctx.agentId, text, kindRaw, ctx.originMessageId)
+      return `已记住 [${entry.kind}] ${entry.text}`
+    },
+  }
+}
+
+/** recall_memory：回忆既有记忆（query 可选——子串过滤；新→旧序，上限 50 条） */
+export function recallMemoryTool(deps: MemoryToolDeps): Tool {
+  return {
+    spec: {
+      name: 'recall_memory',
+      description: '回忆你此前保存的记忆（可带 query 过滤；无记忆时返回空提示）',
+    },
+    async execute(ctx, args) {
+      const record = asRecord(args)
+      const query = typeof record['query'] === 'string' ? record['query'] : undefined
+      let entries = await deps.memory.list(ctx.agentId)
+      if (query !== undefined && query !== '') {
+        entries = entries.filter((e) => e.text.includes(query) || e.kind.includes(query))
+      }
+      if (entries.length === 0) {
+        return query !== undefined ? `没有匹配「${query}」的记忆` : '还没有任何记忆'
+      }
+      const lines = entries
+        .slice(-50)
+        .reverse()
+        .map((e) => `[${e.kind}] ${e.text}`)
+      return `共 ${entries.length} 条（新→旧）：\n${lines.join('\n')}`
+    },
+  }
+}

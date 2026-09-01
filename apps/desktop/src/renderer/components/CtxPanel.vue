@@ -11,7 +11,7 @@
  * 档案=群档案（成员行跳会话 + 轮转边界如实 kv——原型的「3 轮/10 条/每员 2 条」是编造数值不照搬）。
  * 图形界面画面（GUI 像素流）属后续版本（plan-p3 补记）。
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import BoxScreen from './BoxScreen.vue'
@@ -97,6 +97,25 @@ const displayName = computed(
   () => activeGroup.value?.name ?? remotePeer.value?.displayName ?? activeAgent.value?.name ?? ui.activeAgentId,
 )
 const initialOf = computed(() => displayName.value.trim().charAt(0) || '?')
+
+// ---- 记忆（backlog ①）：ctx 档案打开时现拉（易态呈现——写入经 agent 工具，无事件推送；
+//      拉取失败如实空，不放假条目） ----
+interface MemoryRow { id: string; kind: string; text: string }
+const memories = ref<MemoryRow[]>([])
+watch(
+  () => [ui.ctxSettings, ui.activeAgentId] as const,
+  ([open]) => {
+    if (!open || remotePeer.value !== null || activeGroup.value !== null) {
+      memories.value = []
+      return
+    }
+    void kernel
+      .call<{ entries: MemoryRow[] }>('v1.memory.list', { agentId: ui.activeAgentId })
+      .then((r) => (memories.value = r.entries))
+      .catch(() => (memories.value = []))
+  },
+  { immediate: true },
+)
 
 /** 协作对象：edges 里与该 agent 相连的 agent↔agent 边（user 端不属协作叙事），按 count 聚合 */
 const collabs = computed(() => {
@@ -229,7 +248,15 @@ const lastAt = computed(() => {
         <div v-if="collabs.length === 0" class="mem-empty">暂无协作记录——A2A 往来后在此呈现</div>
 
         <div class="ctx-sec">记忆</div>
-        <div class="mem-empty">记忆数据源属后续版本——内核尚无 memory 事实，不放占位条目</div>
+        <!-- 记忆（backlog ①）：agent 自存的跨会话笔记（真数据；写路径只在 agent 的
+             save_memory 工具——用户不可直接编辑，呈现如实署名归该 agent） -->
+        <template v-if="memories.length > 0">
+          <div v-for="m in memories" :key="m.id" class="mem-row">
+            <span class="chip mem-kind">{{ m.kind }}</span>
+            <span class="mem-text">{{ m.text }}</span>
+          </div>
+        </template>
+        <div v-else class="mem-empty">尚无记忆——agent 在对话中调用 save_memory 后在此呈现</div>
 
         <div class="ctx-sec">自动化</div>
         <div class="mem-empty">自动化属后续版本（P5+ backlog）——无数据源，不放占位条目</div>

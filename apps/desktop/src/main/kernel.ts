@@ -19,7 +19,7 @@ import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinat
 import { startGateway, RelayClient } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
-import { NodeFs, SettingsStore } from '@openbot/state'
+import { NodeFs, SettingsStore, MemoryStore } from '@openbot/state'
 import type { SandboxPreference, RelaySettings } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
@@ -291,10 +291,14 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   }
 
   let approvalGate!: ManualApprovalGate
+  // 记忆存储（backlog ①）：单一实例供装配（工具+注入）与命令面共用
+  const memoryStore = new MemoryStore({ fs, root: dataRoot })
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
     backend,
+    // save/recall 工具 + 会话装配「此前记忆」注入（每轮同步读缓存；addAgent 预载）
+    memory: memoryStore,
     // 真实时钟：确定性断言只存在于内核测试与 CLI（plan-p2 风险与地雷）
     approvalGateFactory: (deps) => {
       approvalGate = new ManualApprovalGate(deps)
@@ -395,6 +399,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // caps 驱动 UI：按钮渲染依据后端能力声明（永不出现「UI 有按钮但后端不支持」）
     .register('v1.boxes.caps', async () => kernel.backend.caps())
     // 沙箱后端：状态呈现 + 偏好写入（重启生效——后端选择是装配期决策，不热切换）
+    // 记忆（backlog ①）：ctx 档案呈现拉取（写路径只在 agent 工具——用户不可直接编辑）
+    .register('v1.memory.list', async (payload) => {
+      const { agentId } = z.object({ agentId: z.string() }).parse(payload)
+      return { entries: await memoryStore.list(agentId) }
+    }, z.object({ agentId: z.string() }))
     .register('v1.sandbox.status', async () => ({
       preference: sandboxStatus.preference,
       stored: await settings.getSandbox(),
