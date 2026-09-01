@@ -1,8 +1,9 @@
 {
   "name": "@openbot/desktop",
-  "version": "0.0.28",
+  "version": "0.0.29",
   "private": true,
   "license": "Apache-2.0",
+  "author": "BoneSue",
   "type": "module",
   "description": "Electron 桌面壳——P2：真内核装配 + 环回网关 + Vue renderer（五视图）",
   "main": "dist/main/index.js",
@@ -11,7 +12,9 @@
     "start:debug": "electron --remote-debugging-port=9333 .",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
-    "dist": "echo P3 启用 electron-builder（win nsis + portable）",
+    "bundle:main": "esbuild src/main/index.ts --bundle --platform=node --format=esm --external:electron --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/main/index.js",
+    "bundle:preload": "esbuild src/preload/index.cts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/index.cjs",
+    "dist": "node scripts/dist.mjs",
     "test:e2e": "pnpm -w build && pnpm build:renderer && playwright test"
   },
   "dependencies": {
@@ -34,6 +37,8 @@
     "@types/markdown-it": "^14.2.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "vite": "^8.2.1"
   }
 }

@@ -30,8 +30,9 @@ export interface StoredProviderProfile {
   protocol?: ProviderProtocol
 }
 
-/** 沙箱后端偏好：auto = 按探测可用性择优（wsl > docker > podman > mock），不可用如实回退 */
-export type SandboxPreference = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman'
+/** 沙箱后端偏好：auto = 按平台序择优（win: wsl→docker→podman / linux: nspawn→docker→podman /
+ *  mac: utm→docker→podman，P6 Step 5），不可用如实回退 */
+export type SandboxPreference = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'
 
 export interface AppSettings {
   version: 1

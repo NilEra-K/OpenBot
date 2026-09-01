@@ -24,7 +24,16 @@ import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
 import type { ResolvedProvider } from '@openbot/state'
 import { ManualApprovalGate } from '@openbot/runner'
-import { DockerBoxBackend, MockBoxBackend, PodmanBoxBackend, WslBoxBackend, probeAll, runProcess } from '@openbot/boxes'
+import {
+  DockerBoxBackend,
+  MockBoxBackend,
+  NspawnBoxBackend,
+  PodmanBoxBackend,
+  UtmBoxBackend,
+  WslBoxBackend,
+  probeAll,
+  runProcess,
+} from '@openbot/boxes'
 import type { BackendProbe, BoxBackend, BoxStats } from '@openbot/boxes'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
@@ -134,7 +143,7 @@ const resolveSchema = z.object({
   nonce: z.string().min(1),
   decision: z.enum(['approved', 'denied']),
 })
-const sandboxPrefSchema = z.enum(['auto', 'mock', 'wsl', 'docker', 'podman'])
+const sandboxPrefSchema = z.enum(['auto', 'mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm'])
 const sandboxSetSchema = z.object({ preference: sandboxPrefSchema })
 /** 注册 agent（P4 Step 5）：name 必填（去空白 1-24 字）；color hex6 可选；role 默认 worker（steward 走任命事务语义） */
 const registerAgentSchema = z.object({
@@ -220,14 +229,29 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // rootfs 查找顺序：env OPENBOT_WSL_ROOTFS > userData/box-rootfs.tar.gz
   const rootfsPath = process.env.OPENBOT_WSL_ROOTFS ?? `${userDataRoot}/box-rootfs.tar.gz`
   const rootfsReady = await fileExists(rootfsPath)
+  // nspawn 同一「rootfs 导入」模型（P6 Step 3）：env 独立覆盖，缺省与 wsl 共用同一 tarball
+  const nspawnRootfsPath = process.env.OPENBOT_NSPAWN_ROOTFS ?? `${userDataRoot}/box-rootfs.tar.gz`
+  const nspawnRootfsReady = await fileExists(nspawnRootfsPath)
   // OCI 默认镜像（P5 Step 5/6）：env 按后端分别覆盖（国内网络/私有 registry 确定性）
   const dockerImage = process.env.OPENBOT_DOCKER_IMAGE ?? 'ubuntu:24.04'
   const podmanImage = process.env.OPENBOT_PODMAN_IMAGE ?? 'ubuntu:24.04'
-  const probes = await probeAll(runProcess)
+  // UTM 模板 VM 名（P6 Step 4：UTM 是模板克隆模型，无 rootfs 导入——模板在 UTM GUI 预建）
+  const utmTemplate = process.env.OPENBOT_UTM_TEMPLATE ?? 'openbot-template'
+  // 平台化探测与择优序（P6 Step 5）：win 只探 wsl、linux 只探 nspawn、mac 只探 utm——
+  // 异平台 CLI 必然不在，跑了也是噪音；auto 序随之（win wsl 主力/linux nspawn 优先/mac utm 优先）
+  const platform = process.platform
+  const probes = await probeAll(runProcess, platform)
+  const platformOrder: Record<string, Array<'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'>> = {
+    win32: ['wsl', 'docker', 'podman'],
+    linux: ['nspawn', 'docker', 'podman'],
+    darwin: ['utm', 'docker', 'podman'],
+  }
   const chosen = chooseBackend(preference, probes, {
     wslRootfs: rootfsReady,
-    // docker/podman 随 P5 Step 5/6 兑现（OCI 底座 + 同构薄壳）——四后端矩阵齐
-    implemented: ['mock', 'wsl', 'docker', 'podman'],
+    nspawnRootfs: nspawnRootfsReady,
+    // nspawn/utm 随 P6 Step 3/4 兑现——六后端矩阵齐（CLI 语义单测锁死，真机链路记未验收）
+    implemented: ['mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm'],
+    order: platformOrder[platform] ?? ['wsl', 'docker', 'podman'],
   })
   const backend: BoxBackend =
     chosen.backendId === 'wsl'
@@ -236,7 +260,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         ? new DockerBoxBackend({ image: dockerImage, now: Date.now })
         : chosen.backendId === 'podman'
           ? new PodmanBoxBackend({ image: podmanImage, now: Date.now })
-          : new MockBoxBackend({ now: Date.now, ...mockStatsEnv() })
+          : chosen.backendId === 'nspawn'
+            ? new NspawnBoxBackend({
+                rootfs: nspawnRootfsPath,
+                snapshotDir: `${userDataRoot}/boxes/nspawn-snapshots`,
+                // 特权前缀默认无（polkit/sudo NOPASSWD 是部署策略——platforms.md 记档，真机调优后置）
+                now: Date.now,
+              })
+            : chosen.backendId === 'utm'
+              ? new UtmBoxBackend({ template: utmTemplate, now: Date.now })
+              : new MockBoxBackend({ now: Date.now, ...mockStatsEnv() })
   // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
   const sandboxStatus: SandboxStatus = {
     preference,

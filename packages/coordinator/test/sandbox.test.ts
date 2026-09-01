@@ -100,3 +100,53 @@ describe('chooseBackend：auto 择优链（wsl → docker → podman → mock）
     expect(r.reason).toContain('无可用真实后端')
   })
 })
+
+describe('chooseBackend：平台化（P6 Step 5——order 注入 + nspawn/utm）', () => {
+  const LINUX_OK: BackendProbe[] = [
+    probe('mock', true),
+    probe('nspawn', true),
+    probe('docker', true),
+    probe('podman', true),
+  ]
+  const MAC_OK: BackendProbe[] = [probe('mock', true), probe('utm', true), probe('docker', true), probe('podman', true)]
+
+  it('linux 序（nspawn 优先）：全就绪 → nspawn', () => {
+    const r = chooseBackend('auto', LINUX_OK, {
+      wslRootfs: false,
+      nspawnRootfs: true,
+      order: ['nspawn', 'docker', 'podman'],
+    })
+    expect(r.backendId).toBe('nspawn')
+  })
+
+  it('mac 序（utm 优先）：全就绪 → utm（UTM 是模板模型无 rootfs 前置）', () => {
+    const r = chooseBackend('auto', MAC_OK, { wslRootfs: false, order: ['utm', 'docker', 'podman'] })
+    expect(r.backendId).toBe('utm')
+  })
+
+  it('nspawn rootfs 缺失 → 回退 mock 提示放置路径（与 wsl 同一导入模型）', () => {
+    const r = chooseBackend('nspawn', LINUX_OK, { wslRootfs: false, nspawnRootfs: false })
+    expect(r.backendId).toBe('mock')
+    expect(r.reason).toContain('rootfs')
+    expect(r.reason).toContain('OPENBOT_NSPAWN_ROOTFS')
+  })
+
+  it('linux 序：nspawn rootfs 缺失时跳过取 docker（降级链如实）', () => {
+    const r = chooseBackend('auto', LINUX_OK, {
+      wslRootfs: false,
+      nspawnRootfs: false,
+      order: ['nspawn', 'docker', 'podman'],
+    })
+    expect(r.backendId).toBe('docker')
+  })
+
+  it('显式偏好 nspawn/utm：探测可用即选（不受平台序影响——序只管 auto）', () => {
+    expect(chooseBackend('nspawn', LINUX_OK, { wslRootfs: false, nspawnRootfs: true }).backendId).toBe('nspawn')
+    expect(chooseBackend('utm', MAC_OK, { wslRootfs: false }).backendId).toBe('utm')
+  })
+
+  it('win 序缺省不变（不传 order = wsl → docker → podman——向后兼容）', () => {
+    const r = chooseBackend('auto', ALL_OK, { wslRootfs: true })
+    expect(r.backendId).toBe('wsl')
+  })
+})

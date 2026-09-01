@@ -210,11 +210,13 @@ interface PrefOption {
 }
 
 const PREF_OPTIONS: PrefOption[] = [
-  { value: 'auto', label: '自动', note: '择优可用：WSL2 → Docker → Podman → mock' },
+  { value: 'auto', label: '自动', note: '按平台择优可用（探测事实驱动）' },
   { value: 'wsl', label: 'WSL2', note: '每 Box 一个发行版（Windows 主力）' },
-  { value: 'mock', label: '模拟', note: '命令返回模拟输出（测试用）' },
+  { value: 'nspawn', label: 'systemd-nspawn', note: '机器即 Box（Linux；写操作需 root/polkit 授权）' },
+  { value: 'utm', label: 'UTM', note: '虚拟机即 Box（macOS；从预建模板克隆，需 guest agent）' },
   { value: 'docker', label: 'Docker', note: '容器即 Box（需 Docker Desktop 运行）' },
   { value: 'podman', label: 'Podman', note: '容器即 Box（需 podman machine 运行）' },
+  { value: 'mock', label: '模拟', note: '命令返回模拟输出（测试用）' },
 ]
 
 const BACKEND_LABELS: Record<string, string> = {
@@ -223,7 +225,19 @@ const BACKEND_LABELS: Record<string, string> = {
   wsl: 'WSL2',
   docker: 'Docker',
   podman: 'Podman',
+  nspawn: 'systemd-nspawn',
+  utm: 'UTM',
 }
+
+/**
+ * 偏好选项按探测在场过滤（P6 Step 5）：auto/mock 恒在，真实后端只有探测列表里有的才出选项——
+ * 平台裁剪后的 probes 天然不含异平台后端（win 上不出现 nspawn/UTM），探测事实驱动零 if 平台特判
+ */
+const prefOptions = computed<PrefOption[]>(() => {
+  if (!kernel.sandbox) return PREF_OPTIONS.filter((o) => o.value === 'auto' || o.value === 'mock')
+  const probed = new Set(kernel.sandbox.probes.map((p) => p.id))
+  return PREF_OPTIONS.filter((o) => o.value === 'auto' || o.value === 'mock' || probed.has(o.value as Exclude<SandboxPref, 'auto' | 'mock'>))
+})
 
 const sandboxChoice = ref<SandboxPref>('auto')
 const sandboxError = ref<string | null>(null)
@@ -384,7 +398,7 @@ const wslHelpNeeded = computed(() => {
 
         <div class="sandbox-prefs">
           <label
-            v-for="opt in PREF_OPTIONS"
+            v-for="opt in prefOptions"
             :key="opt.value"
             class="sandbox-pref"
             :class="{ 'is-on': sandboxChoice === opt.value, 'is-disabled': opt.disabled }"

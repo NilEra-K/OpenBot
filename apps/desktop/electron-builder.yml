@@ -1,11 +1,36 @@
-# P3 启用：先只开 win nsis + portable（ARCHITECTURE.md §10/§11）
+# electron-builder 配置（P6 Step 1）：win 真机产物（nsis + portable）；
+# linux/mac target 配置就绪、产物待设备（P6 裁定 A=c——WSL2 构建链不启动，mac 本无设备）。
+# main/preload 经 esbuild 预 bundle（scripts/dist.mjs）——files 白名单只需 dist + resources，
+# 不收集 node_modules（pnpm workspace 符号链接坑由预 bundle 消解）。
 appId: com.openbot.desktop
 productName: OpenBot
 directories:
   output: release
+asar: true
 files:
   - dist/**
+  - resources/**
 win:
   target:
     - nsis
     - portable
+  # 无代码签名证书——不签名（未签名安装器 SmartScreen 警告是预期，README 分发说明记档）
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+linux:
+  target:
+    - deb
+    - AppImage
+  category: Utility
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # 裁定 A：配置就绪待设备——真机构建时在 Linux 环境跑 pnpm dist 即出产物
+mac:
+  target:
+    - dmg
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  identity: null

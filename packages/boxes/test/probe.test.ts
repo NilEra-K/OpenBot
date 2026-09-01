@@ -5,7 +5,7 @@
  * Engine 运行态校验（docker info Server 段，exit 非 0 = Engine 停止带指引）。
  */
 import { describe, expect, it } from 'vitest'
-import { parseMachineList, probeDocker, probePodman, probeWsl } from '../src/probe/index.js'
+import { parseMachineList, probeAll, probeDocker, probeNspawn, probePodman, probeUtm, probeWsl } from '../src/probe/index.js'
 import type { ProcResult, ProcRunner, ProcSpec } from '../src/procexec/index.js'
 
 const OK: ProcResult = { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, aborted: false }
@@ -132,5 +132,80 @@ describe('probeDocker / probeWsl（收紧后语义回归）', () => {
     expect(seen[0]?.command).toEqual(['docker', 'info', '--format', '{{.ServerVersion}}'])
     expect(seen[1]?.command).toEqual(['wsl', '--status'])
     expect(seen[1]?.encoding).toBe('utf16le')
+  })
+})
+
+describe('probeNspawn（machinectl CLI 存在性）', () => {
+  it('exit 0 → available；CLI 未装 → 未安装指引（win 上天然 unavailable——探测事实驱动）', async () => {
+    const okRun = respond({ machinectl: { ...OK, stdout: 'systemd 255' } })
+    await expect(probeNspawn(okRun)).resolves.toEqual({ id: 'nspawn', available: true })
+    const failRun: ProcRunner = () =>
+      Promise.reject(Object.assign(new Error('spawn machinectl ENOENT'), { name: 'ProcSpawnError' }))
+    await expect(probeNspawn(failRun)).resolves.toMatchObject({
+      available: false,
+      reason: expect.stringContaining('未安装或不在 PATH'),
+    })
+  })
+
+  it('exit 非 0（systemd 环境异常）→ 不可用带授权指引（写操作是部署策略不是运行态——记档如实）', async () => {
+    const run = respond({ machinectl: { ...OK, exitCode: 1, stderr: 'Failed to connect to bus' } })
+    await expect(probeNspawn(run)).resolves.toMatchObject({
+      available: false,
+      reason: expect.stringContaining('root/polkit'),
+    })
+  })
+})
+
+describe('probeUtm（utmctl 与 UTM app 双在场）', () => {
+  it('exit 0 → available；CLI 未装 → 未安装指引（非 mac 上天然 unavailable——探测事实驱动）', async () => {
+    const okRun = respond({ utmctl: { ...OK, stdout: '4.5.3' } })
+    await expect(probeUtm(okRun)).resolves.toEqual({ id: 'utm', available: true })
+    const failRun: ProcRunner = () =>
+      Promise.reject(Object.assign(new Error('spawn utmctl ENOENT'), { name: 'ProcSpawnError' }))
+    await expect(probeUtm(failRun)).resolves.toMatchObject({
+      available: false,
+      reason: expect.stringContaining('未安装或不在 PATH'),
+    })
+  })
+
+  it('exit 非 0（UTM app 缺席）→ 不可用带 GUI 会话指引（utmctl 经 ScriptingBridge 驱动 app）', async () => {
+    const run = respond({ utmctl: { ...OK, exitCode: 1, stderr: 'Application not found.' } })
+    await expect(probeUtm(run)).resolves.toMatchObject({
+      available: false,
+      reason: expect.stringContaining('GUI'),
+    })
+  })
+})
+
+describe('probeAll（平台裁剪——P6 Step 5：异平台 CLI 必然不在，跑了也是噪音）', () => {
+  /** 探测结果 ids（排序）与实际下探的命令首词（排序）一并返回 */
+  const probe = async (platform?: string): Promise<{ resultIds: string[]; seenCmds: string[] }> => {
+    const seen: string[] = []
+    const run: ProcRunner = async (spec) => {
+      seen.push(spec.command[0] ?? '')
+      return OK
+    }
+    const probes = await probeAll(run, platform)
+    return { resultIds: probes.map((p) => p.id).sort(), seenCmds: [...seen].sort() }
+  }
+  it('win32：只探 wsl/docker/podman——不探 nspawn/utm（探测列表即 UI 呈现源，win 上自然不出现）', async () => {
+    const { resultIds, seenCmds } = await probe('win32')
+    expect(resultIds).toEqual(['docker', 'mock', 'podman', 'wsl'])
+    expect(seenCmds).toEqual(['docker', 'podman', 'wsl'])
+  })
+  it('linux：只探 nspawn/docker/podman——不探 wsl/utm', async () => {
+    const { resultIds, seenCmds } = await probe('linux')
+    expect(resultIds).toEqual(['docker', 'mock', 'nspawn', 'podman'])
+    expect(seenCmds).toEqual(['docker', 'machinectl', 'podman'])
+  })
+  it('darwin：只探 utm/docker/podman——不探 wsl/nspawn', async () => {
+    const { resultIds, seenCmds } = await probe('darwin')
+    expect(resultIds).toEqual(['docker', 'mock', 'podman', 'utm'])
+    expect(seenCmds).toEqual(['docker', 'podman', 'utmctl'])
+  })
+  it('缺省不裁剪（向后兼容：mock + 五后端全探）', async () => {
+    const { resultIds, seenCmds } = await probe()
+    expect(resultIds).toEqual(['docker', 'mock', 'nspawn', 'podman', 'utm', 'wsl'])
+    expect(seenCmds).toEqual(['docker', 'machinectl', 'podman', 'utmctl', 'wsl'])
   })
 })

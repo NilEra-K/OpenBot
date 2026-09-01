@@ -166,7 +166,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - 群聊编排：有界轮转（消息上限/轮次上限/全员 pass 收敛/用户消息 supersede）、@提及路由、每成员独立会话状态。
 - 广播：→全员单向扇出，顺序调度、并发执行、无环（发起方：用户与 steward，见上）。
 - subagent：父 agent 派生后台 run，lineage 世系、steer、abort。
-- `CrossUserRelay`（跨用户房间）：turn-request/result、10 分钟窗口 30 turn 预算、不可达退避、nonce 幂等——**协议保留，实现 P6**。
+- `CrossUserRelay`（跨用户房间）：turn-request/result、10 分钟窗口 30 turn 预算、不可达退避、nonce 幂等——**协议保留，实现 P7**。
 - 云 agent 桥：**接口桩，保留协议默认不用**（产品定位写死；后续可接第三方云做弹性补充）。
 - 删除原版 WebAuthn provider 契约（原版遗物，与 OpenBot 无关）。
 
@@ -201,7 +201,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 |---|---|---|
 | `apps/desktop` | **第一交付** | Electron：main（装配 coordinator + 网关）/ preload（contextBridge 注入 token）/ renderer（Vue 3 五大视图）。托盘常驻、自启动、自动更新 |
 | `apps/cli` | P1 | 无壳冒烟：mock llm + mock box 跑全链路（chat → A2A → box exec）。**CI 全确定性的地基**，也是「packages 壳无关」的活证据 |
-| `apps/relay` | P6 占位 | 跨用户房间公网 host（Hono + WS），到时候再说 |
+| `apps/relay` | P7 占位 | 跨用户房间公网 host（Hono + WS），到时候再说 |
 
 ---
 
@@ -219,7 +219,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 
 七族：`v1.lifecycle`（run 生命周期）/ `v1.message`（对话与 A2A）/ `v1.task`（任务与产物）/
 `v1.box`（沙箱状态与 caps）/ `v1.approval`（闸门审批）/ `v1.graph`（社交图谱，委派边与消息边并存）/ `v1.system`（roster 与角色变更等）。
-P6 做 relay 时这就是线上协议，不二次发明。
+P7 做 relay 时这就是线上协议，不二次发明。
 
 协议里只有**领域事实与命令**，永远没有 UI 指令——「打开弹窗 / 刷新视图 / 选中某项」不进协议，UI 对事件的呈现反应是渲染层自治决定。错误与状态传稳定 code（如 `BOX_SNAPSHOT_UNSUPPORTED`），不传文案；文案与多语言归渲染层。内核代码里不出现 UI 字符串。
 
@@ -252,17 +252,17 @@ P6 做 relay 时这就是线上协议，不二次发明。
 
 ### 后端矩阵（诚实版）
 
-| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (Linux·P5) | UTM (macOS·P5) | mock |
+| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (Linux·P6 已实现) | UTM (macOS·P6 已实现) | mock |
 |---|---|---|---|---|---|---|---|
-| 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓ | ✓ | 假装 ✓ |
-| 快照 | `--export` 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓ | ✓ | ✓ |
-| 资源上限 | **全局 .wslconfig，无法按 Box 限制**；所有 Box 共享一个 vmmem | ✓ 严格 | ✓ cgroups v2（rootless 可用） | 粗粒度 | ✓ | ✓ | 假装 ✓ |
-| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 中（rootless 无 daemon） | 强 | 中 | 强 | —— |
-| 无人值守 | ✓ | ✓ | ✓（podman machine） | ✗ 无法 headless | ✓ | 部分 | ✓ |
-| 交互终端（PTY） | ✓ Box 内 `script` 真 PTY | 待接入（`exec -it` 同构） | 待接入（`exec -it` 同构） | —— | ✓ | ✓ | ✓ 回显假终端 |
-| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业要付费授权） | 免费开源；Windows 经 podman machine（**自身占一个 WSL2 发行版**） | **仅 Pro/Enterprise，Home 版没有**（作者本机即 Home） | Linux | macOS | 全平台 |
+| 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓（/var/lib/machines） | ✓（VM 注册） | 假装 ✓ |
+| 快照 | `--export` 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓（export-tar） | ✓（clone/delete 链——载体是 VM 克隆） | ✓ |
+| 资源上限 | **全局 .wslconfig，无法按 Box 限制**；所有 Box 共享一个 vmmem | ✓ 严格 | ✓ cgroups v2（rootless 可用） | 粗粒度 | ✓（set-property 真落 cgroup） | ✗（utmctl 无配置入口——如实） | 假装 ✓ |
+| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 中（rootless 无 daemon） | 强 | 中 | 强（VM 级） | —— |
+| 无人值守 | ✓ | ✓ | ✓（podman machine） | ✗ 无法 headless | 部分（写操作需 root/polkit） | 部分（exec 依赖 guest agent） | ✓ |
+| 交互终端（PTY） | ✓ Box 内 `script` 真 PTY | ✓ 容器内 script PTY | ✓ 容器内 script PTY | —— | 设计支持（宿主侧 PTY 边界真机待验） | ✗（utmctl attach 未实现） | ✓ 回显假终端 |
+| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业要付费授权） | 免费开源；Windows 经 podman machine（**自身占一个 WSL2 发行版**） | **仅 Pro/Enterprise，Home 版没有**（作者本机即 Home） | Linux（systemd 自带） | macOS（UTM app + GUI 会话） | 全平台 |
 
-**结论写死在架构里**：v1 做 **WSL2 + Docker + Podman + mock** 四个后端（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；docker/podman CLI 同构，实现共用 OCI 容器底座）；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P5 后视需求）；Linux/macOS 后端 P5 进。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
+**结论写死在架构里**：六后端矩阵齐——WSL2 + Docker + Podman + **nspawn + UTM** + mock（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；docker/podman CLI 同构共用 OCI 容器底座；nspawn/utm 随 P6 兑现——CLI 底座 + 脚本化单测 + 探测呈现，真机链路如实记未验收）；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P5 后视需求）。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
 
 ### 接口草图
 
@@ -367,7 +367,7 @@ OpenBot/
 ├─ apps/
 │  ├─ cli/          冒烟与 CI：mock llm + mock box 全链路
 │  ├─ desktop/      main · preload · renderer(Vue3) · resources · electron-builder.yml
-│  └─ relay/        P6 占位
+│  └─ relay/        P7 占位
 └─ tools/           build / publish 脚本
 ```
 
@@ -385,7 +385,7 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | **P3 真实后端** | backend-wsl + backend-docker + backend-podman（OCI 底座共用）+ 快照/资源统计/磁盘压力告警 + 流式双线（llm/exec/PTY）+ Windows 打包签名 | 真实 Box 内完成一次「改项目→构建」任务并产出 diff；操作台 PTY 真机可用 |
 | **P4 原型对齐收敛** | 差距清零：命令面板（Ctrl K）/ @提及 / toast / 状态栏 / 新建 agent 向导 / Box 休眠与快照回滚 / ctx 档案 / 演示值清扫（2026-08-25 用户裁定重定位——原「平台扩展」顺延 P5、relay 顺延 P6；细案 [docs/plan-p4.md](docs/plan-p4.md)） | prototype.html 差距盘点逐项「已实现 / 记档裁定」二态收敛；三命令 + E2E 全绿 |
 | **P5 消息域收敛 + OCI 双壳** | 广播（@全员/@多提及——扇出调度是内核语义）+ 群聊（有界轮转/sysnote/群组节点）+ backend-docker/backend-podman（OCI 底座共用两薄壳——v1 四后端收官；细案 [docs/plan-p5.md](docs/plan-p5.md)）（2026-08-26 用户裁定重排——原「平台扩展」顺延 P6、relay 顺延 P7） | @全员与群聊 E2E 全链路；四后端矩阵如实标注；三命令 + E2E 全绿 |
-| **P6 平台扩展与分发** | Linux（nspawn/原生 docker + deb/AppImage）、macOS（UTM + dmg）、electron-builder 三平台打包（win nsis/portable 随轮兑现——P3 遗留） | 三平台矩阵如实标注，capabilities 驱动 UI；打包产物真内核冒烟 |
+| **P6 平台扩展与分发** | backend-nspawn/backend-utm（CLI 底座 + 脚本化单测 + 探测呈现——真机链路记未验收）、平台化装配（probeAll/AUTO_ORDER 按平台）、electron-builder 打包链（main/preload esbuild 预 bundle 消解 pnpm workspace 收集坑；win nsis/portable 真机产物；linux deb/AppImage + mac dmg 配置就绪记「待设备」——2026-09-01 裁定 A；细案 [docs/plan-p6.md](docs/plan-p6.md)） | win 双产物真机装卸闭环 + E2E 打包产物全链；win 上不出现 nspawn/UTM（探测事实驱动）；三命令 + E2E 全绿 |
 | **P7 relay** | 跨用户房间公网 host、CrossUserRelay 实现 | P2P/Tailscale 优先叙事落地 |
 
 注：P1 是八包结构直接送的礼物——**不装 Electron 就能验证整个内核**，这是保留包边界的直接回报。
@@ -429,7 +429,7 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | 6 | Docker Windows 命名管道 `\\.\pipe\docker_engine` vs Linux unix socket | boxes 层抽象端点差异 |
 | 7 | `/mnt/c` 9P 慢 | 项目建议活在 Box 内或 clone 进去，不跨边界热编辑 |
 | 8 | LLM 中转/代理是国内刚需 | §3.3 写死为必须项 |
-| 9 | relay 与「本地优先」叙事矛盾 | P6；P2P/Tailscale 优先措辞写进协议文档 |
+| 9 | relay 与「本地优先」叙事矛盾 | P7；P2P/Tailscale 优先措辞写进协议文档 |
 | 10 | 单人范围风险 | 八包但 P1 即出无壳里程碑；Linux/macOS 只留接口位；每阶段验收标准已定 |
 | 11 | 本机环回网关攻击面（DNS rebinding/本机其他进程） | §5 安全三条 |
 | 12 | 未签名 exe 被 SmartScreen 拦 | Azure Trusted Signing 进 P3 预算 |

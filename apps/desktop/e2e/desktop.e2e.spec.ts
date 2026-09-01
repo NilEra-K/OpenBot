@@ -1203,3 +1203,36 @@ test('Boxes/图谱小项（P4 Step 12）：归属 chip + box-claim shield + 节�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('平台裁剪（P6 Step 5）：win 上 nspawn/UTM 不出现——探测列表即 UI 呈现源，零 if 平台特判', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-platform-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+
+    // win 探测列表（probeAll 平台裁剪）：mock/wsl/docker/podman 在场，nspawn/utm 不探——
+    // 选项集与探测区同源（探测事实驱动），两处都不得出现异平台后端
+    await expect(page.locator('.sandbox-pref', { hasText: 'systemd-nspawn' })).toHaveCount(0)
+    await expect(page.locator('.sandbox-pref', { hasText: 'UTM' })).toHaveCount(0)
+    await expect(page.locator('.sandbox-probe', { hasText: 'systemd-nspawn' })).toHaveCount(0)
+    await expect(page.locator('.sandbox-probe', { hasText: 'UTM' })).toHaveCount(0)
+    // 本平台候选在场：WSL2 选项（探测项不问可用性——不可用时选项在、选中如实降级）
+    await expect(page.locator('.sandbox-pref', { hasText: 'WSL2' })).toHaveCount(1)
+    // 探测区必有 mock chip（恒可用的确定性地基）
+    await expect(page.locator('.sandbox-probe .chip', { hasText: '模拟' })).toBeVisible({ timeout: 15_000 })
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

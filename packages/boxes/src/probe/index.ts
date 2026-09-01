@@ -6,7 +6,7 @@
 import { isSpawnFailure } from '../procexec/index.js'
 import type { ProcRunner } from '../procexec/index.js'
 
-export type SandboxBackendId = 'mock' | 'wsl' | 'docker' | 'podman'
+export type SandboxBackendId = 'mock' | 'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'
 
 export interface BackendProbe {
   id: SandboxBackendId
@@ -119,8 +119,47 @@ export function parseMachineList(stdout: string): MachineListEntry[] | null {
   }
 }
 
+/**
+ * nspawn（P6 Step 3）：machinectl CLI 存在性（systemd 环境）——探测只验 CLI 在场，
+ * 写授权（import/remove/export/poweroff/set-property 需 root/polkit）是部署策略不是运行态，
+ * 经 unavailableNote 记指引（真机链路未验收——docs/platforms.md nspawn 行）。
+ */
+export const probeNspawn = (run: ProcRunner): Promise<BackendProbe> =>
+  probeCli(
+    'nspawn',
+    ['machinectl', '--version'],
+    run,
+    undefined,
+    'machinectl 写操作需 root/polkit 授权（无人值守要求 sudo NOPASSWD 或 polkit 规则）',
+  )
+
+/**
+ * UTM（P6 Step 4）：utmctl version——CLI 与 UTM app 双在场验证（app 缺席 applicationNotFound）。
+ * utmctl 经 ScriptingBridge 驱动 UTM app：需 GUI 登录会话（SSH 报 errAEEventNotPermitted）——
+ * 记指引（platforms.md utm 行）。真机链路未验收。
+ */
+export const probeUtm = (run: ProcRunner): Promise<BackendProbe> =>
+  probeCli(
+    'utm',
+    ['utmctl', 'version'],
+    run,
+    undefined,
+    'utmctl 需 GUI 登录会话（SSH 不可用）且 UTM app 在场',
+  )
+
 export const MOCK_PROBE: BackendProbe = { id: 'mock', available: true }
 
-/** 全量探测（设置页与装配共用）；mock 恒可用（CI 确定性地基） */
-export const probeAll = async (run: ProcRunner): Promise<BackendProbe[]> =>
-  [MOCK_PROBE, await probeWsl(run), await probeDocker(run), await probePodman(run)]
+/**
+ * 全量探测（设置页与装配共用）；mock 恒可用（CI 确定性地基）。
+ * platform 注入平台序（P6 Step 5——纯函数不 import os，装配方传 process.platform）：
+ * win 只探 wsl、linux 只探 nspawn、mac 只探 utm——异平台 CLI 必然不在，跑了也是噪音；
+ * docker/podman 三平台皆可能在场照探。缺省不裁剪（向后兼容）。
+ * 并行探测（各自独立 spawn；最坏 15s 超时不串行叠加）。
+ */
+export const probeAll = async (run: ProcRunner, platform?: string): Promise<BackendProbe[]> => {
+  const rest: Array<Promise<BackendProbe>> = [probeDocker(run), probePodman(run)]
+  if (platform === undefined || platform === 'win32') rest.push(probeWsl(run))
+  if (platform === undefined || platform === 'linux') rest.push(probeNspawn(run))
+  if (platform === undefined || platform === 'darwin') rest.push(probeUtm(run))
+  return [MOCK_PROBE, ...(await Promise.all(rest))]
+}
