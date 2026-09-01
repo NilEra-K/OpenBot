@@ -63,6 +63,8 @@ export interface AgentRegistration {
   name?: string
   /** 身份色（hex，P4 Step 5 档案事实；缺席由渲染端回退哈希派生） */
   color?: string
+  /** 模型覆盖档案名（backlog ③）：落 profile 持久；llm 实例由装配方按此构造（分流在 desktop） */
+  modelProvider?: string
   /** 该 agent 的模型客户端；未提供时用空脚本 mock（首个 turn 即显式报脚本耗尽） */
   llm?: ChatProvider
   /** 注册后立即任命为管家（走标准任命事务：他人在位时如实拒绝） */
@@ -449,7 +451,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
       const registered = (await agentStore.list()).some((a) => a.agentId === registration.agentId)
       if (!registered) {
-        await agentStore.register(registration.agentId, registration.name, registration.color)
+        await agentStore.register(registration.agentId, registration.name, registration.color, registration.modelProvider)
       }
       // 记忆预载（backlog ①）：listSync 注入路径的缓存就绪（append 后自动最新）
       if (memory !== undefined) await memory.ensureLoaded(registration.agentId)

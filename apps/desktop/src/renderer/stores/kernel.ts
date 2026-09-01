@@ -45,6 +45,8 @@ export interface RosterEntry {
   /** 身份色（P4 Step 5 档案事实；缺席回退哈希派生——colorOf 统一取色）。
    *  可选：roster 事件 push 的新 agent（运行中注册）档案字段未知，待下次快照刷新。 */
   color?: string
+  /** 模型覆盖档案名（backlog ③）；缺席=继承全局主力 */
+  modelProvider?: string
   /** 该 agent 的专属 Box（v1.system.listAgents 返回；注册即创建——ctx 任意时刻可接管的信号源）。
    *  可选：roster 事件 push 的新 agent（运行中注册）归属未知，待下次快照刷新。 */
   boxId?: string | null
@@ -353,17 +355,18 @@ export const useKernelStore = defineStore('kernel', {
     },
     /** 名册快照重拉（boot 与注册后共用——roster 事件只带 agentId/role，档案字段以快照为准） */
     async refreshRoster(): Promise<void> {
-      const agents = await this.call<Array<{ agentId: string; name?: string; role: string; color?: string; boxId?: string | null }>>('v1.system.listAgents')
+      const agents = await this.call<Array<{ agentId: string; name?: string; role: string; color?: string; modelProvider?: string; boxId?: string | null }>>('v1.system.listAgents')
       this.roster = agents.map((a) => ({
         agentId: a.agentId,
         name: a.name,
         role: a.role as RosterEntry['role'],
         color: a.color,
+        ...(a.modelProvider !== undefined ? { modelProvider: a.modelProvider } : {}),
         boxId: a.boxId ?? null,
       }))
     },
     /** 注册 agent（P4 Step 5）：命令面受理（name/color/role）→ 重拉名册 → 返回 agentId（向导跳会话用） */
-    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker' }): Promise<string> {
+    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string }): Promise<string> {
       const created = await this.call<{ agentId: string }>('v1.system.registerAgent', input)
       await this.refreshRoster()
       return created.agentId

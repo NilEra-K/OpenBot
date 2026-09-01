@@ -131,4 +131,19 @@ describe('AgentStore 名册', () => {
     expect((rejected[0] as PromiseRejectedResult).reason.code).toBe('STATE_STEWARD_EXISTS')
     expect((await store.list()).filter((p) => p.role === 'steward').length).toBe(1)
   })
+
+  it('modelProvider 覆盖（backlog ③）：注册可选落档；setModelProvider 改写与清除（null）', async () => {
+    const { store } = makeStore()
+    const p1 = await store.register('agent-1', '甲', undefined, '端点B')
+    expect(p1.modelProvider).toBe('端点B')
+    expect((await store.list()).find((a) => a.agentId === 'agent-1')?.modelProvider).toBe('端点B')
+    // 改写
+    expect((await store.setModelProvider('agent-1', '端点C')).modelProvider).toBe('端点C')
+    // 清除：键消失（非空串残留）
+    const cleared = await store.setModelProvider('agent-1', null)
+    expect(cleared.modelProvider).toBeUndefined()
+    expect(JSON.stringify(cleared)).not.toContain('modelProvider')
+    // 不存在稳定码
+    await expect(store.setModelProvider('nope', 'x')).rejects.toMatchObject({ code: 'STATE_AGENT_NOT_FOUND' })
+  })
 })

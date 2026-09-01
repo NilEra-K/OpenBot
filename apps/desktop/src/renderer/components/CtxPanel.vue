@@ -232,7 +232,13 @@ const lastAt = computed(() => {
 
         <div class="ctx-sec">档案</div>
         <div class="kv"><span class="k">角色</span><span class="v">{{ activeAgent?.role === 'steward' ? '管家（steward）' : '工人（worker）' }}</span></div>
-        <div class="kv"><span class="k">模型</span><span class="v">继承全局主力{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}<span class="kv-note">per-agent 覆盖属后续版本</span></span></div>
+        <div class="kv">
+          <span class="k">模型</span>
+          <span class="v">
+            <template v-if="activeAgent?.modelProvider">覆盖：{{ activeAgent.modelProvider }}<span class="kv-note">（重启后切换生效）</span></template>
+            <template v-else>继承全局主力{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}</template>
+          </span>
+        </div>
         <div class="kv"><span class="k">Box 归属</span><span class="v mono">{{ screenBoxId ?? '—' }}</span></div>
         <div class="kv"><span class="k">权限现状</span><span class="v">{{ kernel.approvalMode === 'manual' ? 'Box 内自由 · 出 Box 需批准（Manual 闸门）' : '自动批准' }}</span></div>
 

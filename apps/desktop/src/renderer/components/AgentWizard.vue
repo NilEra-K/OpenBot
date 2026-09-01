@@ -30,6 +30,8 @@ const step = ref(0)
 const name = ref('')
 const roleIdx = ref(1) // 默认研究员（管家在职时选管家会被拒绝——默认避开高频失败路径）
 const color = ref<string>(COLORS[3])
+/** 模型覆盖（backlog ③）：空串=继承全局主力 */
+const modelOverride = ref('')
 const error = ref('')
 const creating = ref(false)
 const nameEl = ref<HTMLInputElement | null>(null)
@@ -86,6 +88,7 @@ const next = async (): Promise<void> => {
       name: name.value.trim(),
       color: color.value,
       role: isSteward.value ? 'steward' : 'worker',
+      ...(modelOverride.value !== '' ? { modelProvider: modelOverride.value } : {}),
     })
     toast.push(`agent「${name.value.trim()}」已创建`, 'success')
     ui.closeWizard()
@@ -172,17 +175,23 @@ const onKeydown = (e: KeyboardEvent): void => {
         <p class="wiz-note">身份色同时用于消息署名与图谱节点（创建后可在档案中修改）。</p>
       </div>
 
-      <!-- 步 2：模型与沙箱（裁定 B/F：如实说明继承关系，不放假选项） -->
+      <!-- 步 2：模型与沙箱（backlog ③：模型可选覆盖档案；未选继承全局主力） -->
       <div v-else-if="step === 1" class="wiz-body">
-        <div class="wiz-kv">
+        <div class="wiz-kv wiz-kv-col">
           <span class="k">模型</span>
-          <span class="v">继承全局主力{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}<span class="wiz-sub">per-agent 覆盖属后续版本</span></span>
+          <label class="wiz-field">
+            <span class="wiz-field-label">继承全局主力{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}——或为该 agent 指定端点：</span>
+            <select v-model="modelOverride" class="wiz-select">
+              <option value="">继承全局主力</option>
+              <option v-for="p in kernel.providers" :key="p.name" :value="p.name">{{ p.name }}（{{ p.model }}）</option>
+            </select>
+          </label>
+          <p v-if="modelOverride !== ''" class="wiz-note">覆盖后该 agent 钉住所选端点——全局主力切换不影响它（改动重启生效）。</p>
         </div>
         <div class="wiz-kv">
           <span class="k">沙箱</span>
           <span class="v">注册即建专属 Box<span class="wiz-sub">本地执行 · 重活不进云</span></span>
         </div>
-        <p class="wiz-note">模型与沙箱策略由全局设置统一管理（设置页可切换主力模型）；此处不提供 per-agent 覆盖。</p>
       </div>
 
       <!-- 步 3：复核 -->
@@ -193,7 +202,7 @@ const onKeydown = (e: KeyboardEvent): void => {
           <span class="k">身份色</span>
           <span class="v"><span class="wiz-dot" :style="{ background: color }"></span>{{ color }}</span>
         </div>
-        <div class="wiz-kv"><span class="k">模型</span><span class="v">继承全局主力（{{ primaryModel }}）</span></div>
+        <div class="wiz-kv"><span class="k">模型</span><span class="v">{{ modelOverride !== '' ? `覆盖：${modelOverride}` : `继承全局主力（${primaryModel}）` }}</span></div>
         <div class="wiz-kv"><span class="k">沙箱</span><span class="v">注册即建专属 Box</span></div>
         <p class="wiz-note">创建后立即出现在成员名册、@提及与派单目标里；社交图谱会在下一条消息后连边。</p>
       </div>
@@ -464,5 +473,32 @@ const onKeydown = (e: KeyboardEvent): void => {
   to {
     opacity: 1;
   }
+}
+
+/* 模型覆盖下拉（backlog ③） */
+.wiz-kv-col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.wiz-field-label {
+  font-size: 11.5px;
+  color: var(--ink3);
+}
+
+.wiz-select {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg0);
+  color: var(--ink);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.wiz-select:focus {
+  border-color: rgba(var(--accent-rgb), 0.5);
 }
 </style>

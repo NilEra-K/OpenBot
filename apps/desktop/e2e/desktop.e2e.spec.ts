@@ -1358,3 +1358,67 @@ test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 agent 走第二端点（双 mock 断言分流）+ ctx 真值', async () => {
+  // 双端点：主力 A（管家继承）；覆盖 B（新 agent 钉住）
+  const mockA = await startMockOpenAi([{ match: (l) => l.role === 'user', text: '主力端点的回复' }])
+  const mockB = await startMockOpenAi([{ match: (l) => l.role === 'user', text: '覆盖端点的回复' }])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-override-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  const addProvider = async (name: string, port: number): Promise<void> => {
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill(name)
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.locator('.cfg-row', { hasText: name })).toBeVisible()
+  }
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    // 两个端点：主力-A 设为主力；覆盖-B 供选择
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await addProvider('主力A', mockA.port)
+    await page.locator('.cfg-row', { hasText: '主力A' }).locator('.btn', { hasText: '设为主力' }).click()
+    await addProvider('覆盖B', mockB.port)
+
+    // 向导建 agent：第二步选覆盖 B
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.getByRole('button', { name: '新建 agent' }).click()
+    await page.locator('#wizName').fill('专属模型员')
+    await page.getByRole('button', { name: '下一步' }).click()
+    await page.locator('.wiz-select').selectOption('覆盖B')
+    await expect(page.locator('.wiz-note', { hasText: '钉住所选端点' })).toBeVisible()
+    await page.getByRole('button', { name: '下一步' }).click()
+    await page.getByRole('button', { name: '创建 agent' }).click()
+    await expect(page.locator('.roster-item', { hasText: '专属模型员' })).toBeVisible({ timeout: 15_000 })
+
+    // 对新 agent 发消息 → B 端点收到（A 不收该 agent 的请求）
+    await page.locator('.roster-item', { hasText: '专属模型员' }).click()
+    await page.locator('.composer-box input').fill('你好，走哪个端点')
+    await page.locator('.composer-box input').press('Enter')
+    await expect(page.locator('.m-text', { hasText: '覆盖端点的回复' })).toBeVisible({ timeout: 30_000 })
+    expect(mockB.requests.length).toBeGreaterThanOrEqual(1)
+    expect(mockA.requests.length).toBe(0) // 管家还没说话——A 零请求
+
+    // ctx 档案：模型 kv 真值（覆盖：覆盖B）
+    await page.getByTitle('会话档案（Settings）').click()
+    await expect(page.locator('.ctx .kv', { hasText: '模型' })).toContainText('覆盖：覆盖B')
+
+    // 对照：管家（继承）对话 → A 端点
+    await page.locator('.ctx-back').click()
+    await page.locator('.roster-item', { hasText: '管家' }).click()
+    await page.locator('.composer-box input').fill('管家走主力')
+    await page.locator('.composer-box input').press('Enter')
+    await expect(page.locator('.m-text', { hasText: '主力端点的回复' })).toBeVisible({ timeout: 30_000 })
+    expect(mockA.requests.length).toBeGreaterThanOrEqual(1)
+  } finally {
+    await app.close()
+    await mockA.close()
+    await mockB.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

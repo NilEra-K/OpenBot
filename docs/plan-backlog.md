@@ -142,18 +142,28 @@ ctx 档案「记忆」节呈现真数据。
 
 每个 agent 可指定自己的模型端点（覆盖全局主力）；未指定继续继承。
 
-### TODOLIST
+### TODOLIST（2026-09-01 实施完成）
 
-- [ ] 1. **profile 扩展（state）**：`AgentProfile` 加可选 `modelProvider?: string`（引用
-  providers 档案名；upsert 时悬空名拒绝——同 fallbackProvider 的防悬空纪律）；单测
-- [ ] 2. **装配分流（desktop kernel）**：`addAgent`/重启恢复路径按 profile 的
-  modelProvider 解析对应 provider 实例（未指定 = 全局主力）；运行中切换主力不影响已覆盖
-  agent（覆盖是钉死的——语义记档）；热切换不做（重启生效，与既有装配纪律一致）
-- [ ] 3. **命令面 + 向导**：`v1.system.registerAgent` 加可选 modelProvider；
-  AgentWizard 加可选「模型（缺省继承主力）」下拉；ctx 档案模型 kv 真值化
-  （「覆盖：xxx」/「继承全局主力（xxx）」）
-- [ ] 4. **E2E**：向导建 agent 选覆盖端点 → 对话走 mock 第二端点（双 mock 端口断言分流）；
-  ctx kv 真值；回归
+- [x] 1. **profile 扩展（state）**：`AgentProfile.modelProvider?`（引用档案名）；register 可选参数 +
+  `setModelProvider`（null=清除回继承）；版本号+读取端兼容零迁移；单测 +1（落档/改写/清除/不存在）
+- [x] 2. **装配分流（desktop kernel）**：`providerOfAgent`——指定档案 → `settings.resolve` 构造静态
+  实例（运行中档案改 key 不热跟随，重启生效记档）；未指定 → 全局 SwitchableChatProvider（主力切换
+  随动）。**双语义**：恢复路径悬空静默回继承 + console 告警（不炸装配）；命令路径悬空显式拒绝
+  （SETTINGS_PROVIDER_NOT_FOUND——用户当下反馈）。重启恢复循环按 profile.modelProvider 分流。
+- [x] 3. **命令面 + 向导 + ctx**：registerAgent schema 加可选 modelProvider；新增
+  `v1.system.setModelProvider`（悬空校验，重启生效——UI 编辑入口记档后续，命令面已具备）；
+  AgentWizard 第二步「模型」下拉（providers 档案列表 +「继承全局主力」缺省，选覆盖显示钉住
+  说明；复核步 kv 反映覆盖）；ctx 档案模型 kv 真值（覆盖：名 / 继承全局主力（名））；
+  RosterEntry.modelProvider 随 listAgents 透传。
+- [x] 4. **E2E**：双 mock 端点断言分流——向导建 agent 选覆盖 B → 该 agent 对话走 B（**A 端点
+  零请求**负向断言）→ ctx「覆盖：覆盖B」→ 管家对照走 A。3.5s 一次通过。
+
+### 实施记档
+
+- 覆盖引用档案**名**而非快照配置（端点改密码/换模型，agent 跟随档案更新）——但运行中的覆盖
+  实例是 resolve 时静态构造（不热跟随），完整语义 = 「重启时跟随」——与全装配纪律一致，记档。
+- 悬空双语义（恢复静默 / 命令显式）与沙箱 mock 回退同哲学——两路径的失败可见性需求不同。
+- backlog ①②③ 全部收官；④computer-use ⑤Windows Sandbox 记档挂起。
 
 ### 设计要点
 

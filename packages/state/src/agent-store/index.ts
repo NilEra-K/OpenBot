@@ -24,6 +24,9 @@ export interface AgentProfile {
   createdAt: number
   /** 身份色（hex，P4 Step 5）：可选——缺席由渲染端回退哈希派生色（版本号+读取端兼容，零迁移） */
   color?: string
+  /** 模型覆盖（backlog ③）：引用 providers 档案名——未指定继承全局主力；悬空在装配层
+   *  如实降级回继承（不炸装配——与沙箱 mock 回退同哲学）；版本号+读取端兼容零迁移 */
+  modelProvider?: string
 }
 
 export interface AgentStoreOptions {
@@ -48,7 +51,7 @@ export class AgentStore {
   }
 
   /** 注册：一律 worker（steward 只能经任命事务产生）；重名拒绝；color 可选（身份色档案事实） */
-  async register(agentId: string, name?: string, color?: string): Promise<AgentProfile> {
+  async register(agentId: string, name?: string, color?: string, modelProvider?: string): Promise<AgentProfile> {
     return this.#withLock(async () => {
       await this.#load()
       if (this.#profiles.has(agentId)) {
@@ -60,10 +63,32 @@ export class AgentStore {
         role: 'worker',
         createdAt: this.#now(),
         ...(color !== undefined ? { color } : {}),
+        ...(modelProvider !== undefined && modelProvider !== '' ? { modelProvider } : {}),
       }
       this.#profiles.set(agentId, profile)
       await this.#persist(profile)
       return { ...profile }
+    })
+  }
+
+  /** 更新模型覆盖（backlog ③）：null = 清除（回继承全局主力） */
+  async setModelProvider(agentId: string, modelProvider: string | null): Promise<AgentProfile> {
+    return this.#withLock(async () => {
+      await this.#load()
+      const profile = this.#profiles.get(agentId)
+      if (!profile) {
+        throw new KernelError(AgentStoreErrorCodes.STATE_AGENT_NOT_FOUND, `agent 不存在：${agentId}`)
+      }
+      const next: AgentProfile =
+        modelProvider === null || modelProvider === ''
+          ? (() => {
+              const { modelProvider: _drop, ...rest } = profile
+              return rest
+            })()
+          : { ...profile, modelProvider }
+      this.#profiles.set(agentId, next)
+      await this.#persist(next)
+      return { ...next }
     })
   }
 

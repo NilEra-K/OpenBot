@@ -170,6 +170,8 @@ const registerAgentSchema = z.object({
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/)
     .optional(),
+  /** 模型覆盖档案名（backlog ③）：可选——引用 providers 档案；悬空显式拒绝（命令面） */
+  modelProvider: z.string().trim().min(1).max(64).optional(),
   role: z.enum(['steward', 'worker']).optional(),
 })
 /** 沙箱装配事实（status 命令与 UI 呈现的单一来源；main 内存态，重启随装配重算） */
@@ -329,6 +331,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     })(),
   })
 
+  /**
+   * 模型覆盖分流（backlog ③）：档案名指定 → 静态 provider 实例（resolve 时构造——运行中档案
+   * 改 key 不热跟随，重启生效记档）；未指定 → 全局 SwitchableChatProvider（主力切换随动）。
+   * 恢复路径悬空（档案被删）→ 告警 + 回继承（不炸装配——与沙箱 mock 回退同哲学）；
+   * 命令路径悬空 → 显式拒绝（用户当下反馈，不静默）。
+   */
+  const providerOfAgent = async (modelProvider: string | undefined, silentFallback: boolean): Promise<ChatProvider> => {
+    if (modelProvider === undefined || modelProvider === '') return provider
+    try {
+      return buildProvider(await settings.resolve(modelProvider))
+    } catch (err) {
+      const msg = `模型覆盖档案「${modelProvider}」不可用（${err instanceof Error ? err.message : String(err)}）`
+      if (silentFallback) {
+        console.warn(`[openbot] ${msg}——回继承全局主力`)
+        return provider
+      }
+      throw new KernelError('SETTINGS_PROVIDER_NOT_FOUND', msg)
+    }
+  }
+
   /** 档案 → provider 实现（P4 Step 11）：protocol 分支 anthropic（messages API）/ openai-compat 缺省 */
   const buildProvider = (resolved: ResolvedProvider): ChatProvider => {
     const config = {
@@ -484,7 +506,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 注册 agent（P4 Step 5）：经装配 addAgent（名册+调度器+专属 Box+turn 接线）；
     // llm 共享 SwitchableChatProvider——主力模型切换对全部 agent 生效（与启动装配同语义）
     .register('v1.system.registerAgent', async (payload) => {
-      const { name, color, role } = registerAgentSchema.parse(payload)
+      const { name, color, role, modelProvider } = registerAgentSchema.parse(payload)
       // 管家前置检查：在位时直接拒绝（不创建半成品 agent；任命事务由 addAgent 兜底不变量）
       if (role === 'steward' && (await kernel.agentStore.findSteward()) !== null) {
         throw new KernelError('STATE_STEWARD_EXISTS', '管家已在位（须先罢免或转移）')
@@ -494,9 +516,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       let n = 1
       while (ids.has(`agent-${n}`)) n++
       const agentId = `agent-${n}`
-      await kernel.addAgent({ agentId, name, color, llm: provider, steward: role === 'steward' })
+      // 覆盖悬空在此显式拒绝（用户当下反馈）；分流实例与档案持久同步落
+      await kernel.addAgent({
+        agentId,
+        name,
+        color,
+        ...(modelProvider !== undefined ? { modelProvider } : {}),
+        llm: await providerOfAgent(modelProvider, false),
+        steward: role === 'steward',
+      })
       return { agentId, name, role: role ?? 'worker', ...(color !== undefined ? { color } : {}) }
     }, registerAgentSchema)
+    // 模型覆盖改写（backlog ③）：null=清除回继承；悬空显式拒绝；重启生效（llm 实例是装配期构造）
+    .register('v1.system.setModelProvider', async (payload) => {
+      const { agentId, modelProvider } = z
+        .object({ agentId: z.string().min(1), modelProvider: z.string().trim().min(1).max(64).nullable() })
+        .parse(payload)
+      if (modelProvider !== null) await settings.resolve(modelProvider) // 悬空 → SETTINGS_* 稳定码如实抛
+      await kernel.agentStore.setModelProvider(agentId, modelProvider)
+      return { ok: true, restartRequired: true }
+    }, z.object({ agentId: z.string().min(1), modelProvider: z.string().trim().min(1).max(64).nullable() }))
 
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })
@@ -510,7 +549,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       agentId: profile.agentId,
       name: profile.name,
       ...(profile.color !== undefined ? { color: profile.color } : {}),
-      llm: provider,
+      // 模型覆盖（backlog ③）：恢复路径悬空静默回继承（告警留痕）——档案可能已被删除
+      llm: await providerOfAgent(profile.modelProvider, true),
       steward: profile.role === 'steward',
     })
   }
