@@ -170,7 +170,13 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     await expect(page.locator('.mchip', { hasText: '你' })).toContainText('主人')
     await expect(page.locator('.mchip', { hasText: '远端好友' })).toContainText('远端 · mirror')
     await expect(page.locator('.relay-kv', { hasText: '远端成员' })).toContainText('1 名')
-    await expect(page.locator('.rooms-head')).toContainText('自托管')
+    await expect(page.locator('.rooms-note')).toContainText('自托管')
+    // 房间设置模态：遮罩卡片形态（ wiz-overlay 家族）+ 表单内 Esc 关闭（与既有模态用例同惯例——先聚焦）
+    await page.locator('.room-actions .btn', { hasText: '房间设置' }).click()
+    await expect(page.locator('.wiz-overlay .wiz-card[aria-label="房间接入配置"]')).toBeVisible()
+    await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('房间接入配置')
+    await page.locator('.wiz-overlay input').first().press('Escape')
+    await expect(page.locator('.wiz-overlay')).toHaveCount(0)
     // 设置页收窄：房间区块不在（配置已迁 rooms 视图模态）
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await expect(page.locator('.set-sec', { hasText: '跨用户房间' })).toHaveCount(0)

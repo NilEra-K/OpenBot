@@ -10,6 +10,80 @@
   padding: 0 26px 40px;
 }
 
+/* 居中空态：icon → 标题 → 一句话 → 主按钮 → 三步引导（纵向节奏，不造假数据） */
+.rooms-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 56px 24px 32px;
+}
+
+.empty-icon {
+  color: rgba(var(--info-rgb), 0.75);
+  margin-bottom: 14px;
+}
+
+.empty-title {
+  font-size: 16px;
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+
+.empty-desc {
+  font-size: 12.5px;
+  color: var(--ink3);
+  max-width: 400px;
+  line-height: 1.6;
+  margin-bottom: 18px;
+}
+
+.empty-cta {
+  min-width: 132px;
+}
+
+.empty-steps {
+  display: flex;
+  gap: 10px;
+  margin-top: 28px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink2);
+}
+
+.step-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(var(--info-rgb), 0.14);
+  color: var(--info);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+/* 自托管叙事注脚（两态恒在） */
+.rooms-note {
+  font-size: 11.5px;
+  color: var(--ink3);
+  text-align: center;
+  margin-top: 22px;
+}
+
 .roomcard {
   background: var(--bg2);
   border: 1px solid var(--line-strong);
@@ -25,6 +99,26 @@
   margin-bottom: 4px;
 }
 
+/* 卡头地球小图标：info 弱底圆片——icon 语言与 rail/名册/图谱呼应 */
+.room-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(var(--info-rgb), 0.12);
+  color: var(--info);
+  flex: none;
+}
+
+/* 成员链空提示（独立弱化行——不再混用 room-sub 样式） */
+.member-empty {
+  font-size: 12px;
+  color: var(--ink3);
+  margin: -6px 0 14px;
+}
+
 .room-name {
   font-size: 15px;
   font-weight: 650;
@@ -34,10 +128,6 @@
   font-size: 12px;
   color: var(--ink3);
   margin-bottom: 12px;
-}
-
-.room-empty .room-sub {
-  margin-bottom: 0;
 }
 
 .member-row {
@@ -137,4 +227,180 @@
   font-size: 13px;
   color: var(--ink2);
   cursor: pointer;
+}
+
+/* 模态容器（与 SettingsView 模型表单同款——wiz-* 家族在此视图的本地副本；
+   容器样式按视图 scoped 各持一份是既有惯例，避免跨视图样式耦合） */
+.wiz-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  animation: wiz-in 140ms var(--ease);
+}
+
+.wiz-card {
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  background: var(--bg2);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.wiz-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.wiz-title {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.wiz-close {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.wiz-close:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.wiz-body {
+  padding: 16px 18px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+
+.wiz-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  border-top: 1px solid var(--line);
+}
+
+@keyframes wiz-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.rooms .form-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* ---- 按钮家族（与既有视图 css 同款副本——btn/primary/secondary/ghost） ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg2);
+  color: var(--ink);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--bg3);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-secondary {
+  background: var(--bg2);
+  border-color: rgba(var(--accent-rgb), 0.28);
+  color: var(--accent);
+}
+
+.btn-secondary:hover {
+  background: var(--accent-weak);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn-primary:disabled {
+  filter: none;
+  opacity: 0.4;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink2);
+}
+
+.btn-ghost:hover {
+  background: var(--bg2);
+  color: var(--ink);
+}
+
+/* ---- 表单字段（field-input/field-label——模态内输入框，与设置页同款） ---- */
+
+.field-label {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink3);
+  margin-bottom: 5px;
+}
+
+.field-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg0);
+  color: var(--ink);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.field-input:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.relay-toggle input[type='checkbox'] {
+  accent-color: var(--accent);
 }

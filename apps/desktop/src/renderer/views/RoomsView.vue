@@ -17,6 +17,9 @@ const kernel = useKernelStore()
 const ui = useUiStore()
 const toast = useToastStore()
 
+/** 地球图标（prototype ICONS.rooms 同源——rail/名册/图谱共用语言） */
+const ROOMS_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'
+
 /** 房间显示名：备注名缺省回退房间码（房间码是 host 事实，备注名是本端记名） */
 const roomLabel = computed(() => kernel.relay?.roomName?.trim() || kernel.relay?.roomId || '')
 
@@ -111,26 +114,31 @@ onMounted(() => {
   <section class="view view-scroll">
     <div class="view-head rooms-head">
       <div class="view-title">跨用户房间</div>
-      <div class="view-sub">
-        好友跨公网进房间协作（mirror 一期）：本端对话镜像给房间，远端 turn 请求经审批闸门受控进入。
-        公网 relay 中转 · 10 分钟窗口 30 turn 预算（按发起方向计） · nonce 幂等（重试零双发） ·
-        断连指数退避重连。relay 是自托管软件——Tailscale/自组网内自建优先（官方不运营服务）。
-      </div>
+      <div class="view-sub">好友跨公网进房间协作——本端对话镜像给房间，远端 turn 请求经审批闸门受控进入。</div>
     </div>
 
     <div class="rooms">
-      <!-- 未接入：空态卡（如实——不是假房间） -->
-      <div v-if="!kernel.relay?.enabled && !kernel.relay?.connected" class="roomcard room-empty">
-        <div class="room-head"><span class="room-name">未接入房间</span></div>
-        <div class="room-sub">在「房间设置」填入 host 地址与邀请凭据（好友分享的房间码 + invite 码），保存并重启即接入。</div>
-        <div class="room-actions">
-          <button class="btn btn-secondary" @click="configOpen = true">房间设置</button>
+      <!-- 未接入：居中空态（icon → 标题 → 一句话 → 主按钮 → 三步引导）——不造假数据 -->
+      <div v-if="!kernel.relay?.enabled && !kernel.relay?.connected" class="rooms-empty">
+        <div class="empty-icon" aria-hidden="true">
+          <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" v-html="ROOMS_ICON"></svg>
+        </div>
+        <div class="empty-title">未接入房间</div>
+        <p class="empty-desc">接入后：本端对话镜像给房间成员，远端的 turn 请求经审批后在本端执行。</p>
+        <button class="btn btn-primary empty-cta" @click="configOpen = true">房间设置</button>
+        <div class="empty-steps">
+          <div class="step"><span class="step-no">1</span>好友运行 relay host 并创建房间</div>
+          <div class="step"><span class="step-no">2</span>把房间码与 invite 码分享给你</div>
+          <div class="step"><span class="step-no">3</span>在「房间设置」填入并重启应用</div>
         </div>
       </div>
 
       <!-- 房间卡：全部真值投影 -->
       <div v-else class="roomcard">
         <div class="room-head">
+          <span class="room-ico" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="ROOMS_ICON"></svg>
+          </span>
           <span class="room-name">{{ roomLabel || '房间' }}</span>
           <span class="chip" :class="stateChip.kind === 'accent' ? 'chip-accent' : stateChip.kind === 'info' ? 'chip-info' : ''">
             {{ stateChip.text }}
@@ -138,7 +146,7 @@ onMounted(() => {
         </div>
         <div class="room-sub">
           本端「{{ kernel.relay?.displayName || 'OpenBot 用户' }}」 · {{ kernel.remoteMembers.length }} 名远端成员 ·
-          本端 agent 在本机执行，远端成员以 mirror 身份参与
+          远端成员以 mirror 身份参与
         </div>
 
         <!-- 成员链（原型 member-row/mchip）：本端主人 + 远端成员（在场/离场如实） -->
@@ -147,15 +155,15 @@ onMounted(() => {
           <span v-for="m in kernel.remoteMembers" :key="m.memberId" class="mchip" :class="{ 'is-off': !m.connected }">
             <span class="mdot mdot-remote"></span>{{ m.displayName }}<span class="mrole">{{ m.connected ? '远端 · mirror' : '离场' }}</span>
           </span>
-          <span v-if="kernel.remoteMembers.length === 0" class="room-sub">尚无远端成员——把邀请信息发给好友</span>
         </div>
+        <p v-if="kernel.remoteMembers.length === 0" class="member-empty">尚无远端成员——点「复制邀请信息」分享给好友</p>
 
         <!-- relay 事实 kv（演示值纪律：预算余量是发起端视角本端不可见，如实不画 kv 与 meter） -->
         <div class="relay-grid">
           <div class="relay-kv"><span class="k">relay 状态</span><span class="v" :class="kernel.relay?.connected ? 'v-ok' : ''">{{ stateChip.text }}</span></div>
           <div class="relay-kv"><span class="k">远端成员</span><span class="v">{{ kernel.remoteMembers.length }} 名</span></div>
           <div class="relay-kv"><span class="k">本端呈现名</span><span class="v">{{ kernel.relay?.displayName || '—' }}</span></div>
-          <div class="relay-kv"><span class="k">协议预算</span><span class="v">10 分钟窗口 30 turn · 按发起方向计</span></div>
+          <div class="relay-kv"><span class="k">协议预算</span><span class="v">10 分钟窗口 · 30 turn</span></div>
         </div>
 
         <div class="room-actions">
@@ -164,6 +172,9 @@ onMounted(() => {
           <button class="btn btn-ghost" style="margin-left: auto" @click="configOpen = true">房间设置</button>
         </div>
       </div>
+
+      <!-- 自托管叙事注脚（两态恒在——本地优先纪律的呈现面） -->
+      <p class="rooms-note">relay 是自托管软件，官方不运营服务——优先跑在 Tailscale / 自组网内；公网暴露请自配 TLS 反代。</p>
     </div>
 
     <!-- 配置模态（SettingsView 模型表单容器同款） -->
