@@ -82,6 +82,7 @@ export interface RelayStatus {
   roomId: string
   inviteCode: string
   displayName: string
+  roomName?: string
   connected: boolean
 }
 
@@ -709,8 +710,10 @@ export const useKernelStore = defineStore('kernel', {
           this.remoteMembers = event.payload.members.map((m) => ({ ...m }))
           return
         case 'v1.message.remote': {
-          // 远端 mirror 消息（P7）：呈现于管家会话流（署名远端成员）；渲染走同一净化链
+          // 远端 mirror 消息（P7）：归属该成员自己的会话（名册远端节可点）；渲染走同一净化链。
+          // 图谱边投影：user↔远端 计数（虚线 remote 边的数据源——与本地消息边同源投影）
           const p = event.payload
+          this.bumpEdge('user', `remote:${p.fromMemberId}`)
           this.messages.push({
             messageId: p.messageId,
             kind: 'remote',

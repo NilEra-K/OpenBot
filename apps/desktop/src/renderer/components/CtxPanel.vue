@@ -85,8 +85,16 @@ const GROUP_MAX_RECORDS = 200
 // ---- 档案模式（P4 Step 7）：全部为既有 store 投影，零内核改动（approvalMode 除外——boot 快照） ----
 
 const activeAgent = computed(() => kernel.roster.find((a) => a.agentId === ui.activeAgentId) ?? null)
+/** 远端 mirror 成员（P7 原型对齐）：activeAgentId 为 `remote:<memberId>` 命名空间 */
+const remotePeer = computed(() =>
+  ui.activeAgentId.startsWith('remote:')
+    ? (kernel.remoteMembers.find((m) => `remote:${m.memberId}` === ui.activeAgentId) ?? null)
+    : null,
+)
 /** 档案标题（群会话时群名——ctx-top-sub） */
-const displayName = computed(() => activeGroup.value?.name ?? activeAgent.value?.name ?? ui.activeAgentId)
+const displayName = computed(
+  () => activeGroup.value?.name ?? remotePeer.value?.displayName ?? activeAgent.value?.name ?? ui.activeAgentId,
+)
 const initialOf = computed(() => displayName.value.trim().charAt(0) || '?')
 
 /** 协作对象：edges 里与该 agent 相连的 agent↔agent 边（user 端不属协作叙事），按 count 聚合 */
@@ -111,6 +119,10 @@ const TERMINAL_ICON =
 /** 群头像图标（prototype ICONS.chat 同源 SVG path） */
 const CHAT_ICON =
   '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
+
+/** 远端成员图标（prototype ICONS.rooms 同源——地球，与 rail/名册同款） */
+const REMOTE_ICON =
+  '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'
 
 const fmtTime = (at: number): string =>
   new Date(at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -163,6 +175,25 @@ const lastAt = computed(() => {
         <div class="kv"><span class="k">消息</span><span class="v">群记录上限 {{ GROUP_MAX_RECORDS }} 条（达限拒绝新消息）</span></div>
         <div class="kv"><span class="k">每员每轮</span><span class="v">至多 1 次发言（无话可说回 [pass]）</span></div>
         <p class="ctx-note">全员 pass 即收敛；你的新消息随时打断当前轮次（supersede）。</p>
+      </template>
+
+      <!-- 远端成员档案（P7 原型对齐）：mirror 会话是只读投影——按事实呈现，不放占位条目 -->
+      <template v-else-if="remotePeer">
+        <div class="ctx-head">
+          <div class="avatar avatar-group">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="REMOTE_ICON"></svg>
+          </div>
+          <div class="ctx-head-text">
+            <div class="ctx-name">{{ remotePeer.displayName }}</div>
+            <div class="ctx-sub">{{ remotePeer.connected ? '在场 · mirror' : '离场' }}</div>
+          </div>
+        </div>
+
+        <div class="ctx-sec">档案</div>
+        <div class="kv"><span class="k">角色</span><span class="v">远端成员（跨用户房间 · mirror）</span></div>
+        <div class="kv"><span class="k">会话性质</span><span class="v">只读镜像——对话经 relay 到达本地</span></div>
+        <div class="kv"><span class="k">Box 归属</span><span class="v mono">—（远端成员无本端 Box）</span></div>
+        <div class="kv"><span class="k">执行通道</span><span class="v">远端 turn 请求经审批闸门进入本端执行</span></div>
       </template>
 
       <!-- agent 档案（P4 Step 7 既有） -->

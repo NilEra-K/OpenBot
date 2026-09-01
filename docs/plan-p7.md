@@ -104,6 +104,32 @@
   「中止工作中的 agent」既有 flaky——修法待裁定延续）。本端主动向远端发 turn（协议对称、
   host 已支持）一期无 UI 入口，记档后续版本。版本 0.0.30 同步。
 
+## 原型对齐轮（2026-09-01 · P7 收官后追加）
+
+对照 prototype.html 全量复核，三主项差距收敛（P4 对齐时 rooms 视图记档为 P7 域——本轮兑现）：
+
+- **rooms 视图**（原型视图 5 迁移）：rail 第六 tab（地球图标，graph/settings 间）+ RoomsView
+  房间卡——成员链（mchip/mdot/mrole 原型样式迁移）、relay 事实 kv、动作行（复制邀请信息 =
+  房间码+invite 码进剪贴板/房间设置模态/打开房间对话）。**演示值纪律**：原型「12/30 预算、
+  04:12 倒计时、142ms 延迟」不照搬——本端是 mirror 执行端视角，预算余量 host 只下发发起端
+  （协议事实），余量 kv 与 meter 本端不可见即不画；kv 呈现的是协议机制描述与连接/成员真值。
+  「我托管/我是访客」双卡为一期后域（无建房 UI 与被托管语义）记档。设置页房间区块**迁入**
+  rooms 视图模态（原型 settings 无 relay 段——恢复原型五节形态）；relay settings 加可选
+  roomName（备注名，房间卡显示，缺省回退房间码）。
+- **远端成员会话归属**：原型远端成员是名册正式成员（Delta）——远端节可点开自己的 mirror
+  会话（activeAgentId 命名空间 `remote:<memberId>`）；远端消息撤出管家会话按 from 归属；
+  composer 只读态（placeholder 注明——协议无本端自由发消息语义）；ctx 远端档案（在场/离场、
+  无 Box 如实、执行通道=turn 经审批）。
+- **图谱远端**：远端节点（info 蓝圆 + 在场/离场状态点）+ user↔远端 虚线 remote 边
+  （gedge.remote 原型样式；store 的 v1.message.remote 投影 bumpEdge）+ 图例行 + 节点详情
+  类型 kv；主题补 `--info/--info-rgb`（原型 :root 同值，日夜双份）。
+- **实测坑⑥**：CtxPanel 插入 remotePeer 分支误用独立 `v-if`（把 agent 分支的 `v-else` 挂到
+  它身上——群会话双档案渲染，群聊 E2E 抓到）；修为 `v-else-if` 链。
+  **坑⑦**：RoomsView SFC 漏写 `<script setup>` 开标签（compiler-sfc 报「Element is missing
+  end tag」在 script 行——表象有误导性）。
+- 收官：三命令零错/347+6 skipped 不变；E2E 21/22（relay 用例扩断言：远端会话归属/只读态/
+  rooms 视图/设置页收窄；群聊用例回归绿）；版本 0.0.31。
+
 ## 设计要点（开工前逐条细化，先记已知决策）
 
 ### 协议与状态归属

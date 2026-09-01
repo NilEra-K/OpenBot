@@ -152,6 +152,7 @@ const relaySetSchema = z.object({
   roomId: z.string().max(128),
   inviteCode: z.string().max(512),
   displayName: z.string().max(64),
+  roomName: z.string().max(64).optional(),
 })
 /** 注册 agent（P4 Step 5）：name 必填（去空白 1-24 字）；color hex6 可选；role 默认 worker（steward 走任命事务语义） */
 const registerAgentSchema = z.object({

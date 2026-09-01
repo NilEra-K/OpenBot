@@ -30,6 +30,8 @@ interface NodeGeom {
   isUser: boolean
   /** 群节点（P5 Step 4）：菱形渲染——无状态点/首字母，chat 图标居中 */
   isGroup: boolean
+  /** 远端成员（P7 原型对齐）：info 色圆节点——mirror 身份（无 run 概念，状态点为在场/离场） */
+  isRemote: boolean
 }
 
 interface EdgeGeom {
@@ -39,17 +41,19 @@ interface EdgeGeom {
   count: number
   d: string
   width: number
-  kind: 'user' | 'a2a' | 'group'
+  kind: 'user' | 'a2a' | 'group' | 'remote'
 }
 
 const isGroupId = (id: string): boolean => kernel.groups.some((g) => g.groupId === id)
+const isRemoteId = (id: string): boolean => id.startsWith('remote:')
 
-/** user 居中、agents + 群环形均布（原型为手工摆位，Vue 版按真实数据计算——群同轨混布） */
+/** user 居中、agents + 群 + 远端成员环形均布（原型为手工摆位，Vue 版按真实数据计算——同轨混布） */
 const nodes = computed<NodeGeom[]>(() => {
-  const list: NodeGeom[] = [{ id: 'user', label: '你', initial: '你', x: CX, y: CY, r: 26, isUser: true, isGroup: false }]
+  const list: NodeGeom[] = [{ id: 'user', label: '你', initial: '你', x: CX, y: CY, r: 26, isUser: true, isGroup: false, isRemote: false }]
   const ring: Array<{ id: string; label: string }> = [
     ...kernel.roster.map((a) => ({ id: a.agentId, label: a.name ?? a.agentId })),
     ...kernel.groups.map((g) => ({ id: g.groupId, label: g.name })),
+    ...kernel.remoteMembers.map((m) => ({ id: `remote:${m.memberId}`, label: m.displayName })),
   ]
   ring.forEach((it, i) => {
     const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(ring.length, 1)
@@ -62,6 +66,7 @@ const nodes = computed<NodeGeom[]>(() => {
       r: 24,
       isUser: false,
       isGroup: isGroupId(it.id),
+      isRemote: isRemoteId(it.id),
     })
   })
   return list
@@ -101,8 +106,16 @@ const edgeGeoms = computed<EdgeGeom[]>(() => {
       count: e.count,
       d: `M${a.x} ${a.y} Q${(mx - (dy / len) * off).toFixed(1)} ${(my + (dx / len) * off).toFixed(1)} ${b.x} ${b.y}`,
       width: Math.min(1.5 + Math.sqrt(e.count) * 0.9, 6.5),
-      // 端点含 user=消息边；含群=群聊边（群内发言非委派——灰与消息边同族）；否则 A2A 委派
-      kind: e.a === 'user' || e.b === 'user' ? 'user' : isGroupId(e.a) || isGroupId(e.b) ? 'group' : 'a2a',
+      // 端点含 user=消息边；含群=群聊边（群内发言非委派——灰与消息边同族）；
+      // 含远端成员=remote 边（info 虚线——跨公网 relay 语义）；否则 A2A 委派
+      kind:
+        isRemoteId(e.a) || isRemoteId(e.b)
+          ? 'remote'
+          : e.a === 'user' || e.b === 'user'
+            ? 'user'
+            : isGroupId(e.a) || isGroupId(e.b)
+              ? 'group'
+              : 'a2a',
     })
   })
   return out
@@ -123,9 +136,13 @@ const ranking = computed(() => [...edgeGeoms.value].sort((a, b) => b.count - a.c
 const labelOf = (id: string): string => nodes.value.find((n) => n.id === id)?.label ?? id
 const isSteward = (id: string): boolean => kernel.stewardId === id
 
-/** 节点取色（排行/详情 dot）：user 中性深灰、群中性 ink3（菱形不取身份色）、agent 身份色 */
+/** 远端成员在场判定（状态点事实源：remoteMembers 投影——离场仍留节点（会话历史可看）） */
+const remoteOnline = (id: string): boolean => kernel.remoteMembers.some((m) => `remote:${m.memberId}` === id && m.connected)
+
+/** 节点取色（排行/详情 dot）：user 中性深灰、群中性 ink3（菱形不取身份色）、
+ *  远端成员 info 蓝（mirror 身份——原型 delta 同款）、agent 身份色 */
 const nodeColor = (id: string): string =>
-  id === 'user' ? 'var(--ink2)' : isGroupId(id) ? 'var(--ink3)' : kernel.colorOf(id)
+  id === 'user' ? 'var(--ink2)' : isGroupId(id) ? 'var(--ink3)' : isRemoteId(id) ? 'var(--info)' : kernel.colorOf(id)
 
 /** 聚焦群的档案（P5 Step 4）：成员显示名列表 */
 const groupMembersOf = (id: string): string[] => {
@@ -269,19 +286,21 @@ const goTo = (id: string): void => {
           <template v-else>
             <circle
               class="gdisc"
+              :class="{ 'gdisc-remote': n.isRemote }"
               :cx="n.x"
               :cy="n.y"
               :r="n.r"
-              :style="{ fill: n.isUser ? 'var(--ink2)' : kernel.colorOf(n.id) }"
+              :style="{ fill: n.isUser ? 'var(--ink2)' : n.isRemote ? 'var(--info)' : kernel.colorOf(n.id) }"
               filter="url(#gshadow)"
             ></circle>
             <text class="ginit" :x="n.x" :y="n.y + 4.5">{{ n.initial }}</text>
             <!-- 状态点（P4 Step 12：runs 投影 working/idle——steward 徽标点退役，
-                 管家区分保留在详情「角色」kv 与名册；user 节点无 run 概念不取点） -->
+                 管家区分保留在详情「角色」kv 与名册；user 节点无 run 概念不取点；
+                 远端成员无 run 概念——在场/离场事实点（info 空心，原型 stat-dot.remote 同族） -->
             <circle
               v-if="!n.isUser"
               class="gstatus"
-              :class="workingAgentIds.has(n.id) ? 'working' : 'idle'"
+              :class="n.isRemote ? (remoteOnline(n.id) ? 'remote' : 'idle') : workingAgentIds.has(n.id) ? 'working' : 'idle'"
               :cx="n.x + n.r * 0.74"
               :cy="n.y + n.r * 0.74"
               r="4.5"
@@ -307,6 +326,7 @@ const goTo = (id: string): void => {
         <div class="graph-sum mono">{{ edgeGeoms.length }} 对关系 · {{ kernel.edges.reduce((s, e) => s + e.count, 0) }} 条消息</div>
         <div class="legend-row"><span class="lg-line user"></span>你 ↔ agent · 消息边</div>
         <div class="legend-row"><span class="lg-line a2a"></span>agent ↔ agent · 委派边（A2A）</div>
+        <div class="legend-row"><span class="lg-line remote"></span>你 ↔ 远端成员 · 虚线蓝 relay</div>
         <div class="legend-row"><span class="lg-diamond"></span>菱形 = 群聊 · 群内发言计入灰边</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>状态点 = 工作中（脉冲）</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--ink3)"></span>状态点 = 空闲</div>
@@ -362,6 +382,11 @@ const goTo = (id: string): void => {
         <template v-else-if="isGroupId(focus.key)">
           <div class="kv"><span class="k">类型</span><span class="v">群聊 · 有界轮转 · leaderless</span></div>
           <div class="kv"><span class="k">成员</span><span class="v">{{ groupMembersOf(focus.key).join('、') }}</span></div>
+          <div class="kv"><span class="k">消息量</span><span class="v mono">×{{ nodeMsg[focus.key] ?? 0 }}</span></div>
+        </template>
+        <template v-else-if="isRemoteId(focus.key)">
+          <div class="kv"><span class="k">类型</span><span class="v">远端成员 · mirror（跨用户房间）</span></div>
+          <div class="kv"><span class="k">状态</span><span class="v">{{ remoteOnline(focus.key) ? '在场' : '离场（会话历史可看）' }}</span></div>
           <div class="kv"><span class="k">消息量</span><span class="v mono">×{{ nodeMsg[focus.key] ?? 0 }}</span></div>
         </template>
         <template v-else>

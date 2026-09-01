@@ -12,6 +12,7 @@ import ConsoleView from './views/ConsoleView.vue'
 import BoxesView from './views/BoxesView.vue'
 import TasksView from './views/TasksView.vue'
 import GraphView from './views/GraphView.vue'
+import RoomsView from './views/RoomsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import ApprovalModal from './components/ApprovalModal.vue'
 import BoxOps from './components/BoxOps.vue'
@@ -60,6 +61,7 @@ const views: Array<{ id: ViewName; label: string; icon: string; component: unkno
   { id: 'tasks', label: '排程', icon: 'lanes', component: TasksView },
   { id: 'boxes', label: 'Box', icon: 'box', component: BoxesView },
   { id: 'graph', label: '图谱', icon: 'graph', component: GraphView },
+  { id: 'rooms', label: '跨用户房间', icon: 'rooms', component: RoomsView },
   { id: 'settings', label: '设置', icon: 'sliders', component: SettingsView },
 ]
 
@@ -148,6 +150,7 @@ const ICONS: Record<string, string> = {
   box: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12L4 7.5M12 12v9"/>',
   graph:
     '<circle cx="6" cy="7" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="17" cy="17" r="2.4"/><circle cx="7" cy="18" r="2.4"/><path d="M8.3 7.8l7.3-1.2M8.2 9.1l7.2 6.3M8.9 17.2l-.5-7M16.7 15.1l-.7-6.7"/>',
+  rooms: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   sliders:
     '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>',
 }
@@ -293,6 +296,9 @@ onUnmounted(() => kernel.shutdown())
   --danger-weak: rgba(var(--danger-rgb), 0.1);
   --success: #73ce95;
   --success-rgb: 115, 206, 149;
+  /* info（P7 原型对齐）：远端/relay 语义色——原型 :root 同值 */
+  --info: #77b6e1;
+  --info-rgb: 119, 182, 225;
   --mono: 'Cascadia Code', Consolas, ui-monospace, monospace;
   --ease: cubic-bezier(0.25, 1, 0.5, 1);
   --radius: 10px;
@@ -322,6 +328,9 @@ onUnmounted(() => kernel.shutdown())
   --danger-rgb: 194, 69, 63;
   --success: #2f7d4f;
   --success-rgb: 47, 125, 79;
+  /* info 日间加深（原型 light 同值） */
+  --info: #3a6fb5;
+  --info-rgb: 58, 111, 181;
 }
 
 * {

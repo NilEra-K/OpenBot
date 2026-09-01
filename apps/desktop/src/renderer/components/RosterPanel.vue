@@ -90,10 +90,17 @@ const REMOTE_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2
     <button class="roster-new" type="button" @click="ui.openGroupWizard()">＋ 建群</button>
 
     <!-- 房间成员分节（P7 mirror 一期）：远端 mirror 成员是易态投影（事件驱动快照）——
-         只读呈现不进会话路由（远端触达执行面的唯一通道是 turn-request，走审批闸门） -->
+         点击进该成员的 mirror 会话（只读——turn 是远端触达执行面的通道，本端发起记档后续） -->
     <template v-if="kernel.remoteMembers.length > 0">
       <div class="roster-sec">房间成员</div>
-      <div v-for="m in kernel.remoteMembers" :key="m.memberId" class="roster-item" aria-label="远端成员">
+      <button
+        v-for="m in kernel.remoteMembers"
+        :key="m.memberId"
+        class="roster-item"
+        :class="{ active: ui.activeAgentId === `remote:${m.memberId}` }"
+        :aria-label="`远端成员 ${m.displayName} 的 mirror 会话`"
+        @click="ui.openAgent(`remote:${m.memberId}`)"
+      >
         <span class="avatar avatar-group">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="REMOTE_ICON"></svg>
           <span class="stat-dot" :class="m.connected ? 'idle' : ''"></span>
@@ -102,7 +109,7 @@ const REMOTE_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2
           <span class="ri-name">{{ m.displayName }}</span>
           <span class="ri-sub">远端 mirror</span>
         </span>
-      </div>
+      </button>
     </template>
   </aside>
 </template>

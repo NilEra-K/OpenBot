@@ -56,6 +56,27 @@
   stroke-opacity: 0.4;
 }
 
+/* 远端边（P7 原型对齐，原型 gedge-g.remote 同款）：info 虚线——跨公网 relay 语义 */
+.gedge.remote {
+  stroke: rgba(var(--info-rgb), 0.55);
+  stroke-dasharray: 5 5;
+  stroke-opacity: 0.9;
+}
+
+.gedge-g.remote:hover .gedge,
+.gedge-g.remote.is-hi .gedge {
+  stroke: var(--info);
+}
+
+.gdisc-remote {
+  stroke: rgba(var(--info-rgb), 0.55);
+  stroke-width: 2;
+}
+
+.gstatus.remote {
+  fill: var(--info);
+}
+
 .gedge-hit {
   fill: none;
   stroke: transparent;
@@ -255,6 +276,11 @@
 
 .lg-line.a2a {
   border-top-color: var(--accent);
+}
+
+.lg-line.remote {
+  border-top-color: var(--info);
+  border-top-style: dashed;
 }
 
 .lg-dot {

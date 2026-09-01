@@ -107,7 +107,7 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     await peerWait((m) => m.kind === 'mirror-message' && m.text === '本地说一句' && m.speakerKind === 'user')
     await peerWait((m) => m.kind === 'mirror-message' && m.speakerKind === 'agent' && m.text.includes('远端任务完成'))
 
-    // 4) 对端 mirror 入站：远端消息卡呈现在管家会话（含净化——script 注入被清）
+    // 4) 对端 mirror 入站：消息归属远端成员自己的会话（P7 原型对齐——名册远端节可点开）
     peerSend({
       kind: 'mirror-message',
       nonce: `${peerHello.memberId}:1`,
@@ -117,12 +117,17 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
       text: '远端问候 <script>window.__pwned=1</script> **加粗**',
       sentAt: Date.now(),
     })
+    // 名册远端节点开该成员的 mirror 会话（只读）
+    await page.locator('.roster-item', { hasText: '远端好友' }).click({ timeout: 15_000 })
     const remoteCard = page.locator('.m', { hasText: '远端问候' })
     await expect(remoteCard).toBeVisible({ timeout: 15_000 })
     await expect(remoteCard).toContainText('房间 · 远端')
     await expect(remoteCard.locator('script')).toHaveCount(0) // DOMPurify 生效（§5 协议约束）
     await expect(remoteCard.locator('strong')).toHaveCount(1) // markdown 正常渲染未被误伤
     expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined()
+    // 只读态：composer 禁用 + placeholder 注明 mirror
+    await expect(page.locator('.composer-box input')).toBeDisabled()
+    await expect(page.locator('.composer-box input')).toHaveAttribute('placeholder', /远端 mirror 会话（远端好友）· 只读/)
 
     // 5) 远端 turn：对端 request → 桌面受理（用户 lane + mock 终答）→ result 回程。
     // toMemberId 从对端视角的 member-joined 事件取（桌面真实 memberId）
@@ -158,11 +163,17 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     const replay = await peerWait((m): m is TurnResult => m.kind === 'turn-result' && m.requestId === 'e2e-turn-1' && m !== result)
     expect(replay.text).toBe(result.text)
 
-    // 7) 设置页房间区块：状态与本地优先叙事在场
+    // 7) rooms 视图（P7 原型对齐）：房间卡在场——成员链/事实 kv/自托管叙事；设置页不再有房间区块
+    await page.getByRole('button', { name: '跨用户房间', exact: true }).click()
+    await expect(page.locator('.roomcard .room-name')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('.roomcard')).toContainText('已连接')
+    await expect(page.locator('.mchip', { hasText: '你' })).toContainText('主人')
+    await expect(page.locator('.mchip', { hasText: '远端好友' })).toContainText('远端 · mirror')
+    await expect(page.locator('.relay-kv', { hasText: '远端成员' })).toContainText('1 名')
+    await expect(page.locator('.rooms-head')).toContainText('自托管')
+    // 设置页收窄：房间区块不在（配置已迁 rooms 视图模态）
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await expect(page.locator('.set-sec', { hasText: '跨用户房间' })).toBeVisible()
-    await expect(page.locator('.kv', { hasText: '状态' })).toContainText('已连接')
-    await expect(page.getByText('自托管')).toBeVisible()
+    await expect(page.locator('.set-sec', { hasText: '跨用户房间' })).toHaveCount(0)
   } finally {
     await app.close()
     peer.close()

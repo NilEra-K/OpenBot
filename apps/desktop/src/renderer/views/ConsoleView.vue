@@ -37,8 +37,18 @@ const activeGroup = computed(() =>
   ui.activeGroupId !== null ? (kernel.groups.find((g) => g.groupId === ui.activeGroupId) ?? null) : null,
 )
 
-/** 会话标题（stream-head）：群名或 agent 名 */
-const sessionTitle = computed(() => activeGroup.value?.name ?? activeAgent.value?.name ?? ui.activeAgentId)
+/** 远端 mirror 会话（P7 原型对齐）：只读——协议无「本端向远端自由发消息」语义
+ *  （turn 是远端触达本端的通道，本端发起无 UI 入口记档后续） */
+const remotePeer = computed(() =>
+  ui.activeAgentId.startsWith('remote:')
+    ? (kernel.remoteMembers.find((m) => `remote:${m.memberId}` === ui.activeAgentId) ?? null)
+    : null,
+)
+
+/** 会话标题（stream-head）：群名 / agent 名 / 远端成员名 */
+const sessionTitle = computed(
+  () => activeGroup.value?.name ?? remotePeer.value?.displayName ?? activeAgent.value?.name ?? ui.activeAgentId,
+)
 
 /** 群内任一成员有进行中 run（群聊流「轮转中」提示与三个点占位） */
 const groupBusy = computed(() => {
@@ -167,15 +177,14 @@ const streamUnits = computed<StreamUnit[]>(() => {
   const active = ui.activeAgentId
   const raw: RawRow[] = []
   kernel.messages.forEach((m, i) => {
-    // 远端 mirror 消息（P7）：呈现于管家会话（房间是全局协作面——管家是默认对话入口）
+    // 远端 mirror 消息（P7）：归属该远端成员自己的会话（from 即 `remote:<memberId>`——
+    // 原型语义：远端成员是名册一员，mirror 消息进其会话流，不再塞管家会话）
     const related =
-      m.kind === 'remote'
-        ? active === kernel.stewardId
-        : m.kind === 'user'
-          ? m.to === active
-          : m.kind === 'agent'
-            ? m.from === active
-            : m.from === active || m.to === active
+      m.kind === 'user'
+        ? m.to === active
+        : m.kind === 'agent'
+          ? m.from === active
+          : m.from === active || m.to === active
     if (!related) return
     raw.push({
       key: `m${i}`,
@@ -779,12 +788,12 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           @pick="pickMention"
         />
         <div class="composer-inner">
-          <div class="composer-box" :class="{ disabled: !kernel.connected }">
+          <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }">
             <input
               ref="draftEl"
               v-model="ui.draft"
-              :placeholder="`对 ${activeAgent?.name ?? ui.activeAgentId} 说…（Enter 发送）`"
-              :disabled="!kernel.connected"
+              :placeholder="remotePeer !== null ? `远端 mirror 会话（${remotePeer.displayName}）· 只读——对话经 relay 镜像到达` : `对 ${activeAgent?.name ?? ui.activeAgentId} 说…（Enter 发送）`"
+              :disabled="!kernel.connected || remotePeer !== null"
               autocomplete="off"
               @input="onComposerInput"
               @blur="onComposerBlur"

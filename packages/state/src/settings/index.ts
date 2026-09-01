@@ -44,6 +44,8 @@ export interface RelaySettings {
   inviteCode: string
   /** 本端在房间的呈现名 */
   displayName: string
+  /** 房间备注名（可选——呈现层记名，缺省显示房间码） */
+  roomName?: string
 }
 
 export interface AppSettings {
