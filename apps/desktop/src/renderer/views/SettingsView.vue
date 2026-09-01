@@ -20,11 +20,22 @@ const toast = useToastStore()
 
 /** 应用版本（P4 Step 1）：main 经 preload 桥取 package.json version——不手写不过时 */
 const appVersion = ref<string | null>(null)
+// ---- 系统自启动（0.1.0 产品化）：注册表现状即真相——进页读、切换写（不另存偏好） ----
+const autoLaunch = ref(false)
+const toggleAutoLaunch = async (): Promise<void> => {
+  const next = await window.openbot?.autoLaunch?.set(!autoLaunch.value)
+  autoLaunch.value = next ?? autoLaunch.value
+  toast.push(next ? '已开启开机自启动' : '已关闭开机自启动', 'success')
+}
+
 onMounted(() => {
   void window.openbot?.app
     ?.version()
     .then((v: string) => (appVersion.value = v))
     .catch(() => (appVersion.value = null)) // 桥缺失（浏览器 dev）——如实显示
+  void window.openbot?.autoLaunch?.get().then((v: boolean | undefined) => {
+    if (v !== undefined) autoLaunch.value = v
+  })
 })
 
 // ---- 外观（呈现层偏好：localStorage 持久化，不进内核 settings——协议纯度） ----
@@ -454,6 +465,23 @@ const wslHelpNeeded = computed(() => {
         </div>
       </template>
       <p v-else class="settings-empty">开发模式（无壳）——数据路径由桌面壳提供</p>
+
+      <!-- 通用（0.1.0 产品化）：系统自启动——注册表现状即真相，开关即时生效 -->
+      <div class="set-sec">通用</div>
+      <div class="setrow">
+        <div class="set-main">
+          <div class="set-name">开机自启动</div>
+          <div class="set-desc">系统登录时自动启动并驻留托盘（注册表 Run 键——在系统侧手动改动此处如实反映）</div>
+        </div>
+        <button
+          class="switch"
+          :class="{ 'is-on': autoLaunch }"
+          role="switch"
+          :aria-checked="autoLaunch"
+          aria-label="开机自启动"
+          @click="toggleAutoLaunch"
+        ></button>
+      </div>
 
       <!-- 外观（呈现层偏好，即时生效；复用沙箱偏好卡的交互与样式） -->
       <div class="set-sec">外观</div>

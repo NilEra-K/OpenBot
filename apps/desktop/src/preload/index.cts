@@ -33,4 +33,10 @@ contextBridge.exposeInMainWorld('openbot', {
     /** 打开数据文件夹（白名单限定 userData 内；返回错误消息，空串 = 成功） */
     openPath: (path: string) => ipcRenderer.invoke('openbot:open-path', path) as Promise<string>,
   },
+  autoLaunch: {
+    /** 系统自启动现状（注册表 Run 键即真相——用户在系统侧改动如实反映） */
+    get: () => ipcRenderer.invoke('openbot:auto-launch:get') as Promise<boolean>,
+    /** 开关自启动（即时写系统；返回写后的实际态） */
+    set: (enabled: boolean) => ipcRenderer.invoke('openbot:auto-launch:set', enabled) as Promise<boolean>,
+  },
 })

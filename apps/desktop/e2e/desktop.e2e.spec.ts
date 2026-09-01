@@ -239,8 +239,9 @@ test('中止工作中的 agent（审批挂起中打断：run aborted 收敛 + �
     const stop = page.locator('.m-stop')
     await expect(page.locator('.m-state', { hasText: '工作中…' })).toBeVisible({ timeout: 15_000 })
     await stop.click()
-    await expect(stop).toBeDisabled()
-    await expect(stop).toHaveText('正在中止…')
+    // 过渡态（disabled +「正在中止…」）不单独断言：revokeRun 对审批挂起的 run（无在途
+    // LLM 调用）收敛可快于 Vue 渲染拍——过渡态一帧即逝（P6 实测 flaky 根因）；收敛语义
+    // 由下方终态断言完整覆盖（gate 消失/工作中消失/无终答/排程卡已中止）
 
     // 未决审批随 run 中止被否决：流内 gate 卡收敛（revokeRun 的 resolved 事件）
     await expect(page.locator('.gate')).toHaveCount(0, { timeout: 15_000 })

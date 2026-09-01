@@ -9,7 +9,22 @@
 
 ## 状态
 
-P7 relay 已收官（跨用户房间自托管 host + 桌面接入全链）。路线图与各阶段验收标准见 ARCHITECTURE.md §11。
+**v0.1.0**——路线图（P0–P7）功能全齐的第一个可用里程碑。路线图与验收标准见 ARCHITECTURE.md §11。
+
+## 安装与上手（Windows）
+
+1. **安装**：`OpenBot-x.y.z-setup.exe`（安装向导）或 `OpenBot-x.y.z-portable.exe`（免安装单文件）。
+   首次运行未签名安装器会触发 Windows SmartScreen 警告——点「更多信息 → 仍要运行」（无代码
+   签名证书的如实预期，签名记档后续版本）。
+2. **配模型**：设置 → 「＋ 添加模型」——填 OpenAI 兼容端点（DeepSeek/Kimi/本地 Ollama 均可）
+   或 Anthropic 协议 → 保存 → 设为主力。
+3. **开始对话**：控制台对管家发消息；「＋ 新建 agent」添加工人；重活自动进本机沙箱（Box）执行。
+4. **沙箱后端**（设置页按本机探测自动呈现可选项）：Windows 默认 WSL2（需放置 rootfs，见
+   [docs/platforms.md](docs/platforms.md)）；也可 Docker Desktop / podman machine。
+5. **关窗不退出**：关闭窗口驻留托盘（托盘菜单退出）；设置 → 通用可开「开机自启动」。
+
+**更新**：暂无在线更新通道（项目尚无远端分发渠道——如实记档），新版重新下载安装即可，
+数据（对话/agent/设置）保留在用户数据目录不受影响。
 
 ## 跨用户房间（P7，自托管）
 

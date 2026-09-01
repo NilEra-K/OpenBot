@@ -131,6 +131,14 @@ ipcMain.handle('openbot:win-is-maximized', () => win?.isMaximized() ?? false)
 // 应用版本（P4 Step 1 About 真值）：来自 apps/desktop/package.json 的 version 字段（随提交 vX.Y.Z 同步）
 ipcMain.handle('openbot:app-version', () => app.getVersion())
 
+// 系统自启动（0.1.0 产品化）：注册表 Run 键即真相——不另存偏好（用户在系统侧改动如实反映；
+// setLoginItemSettings 打包态用可执行路径，开发态用 electron 二进制 + 环境变量——Electron 自管）
+ipcMain.handle('openbot:auto-launch:get', () => app.getLoginItemSettings().openAtLogin)
+ipcMain.handle('openbot:auto-launch:set', (_e, enabled: boolean) => {
+  app.setLoginItemSettings({ openAtLogin: enabled })
+  return app.getLoginItemSettings().openAtLogin
+})
+
 // 数据路径（P4 Step 11 设置页数据区块）：与 kernel 装配同源布局——<userData>/data（state root），
 // transcript 落 <data>/agents/<agentId>/transcript.jsonl（state 包布局约定）
 ipcMain.handle('openbot:paths', () => {

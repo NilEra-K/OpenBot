@@ -4,6 +4,8 @@
 # 不收集 node_modules（pnpm workspace 符号链接坑由预 bundle 消解）。
 appId: com.openbot.desktop
 productName: OpenBot
+# 应用图标（0.1.0 产品化）：安装器/开始菜单/任务栏——256×256 PNG（builder 自动转 ico）
+icon: resources/icon
 directories:
   output: release
 asar: true
