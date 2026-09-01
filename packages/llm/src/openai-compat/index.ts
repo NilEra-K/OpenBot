@@ -55,9 +55,23 @@ interface WireToolCall {
 
 interface WireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
   tool_calls?: WireToolCall[]
   tool_call_id?: string
+}
+
+/** content 规范形 → wire（plan-computer-use Step 2）：纯文本直传零开销；分段数组按
+ *  openai-compat 视觉惯例编 image_url data URI（GLM-4V / Qwen-VL / Ollama 视觉模型同构） */
+function toWireContent(content: ChatMessage['content']): WireMessage['content'] {
+  if (typeof content === 'string') return content
+  return content.map((part) =>
+    part.type === 'text'
+      ? { type: 'text' as const, text: part.text ?? '' }
+      : {
+          type: 'image_url' as const,
+          image_url: { url: `data:${part.image?.mime ?? 'image/png'};base64,${part.image?.base64 ?? ''}` },
+        },
+  )
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000
@@ -170,7 +184,7 @@ function toWireMessages(request: ChatRequest): WireMessage[] {
     if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
       out.push({
         role: 'assistant',
-        content: message.content,
+        content: toWireContent(message.content),
         tool_calls: message.toolCalls.map((call) => ({
           id: call.id,
           type: 'function' as const,
@@ -178,9 +192,9 @@ function toWireMessages(request: ChatRequest): WireMessage[] {
         })),
       })
     } else if (message.role === 'tool') {
-      out.push({ role: 'tool', content: message.content, tool_call_id: message.toolCallId ?? '' })
+      out.push({ role: 'tool', content: toWireContent(message.content), tool_call_id: message.toolCallId ?? '' })
     } else {
-      out.push({ role: message.role, content: message.content })
+      out.push({ role: message.role, content: toWireContent(message.content) })
     }
   }
   return out

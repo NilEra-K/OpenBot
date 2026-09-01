@@ -7,7 +7,7 @@ import { KernelError } from '@openbot/core'
 import type { ToolCall } from '@openbot/llm'
 import { approvalDenied, ApprovalErrorCodes } from '../approval/index.js'
 import type { ApprovalGate, ApprovalRequest } from '../approval/index.js'
-import type { Tool, ToolContext } from '../tools/index.js'
+import type { Tool, ToolContext, ToolResult } from '../tools/index.js'
 
 export interface GatedToolDeps {
   gate: ApprovalGate
@@ -19,7 +19,7 @@ export interface GatedToolDeps {
 export function gated(tool: Tool, deps: GatedToolDeps): Tool {
   return {
     spec: tool.spec,
-    async execute(ctx: ToolContext, args: unknown): Promise<string> {
+    async execute(ctx: ToolContext, args: unknown): Promise<string | ToolResult> {
       const call: ToolCall = { id: ctx.toolCallId, name: tool.spec.name, args }
       const request: ApprovalRequest = {
         runId: ctx.runId,

@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest'
 import { EventPayloadSchemas, validateEventPayload } from '../src/events.js'
 
 describe('事件 payload schema 目录', () => {
-  it('全部 18 个事件类型均有 schema', () => {
-    expect(Object.keys(EventPayloadSchemas)).toHaveLength(18)
+  it('全部 19 个事件类型均有 schema', () => {
+    expect(Object.keys(EventPayloadSchemas)).toHaveLength(19)
   })
 
   it('合法负载：全目录校验通过', () => {

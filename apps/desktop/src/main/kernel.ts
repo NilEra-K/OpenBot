@@ -306,12 +306,40 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // 定时自动化（backlog ②）：Scheduler 扫描到点 → 以用户身份发消息（复用 user lane 全管线）。
   // 错过跳过（裁定 B——nextAfter 从上次触发点向前找，应用关闭期间的自然跳过）；托盘常驻是运行前提
   const automationStore = new AutomationStore({ fs, root: dataRoot, now: Date.now })
+
+  // ---- computer-use 接管锁（plan-computer-use Step 5）：壳层内存态，不进内核协议 ----
+  // 用户接管中：computer 动作工具的 waitTurn 挂起（形态同审批挂起）；「交还」放行。
+  // 锁状态经事件下发（GUI 视图呈现「你已接管」+ agent 挂起卡）
+  let takeoverWaiters: Array<() => void> = []
+  let takeoverHeld = false
+  const guiLock = {
+    waitTurn: async (): Promise<void> => {
+      if (!takeoverHeld) return
+      console.log('[openbot] computer-use：用户接管中——agent 动作挂起')
+      await new Promise<void>((resolve) => takeoverWaiters.push(resolve))
+    },
+  }
+  const guiTakeover = (held: boolean): void => {
+    takeoverHeld = held
+    kernel.bus.emit('v1.box.gui-takeover', { held })
+    if (!held) {
+      const waiters = takeoverWaiters
+      takeoverWaiters = []
+      for (const w of waiters) w()
+      console.log('[openbot] computer-use：已交还 agent——挂起动作继续')
+    }
+  }
+  // 注册门：env OPENBOT_COMPUTER=1（E2E/显式开启）。生产门（GUI 镜像探测 ∩ provider
+  // supportsImages 声明）待 GUI 容器真机链路（podman machine 未启）——记档 plan Step 4
+  const computerEnabled = process.env.OPENBOT_COMPUTER === '1'
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
     backend,
     // save/recall 工具 + 会话装配「此前记忆」注入（每轮同步读缓存；addAgent 预载）
     memory: memoryStore,
+    // computer-use 工具族（plan-computer-use）：env 门开即注册（生产门记档待 GUI 真机）
+    ...(computerEnabled ? { computer: { lock: guiLock } } : {}),
     // 真实时钟：确定性断言只存在于内核测试与 CLI（plan-p2 风险与地雷）
     approvalGateFactory: (deps) => {
       approvalGate = new ManualApprovalGate(deps)
@@ -432,6 +460,30 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // caps 驱动 UI：按钮渲染依据后端能力声明（永不出现「UI 有按钮但后端不支持」）
     .register('v1.boxes.caps', async () => kernel.backend.caps())
     // 沙箱后端：状态呈现 + 偏好写入（重启生效——后端选择是装配期决策，不热切换）
+    // ---- computer-use GUI 面（plan-computer-use Step 5/6）：帧拉取/用户注入/交还 ----
+    // frame：独立截图（旁观视图兜底帧——agent 空闲时画面也能动；agent 动作时的帧由工具回喂
+    // 截图经 lastImageOf 提供，零额外开销）。input：用户鼠标/键盘——首笔即接管（锁挂起 agent
+    // 下一个动作）；注入走与 agent 同一条 xdotool 通路。release：交还。
+    .register('v1.box.gui.frame', async (payload) => {
+      const { boxId } = z.object({ boxId: z.string() }).parse(payload)
+      const r = await backend.exec(boxId, {
+        command: ['sh', '-c', "scrot -o /tmp/.openbot-live.png && convert /tmp/.openbot-live.png -resize '960x>' -quality 75 /tmp/.openbot-live.jpg && base64 -w0 /tmp/.openbot-live.jpg"],
+        timeoutMs: 15_000,
+      })
+      if (r.exitCode !== 0) return { image: null, reason: `截图失败：${r.stderr.trim().slice(0, 120)}` }
+      return { image: { base64: r.stdout.trim(), mime: 'image/jpeg' } }
+    }, z.object({ boxId: z.string() }))
+    .register('v1.box.gui.input', async (payload) => {
+      const { boxId, script } = z.object({ boxId: z.string(), script: z.string().max(500) }).parse(payload)
+      if (!takeoverHeld) guiTakeover(true) // 首笔用户输入即接管（挂起 agent 下一个动作）
+      const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000 })
+      return { ok: r.exitCode === 0 }
+    }, z.object({ boxId: z.string(), script: z.string().max(500) }))
+    .register('v1.box.gui.release', async () => {
+      guiTakeover(false)
+      return { ok: true }
+    })
+    .register('v1.box.gui.state', async () => ({ enabled: computerEnabled, takeover: takeoverHeld }))
     // 记忆（backlog ①）：ctx 档案呈现拉取（写路径只在 agent 工具——用户不可直接编辑）
     .register('v1.memory.list', async (payload) => {
       const { agentId } = z.object({ agentId: z.string() }).parse(payload)

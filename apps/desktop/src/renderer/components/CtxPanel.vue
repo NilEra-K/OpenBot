@@ -11,10 +11,11 @@
  * 档案=群档案（成员行跳会话 + 轮转边界如实 kv——原型的「3 轮/10 条/每员 2 条」是编造数值不照搬）。
  * 图形界面画面（GUI 像素流）属后续版本（plan-p3 补记）。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import BoxScreen from './BoxScreen.vue'
+import GuiScreen from './GuiScreen.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -97,6 +98,16 @@ const displayName = computed(
   () => activeGroup.value?.name ?? remotePeer.value?.displayName ?? activeAgent.value?.name ?? ui.activeAgentId,
 )
 const initialOf = computed(() => displayName.value.trim().charAt(0) || '?')
+
+// ---- GUI 桌面视图（plan-computer-use Step 6）：computer-use 启用时屏幕区可切「终端 ⇄ GUI」 ----
+const guiMode = ref(false)
+const computerEnabled = ref(false)
+onMounted(() => {
+  void kernel
+    .call<{ enabled: boolean }>('v1.box.gui.state')
+    .then((r) => (computerEnabled.value = r.enabled))
+    .catch(() => (computerEnabled.value = false))
+})
 
 // ---- 记忆（backlog ①）：ctx 档案打开时现拉（易态呈现——写入经 agent 工具，无事件推送；
 //      拉取失败如实空，不放假条目） ----
@@ -319,8 +330,17 @@ const lastAt = computed(() => {
         </span>
         <span class="mono">{{ screenBoxId ?? 'no box' }}</span>
         <span class="mono">{{ lastAt }}</span>
+        <!-- GUI 切换（plan-computer-use Step 6）：computer-use 启用才呈现（能力驱动不放假入口） -->
+        <button
+          v-if="computerEnabled && screenBoxId"
+          class="gui-toggle"
+          type="button"
+          :aria-label="guiMode ? '切回终端流' : '切到 GUI 桌面'"
+          @click.stop="guiMode = !guiMode"
+        >{{ guiMode ? '终端' : 'GUI' }}</button>
       </div>
-      <div class="cs-term">
+      <GuiScreen v-if="guiMode && screenBoxId" :box-id="screenBoxId" />
+      <div v-else class="cs-term">
         <BoxScreen v-if="screenBlocks.length > 0" :blocks="screenBlocks" />
         <div v-else-if="boxAsleep" class="ctx-idle">Box 休眠中——rootfs 在磁盘，随时可唤醒（派活自动拉起）</div>
         <div v-else class="ctx-idle">等待任务派发——agent 在 Box 内执行命令时，这里实时显示屏幕输出</div>

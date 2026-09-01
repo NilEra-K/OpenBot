@@ -361,3 +361,21 @@
   word-break: break-word;
   color: var(--ink);
 }
+
+/* GUI 切换按钮（plan-computer-use Step 6）：屏幕 bar 右侧小切换 */
+.gui-toggle {
+  margin-left: auto;
+  height: 16px;
+  padding: 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--ink3);
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.gui-toggle:hover {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.4);
+}

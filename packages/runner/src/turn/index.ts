@@ -227,7 +227,19 @@ export class TurnRunner {
           signal: run.signal,
         }
         const result = await this.#deps.tools.execute(ctx, call)
-        messages.push({ role: 'tool', content: result, toolCallId: call.id })
+        // 含图回喂（plan-computer-use Step 3）：content parts（text+image）给多模态模型；
+        // 纯文本结果零变化（string 快路径）
+        messages.push({
+          role: 'tool',
+          content:
+            typeof result === 'string'
+              ? result
+              : [
+                  { type: 'text' as const, text: result.text },
+                  { type: 'image' as const, image: result.image },
+                ],
+          toolCallId: call.id,
+        })
       }
     }
   }

@@ -149,6 +149,11 @@ export interface SystemRemoteMembersPayload {
   members: Array<{ memberId: string; displayName: string; connected: boolean }>
 }
 
+/** GUI 接管态变化（plan-computer-use Step 5）：用户接管/交还——GUI 视图与 agent 挂起卡的信号源 */
+export interface GuiTakeoverPayload {
+  held: boolean
+}
+
 /** 远端 mirror 消息到达（P7）：跨用户房间成员的本端对话镜像——呈现侧必须过 DOMPurify；
  *  roomId 用于归属该房间的成员（键空间 remote:<roomId>:<memberId>） */
 export interface MessageRemotePayload {
@@ -200,6 +205,7 @@ export interface KernelEventMap {
   'v1.approval.resolved': ApprovalResolvedPayload
   'v1.system.roster': SystemRosterPayload
   'v1.system.remote-members': SystemRemoteMembersPayload
+  'v1.box.gui-takeover': GuiTakeoverPayload
   'v1.message.remote': MessageRemotePayload
 }
 

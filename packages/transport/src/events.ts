@@ -119,6 +119,9 @@ export const EventPayloadSchemas = {
     role: z.enum(['steward', 'worker']),
     cause: z.enum(['registered', 'removed', 'appointed', 'dismissed', 'transferred']),
   }),
+  'v1.box.gui-takeover': z.object({
+    held: z.boolean(),
+  }),
   'v1.system.remote-members': z.object({
     roomId: z.string(),
     members: z.array(

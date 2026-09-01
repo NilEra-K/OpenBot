@@ -1422,3 +1422,59 @@ test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 ag
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image part + 接管锁状态机', async () => {
+  const mock = await startMockOpenAi([
+    // 第一轮：调 computer_screenshot →（工具回喂图）第二轮断言收到 image part 后终答
+    {
+      match: (l) => l.role === 'user' && l.content === '看看桌面',
+      toolCalls: [{ id: 'c1', name: 'computer_screenshot', args: {} }],
+    },
+    { match: (_l, t) => t === 'computer_screenshot', text: '桌面已看到（mock 容器）' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-computer-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+      OPENBOT_COMPUTER: '1', // 工具族注册门（E2E 显式开）
+    },
+  })
+  const page = await app.firstWindow()
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.composer-box input').fill('看看桌面')
+    await page.locator('.composer-box input').press('Enter')
+    await expect(page.locator('.m-text', { hasText: '桌面已看到' })).toBeVisible({ timeout: 30_000 })
+    // 第二轮请求（工具回喂后）的 tool 消息含 image_url part（openai-compat wire——mock 后端
+    // 的 exec 输出即 base64 位——链路形状断言而非图像有效性）
+    const second = mock.requests.at(-1)
+    const toolMsg = second?.messages.find((m) => (m as { role?: string }).role === 'tool')
+    expect(JSON.stringify(toolMsg)).toContain('image_url')
+    expect(JSON.stringify(toolMsg)).toContain('data:image/jpeg;base64,')
+    // GUI 视图在场（computerEnabled）+ 接管状态机走真实 UI 链路：
+    // 开 GUI 视图 → 点视口（mousedown = 用户输入 → 内核置锁）→「你已接管」→ 交还 → 回落
+    await expect(page.locator('.gui-toggle')).toBeVisible({ timeout: 10_000 })
+    await page.locator('.gui-toggle').click()
+    await expect(page.locator('.gui-screen')).toBeVisible()
+    await expect(page.locator('.gui-state')).toContainText('旁观中')
+    await page.locator('.gui-viewport').click({ position: { x: 100, y: 60 } })
+    await expect(page.locator('.gui-state.is-takeover')).toContainText('你已接管', { timeout: 10_000 })
+    await page.getByRole('button', { name: '交还 agent' }).click()
+    await expect(page.locator('.gui-state')).toContainText('旁观中', { timeout: 10_000 })
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

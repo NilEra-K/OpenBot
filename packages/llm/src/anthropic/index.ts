@@ -7,7 +7,7 @@
  * 自定义 base_url + 代理是国内刚需（与 openai-compat 同理）。
  */
 import { LlmError, LlmErrorCodes } from '../provider/index.js'
-import type { ChatProvider, ChatRequest, ChatResponse, ToolCall, ToolSpec } from '../provider/index.js'
+import type { ChatMessage, ChatProvider, ChatRequest, ChatResponse, ToolCall, ToolSpec } from '../provider/index.js'
 import { proxyDispatcher } from '../openai-compat/index.js'
 import type { FetchLike } from '../openai-compat/index.js'
 
@@ -36,7 +36,9 @@ export interface AnthropicProviderOptions {
 // ---- wire 类型（messages API，只声明用到的字段） ----
 
 interface WireBlock {
-  type: 'text' | 'tool_use' | 'tool_result'
+  type: 'text' | 'tool_use' | 'tool_result' | 'image'
+  text?: string
+  source?: { type: 'base64'; media_type: string; data: string }
   [key: string]: unknown
 }
 
@@ -159,31 +161,66 @@ function systemOf(request: ChatRequest): string | null {
   const parts: string[] = []
   if (request.system && request.system !== '') parts.push(request.system)
   for (const message of request.messages) {
-    if (message.role === 'system' && message.content !== '') parts.push(message.content)
+    // system 消息只取文本（内部 system role 不承载图像——多模态走 user/tool 消息）
+    if (message.role === 'system' && typeof message.content === 'string' && message.content !== '') {
+      parts.push(message.content)
+    }
   }
   return parts.length > 0 ? parts.join('\n\n') : null
 }
 
 /** ChatRequest → wire messages：assistant 工具调用 = content blocks（text + tool_use）；
- *  tool 回喂 = user 消息里的 tool_result 块（messages API 无独立 tool 角色） */
+ *  tool 回喂 = user 消息里的 tool_result 块（messages API 无独立 tool 角色）。
+ *  多模态（plan-computer-use Step 2）：content 分段数组 → text/image 块（image 走
+ *  source.base64——messages API 视觉惯例）；tool 回喂含图时 tool_result.content 用块数组 */
+function anthropicContent(message: ChatMessage): WireMessage['content'] {
+  if (typeof message.content === 'string') return message.content
+  return message.content.map((part) =>
+    part.type === 'text'
+      ? { type: 'text' as const, text: part.text ?? '' }
+      : {
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: part.image?.mime ?? 'image/png',
+            data: part.image?.base64 ?? '',
+          },
+        },
+  )
+}
+
 function toWireMessages(request: ChatRequest): WireMessage[] {
   const out: WireMessage[] = []
   for (const message of request.messages) {
     if (message.role === 'system') continue // 已并入顶层 system
     if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
       const blocks: WireBlock[] = []
-      if (message.content !== '') blocks.push({ type: 'text', text: message.content })
+      if (typeof message.content === 'string' && message.content !== '') {
+        blocks.push({ type: 'text', text: message.content })
+      } else if (Array.isArray(message.content)) {
+        for (const b of anthropicContent(message) as WireBlock[]) blocks.push(b)
+      }
       for (const call of message.toolCalls) {
         blocks.push({ type: 'tool_use', id: call.id, name: call.name, input: call.args ?? {} })
       }
       out.push({ role: 'assistant', content: blocks })
     } else if (message.role === 'tool') {
+      // 回喂含图：tool_result.content 用块数组（text + image）——动作后截图随文本一起回
+      const hasImage = Array.isArray(message.content) && message.content.some((p) => p.type === 'image')
       out.push({
         role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: message.toolCallId ?? '', content: message.content }],
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: message.toolCallId ?? '',
+            ...(hasImage
+              ? { content: anthropicContent(message) }
+              : { content: typeof message.content === 'string' ? message.content : '' }),
+          },
+        ],
       })
     } else {
-      out.push({ role: message.role === 'assistant' ? 'assistant' : 'user', content: message.content })
+      out.push({ role: message.role === 'assistant' ? 'assistant' : 'user', content: anthropicContent(message) })
     }
   }
   return out

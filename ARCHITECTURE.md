@@ -176,6 +176,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - **工具层为 OpenBot 重写**：
   - *in-box 工具族*（默认）：exec / fs 读写 / 构建 / snapshot，全部经 boxes 在沙箱内执行，Box 内自由。
   - *host 最小工具集*：仅限进程自身状态（读 transcript、消息收发、**记忆 save/recall**——backlog ①：agent 自己的工作集，不出 Box 概念面），**出 Box（宿主文件/网络）一律过闸门**。
+  - *computer 工具族*（沙箱内 GUI 操作——plan-computer-use 一期已实现）：screenshot/click/type/key/scroll 全经 boxes.exec 调 xdotool/scrot（CLI 即接口）——操作的是沙箱内 X server，与 exec 同级「Box 内自由」零新审批面；用户接管锁（GUI 视图首笔输入挂起 agent 下一个动作，「交还」放行）是壳层内存态。
 - **闸门（gate）在本包**：审批流 = runner 拦截 → transport 发 `approval` 事件 → renderer 弹窗 → 结果回写。
   审批复用 state 幂等账本（nonce）——重试不双弹窗、不双执行。原版账本设计为 OpenBot 闸门服务，是架构继承里最划算的回收。
 

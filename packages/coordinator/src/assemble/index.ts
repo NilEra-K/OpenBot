@@ -12,7 +12,8 @@ import type { ChatProvider } from '@openbot/llm'
 import { BoxRegistry, BoxesErrorCodes, MockBoxBackend } from '@openbot/boxes'
 import type { BoxBackend } from '@openbot/boxes'
 import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
-import { AutoApprovalGate, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner } from '@openbot/runner'
+import { AutoApprovalGate, computerTools, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner } from '@openbot/runner'
+import type { GuiTakeoverLock } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
 import { StreamHub } from '../stream-hub/index.js'
@@ -44,6 +45,12 @@ export interface AssembleOptions {
    * 「此前记忆」（读内存缓存）。缺省不启用（CLI 冒烟最小面）。
    */
   memory?: Pick<MemoryStore, 'append' | 'list' | 'listSync' | 'ensureLoaded'>
+  /**
+   * computer-use 工具族（plan-computer-use Step 4/5）：注入即注册 computer_* 工具族
+   * （沙箱 GUI 操作）。注册门（GUI 模板在场 ∩ 主力 provider 支持图像）在装配方判定——
+   * coordinator 只认锁接口。lock.waitTurn 在每个动作前等待（用户接管挂起）。
+   */
+  computer?: { lock: Pick<GuiTakeoverLock, 'waitTurn'> }
   maxToolRounds?: number
   /**
    * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
@@ -211,6 +218,13 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const memory = options.memory
   if (memory !== undefined) {
     tools.register(saveMemoryTool({ memory })).register(recallMemoryTool({ memory }))
+  }
+  // computer-use 工具族（plan-computer-use）：注入即注册（门在装配方）；与 exec 共用
+  // backend/bus/onStream/transcript——CLI 即接口（xdotool/scrot 经 boxes.exec，后端零改动）
+  if (options.computer !== undefined) {
+    for (const tool of computerTools({ backend, bus, onStream, transcript, lock: options.computer.lock })) {
+      tools.register(tool)
+    }
   }
   const basePrompt = options.systemPrompt
   const systemPrompt: string | ((agentId: string) => string) | undefined =

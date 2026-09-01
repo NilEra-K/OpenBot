@@ -40,13 +40,21 @@ export interface ToolContext {
   signal: AbortSignal
 }
 
+/** 工具结果（plan-computer-use Step 3）：纯文本快路径；图像在场（computer 截图）时
+ *  TurnRunner 组装 content parts 回喂多模态模型 */
+export interface ToolResult {
+  text: string
+  image?: { base64: string; mime: string }
+}
+
 export interface Tool {
   spec: ToolSpec
-  execute(ctx: ToolContext, args: unknown): Promise<string>
+  execute(ctx: ToolContext, args: unknown): Promise<string | ToolResult>
 }
 
 export class ToolRegistry {
   readonly #tools = new Map<string, Tool>()
+  readonly #lastResults = new Map<string, ToolResult>()
 
   register(tool: Tool): this {
     this.#tools.set(tool.spec.name, tool)
@@ -62,17 +70,24 @@ export class ToolRegistry {
   }
 
   /** 统一入口：未知工具与执行错误都转成回喂文本（模型可见），不让 turn 崩 */
-  async execute(ctx: ToolContext, call: ToolCall): Promise<string> {
+  async execute(ctx: ToolContext, call: ToolCall): Promise<string | ToolResult> {
     const tool = this.#tools.get(call.name)
     if (!tool) {
       return `错误 ${ToolErrorCodes.TOOL_NOT_FOUND}: 未知工具 ${call.name}`
     }
     try {
-      return await tool.execute(ctx, call.args)
+      const result = await tool.execute(ctx, call.args)
+      if (typeof result !== 'string') this.#lastResults.set(call.name, result)
+      return result
     } catch (err) {
       const ke = err instanceof KernelError ? err : new KernelError('TOOL_FAILED', String(err))
       return `错误 ${ke.code}: ${ke.message}`
     }
+  }
+
+  /** 最近一次含图结果（GUI 旁观视图的帧源——agent 视角截图；plan-computer-use Step 6） */
+  lastImageOf(toolName: string): { base64: string; mime: string } | undefined {
+    return this.#lastResults.get(toolName)?.image
   }
 }
 
@@ -329,4 +344,138 @@ export function recallMemoryTool(deps: MemoryToolDeps): Tool {
       return `共 ${entries.length} 条（新→旧）：\n${lines.join('\n')}`
     },
   }
+}
+
+// ---- computer 工具族（plan-computer-use Step 4/5）——沙箱内 GUI 操作，CLI 即接口
+//      （xdotool/scrot 全部经 boxes.exec，后端零改动）；与 exec 同级「Box 内自由」零审批面。
+//      注册门在装配层（desktop）：GUI 模板在场 ∩ 主力 provider supportsImages——不满足不注册。
+
+export interface GuiTakeoverLock {
+  /**
+   * 用户接管锁（plan-computer-use Step 5）：每个 computer 动作执行前等锁——用户接管中
+   * （GUI 视图收到用户输入）挂起（形态同审批挂起）；「交还 agent」放行。desktop 装配注入
+   * 实现；runner 只认这个最小接口（壳层内存态不进内核协议）。
+   */
+  waitTurn(): Promise<void>
+}
+
+export interface ComputerToolDeps extends BoxToolDeps {
+  /** 接管锁（可选——CLI 冒烟不带）；动作工具执行前等待 */
+  lock?: Pick<GuiTakeoverLock, 'waitTurn'>
+  /** 截图实现注入（默认真跑 scrot；测试/mock 注入替身） */
+  capture?: (boxId: string) => Promise<ToolResult['image']>
+  /** 动作执行注入（默认真跑 xdotool；测试/mock 注入替身记 argv） */
+  act?: (boxId: string, argv: string[]) => Promise<void>
+  /** 等待 GUI 响应（动作后截图前的静置毫秒；测试注入 0） */
+  settleMs?: number
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** 默认截图：scrot 全屏 → convert 缩放 1280 宽 jpg（token 纪律：jpg 比省一个量级） */
+async function captureScreen(backend: BoxToolDeps['backend'], boxId: string): Promise<ToolResult['image']> {
+  const shot = '/tmp/.openbot-shot.jpg'
+  const r = await backend.exec(boxId, {
+    command: [
+      'sh', '-c',
+      `scrot -o /tmp/.openbot-shot.png && convert /tmp/.openbot-shot.png -resize '1280x>' -quality 80 ${shot} && base64 -w0 ${shot}`,
+    ],
+    timeoutMs: 15_000,
+  })
+  if (r.exitCode !== 0) throw new KernelError('COMPUTER_CAPTURE_FAILED', `截图失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
+  const b64 = r.stdout.trim()
+  if (b64 === '') throw new KernelError('COMPUTER_CAPTURE_FAILED', '截图输出为空（DISPLAY 未就绪或 scrot 不在场）')
+  return { base64: b64, mime: 'image/jpeg' }
+}
+
+/** 默认动作：xdotool 经 sh -c（组合键等 shell 语义）；命令由本层构造（非用户输入拼 shell——
+ *  type 文本经单引号转义） */
+async function actXdotool(backend: BoxToolDeps['backend'], boxId: string, script: string): Promise<void> {
+  const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000 })
+  if (r.exitCode !== 0) throw new KernelError('COMPUTER_ACT_FAILED', `xdotool 失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
+}
+
+/** sh 单引号转义（computer_type 的用户文本——' 变 '\''） */
+function shQuote(s: string): string {
+  const BS = String.fromCharCode(92) // 反斜杠（多层引号转义地狱的字面绕行）
+  const esc = "'\\''" // ''\'''
+  return `'${s.replaceAll("'", esc)}'`
+}
+
+/** computer_screenshot：看屏（初见/核实；坐标空间即截图分辨率——模型所见即可点） */
+export function computerScreenshotTool(deps: ComputerToolDeps): Tool {
+  return {
+    spec: {
+      name: 'computer_screenshot',
+      description: '截取沙箱桌面全屏（返回图像）。坐标语义：截图分辨率即点击坐标系。初次看屏或核实状态时用。',
+    },
+    async execute(ctx) {
+      const boxId = requireBox(ctx)
+      const image = await (deps.capture?.(boxId) ?? captureScreen(deps.backend, boxId))
+      return { text: '已截图（见图像）', image }
+    },
+  }
+}
+
+/** 动作工具工厂：等待接管锁 → xdotool 动作 → 静置 → 附动作后截图（裁定 D） */
+function computerActionTool(
+  deps: ComputerToolDeps,
+  spec: ToolSpec,
+  buildScript: (args: Record<string, unknown>) => string,
+): Tool {
+  return {
+    spec,
+    async execute(ctx, args) {
+      const boxId = requireBox(ctx)
+      const record = asRecord(args)
+      // 接管锁（Step 5）：用户接管中挂起在此——「交还 agent」放行后继续
+      await deps.lock?.waitTurn()
+      const act = deps.act ?? ((id, argv) => actXdotool(deps.backend, id, argv.join(' ')))
+      await act(boxId, [buildScript(record)])
+      await sleep(deps.settleMs ?? 500)
+      // 动作后截图附回喂（960 宽降一档——多轮循环 token 纪律）
+      const image = await (deps.capture?.(boxId) ?? captureScreen(deps.backend, boxId))
+      return { text: '动作已执行（见动作后截图）', image }
+    },
+  }
+}
+
+/** computer 工具族全套（装配层按注册门条件注册） */
+export function computerTools(deps: ComputerToolDeps): Tool[] {
+  const num = (v: unknown): number => {
+    const n = typeof v === 'number' ? v : Number(v)
+    if (!Number.isFinite(n)) throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, '坐标必须是数字')
+    return Math.round(n)
+  }
+  return [
+    computerScreenshotTool(deps),
+    computerActionTool(deps, { name: 'computer_click', description: '点击沙箱桌面坐标 (x, y)——左键单击' }, (a) =>
+      `xdotool mousemove ${num(a['x'])} ${num(a['y'])} click 1`,
+    ),
+    computerActionTool(deps, { name: 'computer_double_click', description: '双击坐标 (x, y)' }, (a) =>
+      `xdotool mousemove ${num(a['x'])} ${num(a['y'])} click --repeat 2 --delay 150 1`,
+    ),
+    computerActionTool(deps, { name: 'computer_type', description: '在焦点元素键入文本（先 click 定位输入框）' }, (a) => {
+      const text = requireText(a['text'])
+      return `xdotool type --delay 30 -- ${shQuote(text)}`
+    }),
+    computerActionTool(deps, { name: 'computer_key', description: '按键或组合键（如 ctrl+a / Return / ctrl+w）' }, (a) => {
+      const key = requireText(a['key']).trim()
+      if (!/^[a-zA-Z0-9_+\-]+(\+[a-zA-Z0-9_+\-]+)*$/.test(key)) {
+        throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, `key 只接受组合键语法（字母数字与 +，收到：${key}）`)
+      }
+      return `xdotool key ${key}`
+    }),
+    computerActionTool(deps, { name: 'computer_scroll', description: '滚动（dy 正=向下，负=向上；步长约 120/格）' }, (a) => {
+      const dy = num(a['dy'])
+      const btn = dy >= 0 ? 5 : 4
+      const steps = Math.max(1, Math.min(Math.abs(dy) / 120, 20))
+      return `xdotool click --repeat ${Math.round(steps)} --delay 60 ${btn}`
+    }),
+  ]
+}
+
+function requireText(v: unknown): string {
+  if (typeof v !== 'string' || v === '') throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, '参数必须是非空字符串')
+  return v
 }

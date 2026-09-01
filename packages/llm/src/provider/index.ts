@@ -37,13 +37,28 @@ export interface ToolCall {
   args: unknown
 }
 
+/** 内容分段（plan-computer-use Step 2 多模态）：文本或图像（base64——内部规范形，
+ *  wire 编码归各协议实现：openai-compat 的 image_url data URI / anthropic 的 source.base64） */
+export interface ContentPart {
+  type: 'text' | 'image'
+  text?: string
+  image?: { base64: string; mime: string }
+}
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  /** 纯文本快路径（既有消息零变化）；多模态消息用分段数组 */
+  content: string | ContentPart[]
   /** role=assistant 历史消息携带的命令 */
   toolCalls?: ToolCall[]
   /** role=tool 消息对应的 ToolCall.id */
   toolCallId?: string
+}
+
+/** provider 能力声明（plan-computer-use）：supportsImages=true 才注册 computer 工具族 */
+export interface ProviderCapabilities {
+  /** 图像输入（截图→多模态模型）——档案级声明，缺省 false（不放假能力） */
+  supportsImages?: boolean
 }
 
 /** 工具描述（argsSchema 为 JSON Schema 形状的可选约束，openai-compat 映射为 parameters） */
