@@ -1224,14 +1224,15 @@ test('平台裁剪（P6 Step 5）：win 上 nspawn/UTM 不出现——探测列�
 
     // win 探测列表（probeAll 平台裁剪）：mock/wsl/docker/podman 在场，nspawn/utm 不探——
     // 选项集与探测区同源（探测事实驱动），两处都不得出现异平台后端
-    await expect(page.locator('.sandbox-pref', { hasText: 'systemd-nspawn' })).toHaveCount(0)
-    await expect(page.locator('.sandbox-pref', { hasText: 'UTM' })).toHaveCount(0)
+    await expect(page.locator('.sandbox-row', { hasText: 'systemd-nspawn' })).toHaveCount(0)
+    await expect(page.locator('.sandbox-row', { hasText: 'UTM' })).toHaveCount(0)
     await expect(page.locator('.sandbox-probe', { hasText: 'systemd-nspawn' })).toHaveCount(0)
     await expect(page.locator('.sandbox-probe', { hasText: 'UTM' })).toHaveCount(0)
     // 本平台候选在场：WSL2 选项（探测项不问可用性——不可用时选项在、选中如实降级）
-    await expect(page.locator('.sandbox-pref', { hasText: 'WSL2' })).toHaveCount(1)
-    // 探测区必有 mock chip（恒可用的确定性地基）
-    await expect(page.locator('.sandbox-probe .chip', { hasText: '模拟' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.sandbox-row', { hasText: 'WSL2' })).toHaveCount(1)
+    // 探测并入列表行后（0.1.2 改版）：mock 行恒在（确定性地基），无独立探测区
+    await expect(page.locator('.sandbox-row', { hasText: '模拟' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.sandbox-probe')).toHaveCount(0)
   } finally {
     await app.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})

@@ -277,10 +277,15 @@ const toggleThink = (key: string): void => {
   expandedThink.value = next
 }
 
-/** 收起态摘要：首行截断 */
+/** 收起态摘要：首行截断。剥离 markdown 记号（审计 P2-9——折叠行预览裸奔 **加粗** 与 `code` 星号反引号） */
 const thinkSummary = (block: LiveStreamBlock): string => {
   const firstLine = block.stdout.split('\n')[0] ?? ''
-  return firstLine.length > 60 ? `${firstLine.slice(0, 60)}…` : firstLine
+  const plain = firstLine
+    .replaceAll('**', '')
+    .replaceAll('`', '')
+    .replace(/^#+\s*/, '')
+    .trim()
+  return plain.length > 60 ? `${plain.slice(0, 60)}…` : plain
 }
 
 /** 流滚动到底（新消息/切换会话时——硬事件直接贴底） */

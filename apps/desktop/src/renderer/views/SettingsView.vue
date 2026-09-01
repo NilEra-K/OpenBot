@@ -10,6 +10,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { ProviderView, SandboxPref } from '../stores/kernel'
+import HelpTip from '../components/HelpTip.vue'
 import { useUiStore } from '../stores/ui'
 import type { ThemePref } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
@@ -250,6 +251,9 @@ const prefOptions = computed<PrefOption[]>(() => {
   return PREF_OPTIONS.filter((o) => o.value === 'auto' || o.value === 'mock' || probed.has(o.value as Exclude<SandboxPref, 'auto' | 'mock'>))
 })
 
+/** 该偏好项的探测事实（0.1.2 列表化：chip 并入行内；auto 无探测项返回 undefined，mock 恒可用） */
+const probeOf = (value: SandboxPref) => kernel.sandbox?.probes.find((p) => p.id === value)
+
 const sandboxChoice = ref<SandboxPref>('auto')
 const sandboxError = ref<string | null>(null)
 /** stored 变化（boot 加载/set 成功）时同步表单值 */
@@ -296,16 +300,17 @@ const wslHelpNeeded = computed(() => {
 <template>
   <section class="view view-scroll">
     <div class="settings">
-      <!-- LLM 推理（真实命令面） -->
+      <!-- LLM 推理（真实命令面）——说明收进 ⓘ（0.1.2 设置页改版：正文只留活数据） -->
       <div class="set-sec-row">
         <div class="set-sec">LLM 推理</div>
-        <button class="btn btn-secondary btn-sm" @click="openCreate">＋ 添加模型</button>
+        <HelpTip
+          text="接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个；设为主力后对管家与全部 agent 下轮对话生效；可设一个回退端点——主力请求失败（网络/超时/过载）时本轮自动降级，主力恢复后下轮自然切回。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。"
+        />
+        <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openCreate">＋ 添加模型</button>
       </div>
-      <div class="set-sec-note">
-        接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个；
-        设为主力后对管家与全部 agent 下轮对话生效；可设一个回退端点——主力请求失败（网络/超时/过载）时本轮自动降级，
-        主力恢复后下轮自然切回。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。
-        当前主力：<b class="mono">{{ kernel.defaultProvider ?? '未配置（对话将失败）' }}</b>
+      <div class="kv">
+        <span class="k">当前主力</span>
+        <span class="v mono">{{ kernel.defaultProvider ?? '未配置（对话将失败）' }}</span>
       </div>
 
       <div v-for="p in kernel.providers" :key="p.name" class="cfg-row" :class="{ 'is-primary': p.name === kernel.defaultProvider }">
@@ -383,11 +388,13 @@ const wslHelpNeeded = computed(() => {
         </div>
       </div>
 
-      <!-- 沙箱后端（装配事实 + 偏好选择；plan-p3 Step 5） -->
-      <div class="set-sec">沙箱后端</div>
-      <div class="set-sec-note">
-        重活进本机沙箱。装配时按「偏好 × 环境探测」选择后端——改动偏好<b>重启后生效</b>（装配期决策，不热切换）；
-        偏好不可用时如实回退 mock（命令返回模拟输出）并注明原因。
+      <!-- 沙箱后端（装配事实 + 偏好选择；plan-p3 Step 5）——说明收进 ⓘ（0.1.2 改版：
+           偏好改五行列表，环境探测并入行内 chip，不再独立分节） -->
+      <div class="set-sec-row">
+        <div class="set-sec">沙箱后端</div>
+        <HelpTip
+          text="重活进本机沙箱。装配时按「偏好 × 环境探测」选择后端——改动偏好重启后生效（装配期决策，不热切换）；偏好不可用时如实回退 mock（命令返回模拟输出）并注明原因。"
+        />
       </div>
       <template v-if="kernel.sandbox">
         <div class="kv">
@@ -407,11 +414,12 @@ const wslHelpNeeded = computed(() => {
           <span class="mono">docs/platforms.md</span>，完成后重启应用即可生效。
         </p>
 
-        <div class="sandbox-prefs">
+        <!-- 偏好五行列表：名称 + 说明 + 该后端探测 chip（auto 无探测项/mock 恒可用） -->
+        <div class="sandbox-list">
           <label
             v-for="opt in prefOptions"
             :key="opt.value"
-            class="sandbox-pref"
+            class="sandbox-row"
             :class="{ 'is-on': sandboxChoice === opt.value, 'is-disabled': opt.disabled }"
           >
             <input
@@ -423,18 +431,20 @@ const wslHelpNeeded = computed(() => {
               :disabled="opt.disabled"
               @change="applySandbox"
             />
-            <span class="sandbox-pref-label">{{ opt.label }}</span>
-            <span class="sandbox-pref-note">{{ opt.note }}</span>
+            <span class="sandbox-row-label">{{ opt.label }}</span>
+            <span class="sandbox-row-note">{{ opt.note }}</span>
+            <span
+              v-if="probeOf(opt.value)"
+              class="chip sandbox-row-probe"
+              :class="probeOf(opt.value)!.available ? 'chip-success' : ''"
+              :title="probeOf(opt.value)!.available ? 'CLI 探测可用' : probeOf(opt.value)!.reason"
+            >
+              {{ probeOf(opt.value)!.available ? '可用' : '不可用' }}
+            </span>
           </label>
         </div>
         <p v-if="sandboxDirty" class="set-sec-note">偏好已修改——重启应用后生效（当前会话仍运行在 {{ backendLabel(kernel.sandbox.backendId) }}）。</p>
         <p v-if="sandboxError" class="form-error">{{ sandboxError }}</p>
-
-        <div class="kv"><span class="k">环境探测</span><span class="v"></span></div>
-        <div v-for="p in kernel.sandbox.probes" :key="p.id" class="sandbox-probe">
-          <span class="chip" :class="p.available ? 'chip-success' : ''">{{ backendLabel(p.id) }} · {{ p.available ? '可用' : '不可用' }}</span>
-          <span v-if="!p.available && p.reason" class="sandbox-probe-reason mono">{{ p.reason }}</span>
-        </div>
 
         <!-- caps 事实（随所选后端变化） -->
         <div class="kv"><span class="k">能力声明（caps）</span><span class="v"></span></div>
@@ -444,18 +454,20 @@ const wslHelpNeeded = computed(() => {
       </template>
       <p v-else class="settings-empty">沙箱状态未加载（网关未连接）</p>
 
-      <!-- 权限策略（呈现现状，不放假开关） -->
-      <div class="set-sec">权限策略</div>
-      <div class="set-sec-note">
-        当前为手工审批闸门（Manual）：agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，
-        挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。
+      <!-- 权限策略（呈现现状，不放假开关）——说明收进 ⓘ（0.1.2 改版） -->
+      <div class="set-sec-row">
+        <div class="set-sec">权限策略</div>
+        <HelpTip
+          text="当前为手工审批闸门（Manual）：agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。"
+        />
       </div>
 
       <!-- 数据（P4 Step 11，裁定 E 一期只读：路径展示 + 打开文件夹；导出/清空属后续版本） -->
-      <div class="set-sec">数据</div>
-      <div class="set-sec-note">
-        对话与执行记录以 JSONL 追加落盘（append-only——只增不改，永不就地改写历史）；全部数据只在本机，
-        不上传。导出全部 / 清空 transcript 属后续版本。
+      <div class="set-sec-row">
+        <div class="set-sec">数据</div>
+        <HelpTip
+          text="对话与执行记录以 JSONL 追加落盘（append-only——只增不改，永不就地改写历史）；全部数据只在本机，不上传。导出全部 / 清空 transcript 属后续版本。"
+        />
       </div>
       <template v-if="dataPaths">
         <div class="kv"><span class="k">数据目录</span><span class="v mono kv-path">{{ dataPaths.data }}</span></div>
@@ -483,22 +495,23 @@ const wslHelpNeeded = computed(() => {
         ></button>
       </div>
 
-      <!-- 外观（呈现层偏好，即时生效；复用沙箱偏好卡的交互与样式） -->
-      <div class="set-sec">外观</div>
-      <div class="set-sec-note">
-        日间/夜间主题即时生效，「跟随系统」随 Windows 主题自动切换；标题栏的太阳/月亮按钮可随时快捷切换。
-        此偏好只存本机（浏览器存储），不进内核设置。
+      <!-- 外观（呈现层偏好，即时生效）——说明收进 ⓘ（0.1.2 改版）；主题选项同步列表化 -->
+      <div class="set-sec-row">
+        <div class="set-sec">外观</div>
+        <HelpTip
+          text="日间/夜间主题即时生效，「跟随系统」随 Windows 主题自动切换；标题栏的太阳/月亮按钮可随时快捷切换。此偏好只存本机（浏览器存储），不进内核设置。"
+        />
       </div>
-      <div class="sandbox-prefs">
+      <div class="sandbox-list">
         <label
           v-for="opt in THEME_OPTIONS"
           :key="opt.value"
-          class="sandbox-pref"
+          class="sandbox-row"
           :class="{ 'is-on': ui.theme === opt.value }"
         >
           <input type="radio" name="theme-pref" class="sandbox-pref-radio" :value="opt.value" v-model="themeChoice" />
-          <span class="sandbox-pref-label">{{ opt.label }}</span>
-          <span class="sandbox-pref-note">{{ opt.note }}</span>
+          <span class="sandbox-row-label">{{ opt.label }}</span>
+          <span class="sandbox-row-note">{{ opt.note }}</span>
         </label>
       </div>
 

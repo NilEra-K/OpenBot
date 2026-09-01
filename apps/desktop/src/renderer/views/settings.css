@@ -8,6 +8,8 @@
 
 .settings {
   max-width: 780px;
+  margin: 0 auto; /* 母版 .settings 同款：居中（原型 774 行）——修左偏失衡 */
+  padding: 0 4px 40px;
 }
 
 .mono {
@@ -23,7 +25,7 @@
 .set-sec-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px; /* 标题 + ⓘ 紧跟；右侧动作按钮由按钮自身 margin-left:auto 推（0.1.2：space-between 会把 ⓘ 推到最右） */
   margin-top: 26px;
 }
 
@@ -183,7 +185,10 @@
 }
 
 .btn-primary:hover {
-  filter: brightness(1.08);
+  /* 显式带背景：不带则被 .btn:hover 的 bg3（特异性同 0,2,0 且在其后命中）覆盖成灰白底
+     ——主按钮 hover 失真 bug（2026-09-01 用户实测报障，rooms 空态 CTA 白字白底） */
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 .btn-primary:disabled {
@@ -379,11 +384,66 @@
   word-break: break-all;
 }
 
-.sandbox-prefs {
+/* ---- 沙箱偏好/主题选项列表（0.1.2 设置页改版：五行列表行式——名称 + 说明 + 探测 chip 并入行） ---- */
+
+.sandbox-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 10px 0 6px;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 6px;
+}
+
+.sandbox-row {
+  position: relative; /* 绝对定位 radio 的包含块 */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg1);
+  cursor: pointer;
+  transition: border-color 140ms var(--ease), background 140ms var(--ease);
+}
+
+.sandbox-row:hover {
+  border-color: var(--line-strong);
+}
+
+.sandbox-row.is-on {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: linear-gradient(0deg, var(--accent-weak), var(--accent-weak)), var(--bg1);
+}
+
+.sandbox-row.is-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.sandbox-row-label {
+  font-size: 12.5px;
+  font-weight: 650;
+  flex: none;
+  width: 108px;
+}
+
+.sandbox-row-note {
+  font-size: 11px;
+  color: var(--ink3);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-row.is-on .sandbox-row-note {
+  white-space: normal; /* 选中行说明完整可见（未选行省略——列表扫读降噪） */
+}
+
+.sandbox-row-probe {
+  flex: none;
 }
 
 .sandbox-pref {
@@ -432,10 +492,19 @@
 }
 
 .sandbox-probe {
+  /* 审计 P2-8：两列网格（原一行一个纵向堆叠太松——318px 宽的设置列里 4 项排 8 行） */
   display: flex;
   align-items: baseline;
   gap: 8px;
   padding: 3px 0;
+}
+
+/* 探测区容器：两列网格。落在 .kv 分节标题之后由 SettingsView 的 .sandbox-probe-list 包裹——
+   无该类时（历史结构）保持堆叠，此规则只约束新容器 */
+.probe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 2px 18px;
 }
 
 .sandbox-probe-reason {
@@ -443,7 +512,8 @@
   color: var(--ink3);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal; /* 两列网格下允许折行（不可用原因长文案 240px 内截断太狠） */
+  line-height: 1.5;
 }
 
 .kv-sub .k {

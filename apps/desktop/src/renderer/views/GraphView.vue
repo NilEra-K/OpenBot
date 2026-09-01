@@ -59,13 +59,15 @@ const nodes = computed<NodeGeom[]>(() => {
     ),
   ]
   ring.forEach((it, i) => {
-    const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(ring.length, 1)
+    // 椭圆轨道（审计 P2-10）：横向椭圆（rx > ry）——少节点时不再竖线扎堆（2 节点正上下是
+    // 最差情形），多节点时构图更贴画布宽高比；首节点从正上改为 -60° 起步避开纯正上/正下
+    const angle = -Math.PI / 3 + (2 * Math.PI * i) / Math.max(ring.length, 1)
     list.push({
       id: it.id,
       label: it.label,
       initial: it.label.trim().charAt(0) || '?',
-      x: CX + ORBIT * Math.cos(angle),
-      y: CY + ORBIT * Math.sin(angle),
+      x: CX + ORBIT * 1.12 * Math.cos(angle),
+      y: CY + ORBIT * 0.8 * Math.sin(angle),
       r: 24,
       isUser: false,
       isGroup: isGroupId(it.id),

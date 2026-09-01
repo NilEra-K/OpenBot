@@ -8,7 +8,7 @@
 
 .view-head {
   max-width: 1120px;
-  margin-bottom: 18px;
+  margin: 0 auto 18px; /* 母版 .view-head 同款：容器内水平居中（1120 上限） */
 }
 
 .view-title {
@@ -132,7 +132,8 @@
 
 .box-gauges {
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap; /* 三仪表同排放不下时换行（flex:none 数值不缩，防溢出压到相邻项——审计 P0-1） */
+  gap: 6px 14px;
   margin: 4px 0 2px;
 }
 
@@ -231,6 +232,7 @@
 
 .boxes {
   max-width: 1120px;
+  margin: 0 auto; /* 母版 .boxes 同款：居中（原型 657 行） */
 }
 
 .box-sum {

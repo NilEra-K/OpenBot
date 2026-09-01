@@ -213,6 +213,12 @@ watch(
   font-weight: 650;
 }
 
+/* hover 提亮（同族修法：显式背景——防各处 .btn:hover 的 bg3 覆盖成灰白底） */
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
 .btn-danger-ghost {
   background: transparent;
   border-color: rgba(var(--danger-rgb), 0.35);
