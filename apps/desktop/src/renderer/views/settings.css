@@ -496,3 +496,32 @@
   white-space: normal;
   max-width: 70%;
 }
+
+/* ---- 跨用户房间区块（P7 mirror 一期）：接入表单 ---- */
+
+.relay-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 4px;
+}
+
+.relay-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.relay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink2);
+  cursor: pointer;
+}
+
+.relay-actions {
+  display: flex;
+  gap: 8px;
+}

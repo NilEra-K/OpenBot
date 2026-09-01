@@ -166,7 +166,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - 群聊编排：有界轮转（消息上限/轮次上限/全员 pass 收敛/用户消息 supersede）、@提及路由、每成员独立会话状态。
 - 广播：→全员单向扇出，顺序调度、并发执行、无环（发起方：用户与 steward，见上）。
 - subagent：父 agent 派生后台 run，lineage 世系、steer、abort。
-- `CrossUserRelay`（跨用户房间）：turn-request/result、10 分钟窗口 30 turn 预算、不可达退避、nonce 幂等——**协议保留，实现 P7**。
+- `CrossUserRelay`（跨用户房间）：turn-request/result、10 分钟窗口 30 turn 预算、不可达退避、nonce 幂等——**已实现（P7；协议与自托管指南 [docs/relay-protocol.md](docs/relay-protocol.md)，本地优先/P2P 优先措辞见其 §0）**。
 - 云 agent 桥：**接口桩，保留协议默认不用**（产品定位写死；后续可接第三方云做弹性补充）。
 - 删除原版 WebAuthn provider 契约（原版遗物，与 OpenBot 无关）。
 
@@ -201,7 +201,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 |---|---|---|
 | `apps/desktop` | **第一交付** | Electron：main（装配 coordinator + 网关）/ preload（contextBridge 注入 token）/ renderer（Vue 3 五大视图）。托盘常驻、自启动、自动更新 |
 | `apps/cli` | P1 | 无壳冒烟：mock llm + mock box 跑全链路（chat → A2A → box exec）。**CI 全确定性的地基**，也是「packages 壳无关」的活证据 |
-| `apps/relay` | P7 占位 | 跨用户房间公网 host（Hono + WS），到时候再说 |
+| `apps/relay` | **P7 已实现** | 跨用户房间公网 host（Hono 控制面 + ws 数据面，自托管——官方不运营服务；[docs/relay-protocol.md](docs/relay-protocol.md)） |
 
 ---
 
@@ -229,6 +229,9 @@ P7 做 relay 时这就是线上协议，不二次发明。
 2. preload 经 contextBridge 注入 bearer token，所有请求必带；
 3. 校验 `Host` 头（防 DNS rebinding）；renderer 开 `sandbox` + `contextIsolation`，CSP 收紧；
 4. 渲染远端房间内容（跨用户消息）必须过 DOMPurify。
+5. **公网 relay 面（P7）**：invite 码认证 + 房间隔离 + 限速 + 消息上限（朴素版如实——
+   [docs/relay-protocol.md](docs/relay-protocol.md) §5 安全基线表）；TLS 交反代/Tailscale 隧道；
+   turn-request 是远端触达本端执行面的唯一通道（受控进入，走既有排队与审批闸门）。
 
 ---
 
@@ -367,7 +370,7 @@ OpenBot/
 ├─ apps/
 │  ├─ cli/          冒烟与 CI：mock llm + mock box 全链路
 │  ├─ desktop/      main · preload · renderer(Vue3) · resources · electron-builder.yml
-│  └─ relay/        P7 占位
+│  └─ relay/        P7 已实现（跨用户房间 host，自托管）
 └─ tools/           build / publish 脚本
 ```
 
@@ -386,7 +389,7 @@ Windows-first 的约束收敛在三处：`packages/boxes`（wsl/docker 后端）
 | **P4 原型对齐收敛** | 差距清零：命令面板（Ctrl K）/ @提及 / toast / 状态栏 / 新建 agent 向导 / Box 休眠与快照回滚 / ctx 档案 / 演示值清扫（2026-08-25 用户裁定重定位——原「平台扩展」顺延 P5、relay 顺延 P6；细案 [docs/plan-p4.md](docs/plan-p4.md)） | prototype.html 差距盘点逐项「已实现 / 记档裁定」二态收敛；三命令 + E2E 全绿 |
 | **P5 消息域收敛 + OCI 双壳** | 广播（@全员/@多提及——扇出调度是内核语义）+ 群聊（有界轮转/sysnote/群组节点）+ backend-docker/backend-podman（OCI 底座共用两薄壳——v1 四后端收官；细案 [docs/plan-p5.md](docs/plan-p5.md)）（2026-08-26 用户裁定重排——原「平台扩展」顺延 P6、relay 顺延 P7） | @全员与群聊 E2E 全链路；四后端矩阵如实标注；三命令 + E2E 全绿 |
 | **P6 平台扩展与分发** | backend-nspawn/backend-utm（CLI 底座 + 脚本化单测 + 探测呈现——真机链路记未验收）、平台化装配（probeAll/AUTO_ORDER 按平台）、electron-builder 打包链（main/preload esbuild 预 bundle 消解 pnpm workspace 收集坑；win nsis/portable 真机产物；linux deb/AppImage + mac dmg 配置就绪记「待设备」——2026-09-01 裁定 A；细案 [docs/plan-p6.md](docs/plan-p6.md)） | win 双产物真机装卸闭环 + E2E 打包产物全链；win 上不出现 nspawn/UTM（探测事实驱动）；三命令 + E2E 全绿 |
-| **P7 relay** | 跨用户房间公网 host、CrossUserRelay 实现 | P2P/Tailscale 优先叙事落地 |
+| **P7 relay** | 跨用户房间公网 host（Hono 控制面 + ws 数据面，自托管 node/Docker 双形态）+ CrossUserRelay 实现（信封/预算/幂等/退避四件套兑现——host 是预算与幂等单一事实源）+ 桌面接入（RelayClient 退避重连/mirror 双向/远端 turn 受控进入走审批闸门——2026-09-01 裁定 B/C/D）+ 名册远端节/远端消息卡/设置页房间区块 + E2E 真 host 全链（含 DOMPurify 净化断言）；细案 [docs/plan-p7.md](docs/plan-p7.md) | P2P/Tailscale 优先叙事落地（[relay-protocol.md](docs/relay-protocol.md) §0 钉死）；E2E 全链 + 三命令全绿 |
 
 注：P1 是八包结构直接送的礼物——**不装 Electron 就能验证整个内核**，这是保留包边界的直接回报。
 

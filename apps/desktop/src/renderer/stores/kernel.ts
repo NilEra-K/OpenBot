@@ -52,7 +52,7 @@ export interface RosterEntry {
 
 export interface ChatMessage {
   messageId: string
-  kind: 'user' | 'agent' | 'a2a' | 'group-user' | 'group-agent' | 'group-sys'
+  kind: 'user' | 'agent' | 'a2a' | 'group-user' | 'group-agent' | 'group-sys' | 'remote'
   from: string
   to: string
   text: string
@@ -63,6 +63,8 @@ export interface ChatMessage {
   pending?: boolean
   /** 发送失败（网络/领域错误）：UI 显示重试 */
   failed?: boolean
+  /** 远端 mirror 消息（P7）：呈现署名（渲染走同一 markdown+DOMPurify 链——远端内容必净化） */
+  speakerName?: string
 }
 
 /** 群档案（P5 Step 4，v1.group.list 返回） */
@@ -71,6 +73,16 @@ export interface GroupEntry {
   name: string
   members: string[]
   createdAt: number
+}
+
+/** 远端 mirror 成员（P7）：呈现形状（v1.system.remote-members 事件 payload 同构） */
+export interface RelayStatus {
+  enabled: boolean
+  url: string
+  roomId: string
+  inviteCode: string
+  displayName: string
+  connected: boolean
 }
 
 export interface PendingApproval {
@@ -212,6 +224,11 @@ export const useKernelStore = defineStore('kernel', {
     /** 引导错误（网关不可达/装配失败）——空缺态提示的数据来源 */
     bootError: null as string | null,
     roster: [] as RosterEntry[],
+    /** 远端 mirror 成员（P7）：跨用户房间的易态投影（v1.system.remote-members 事件驱动；
+     *  重连后 hello 快照重建——不持久化，呈现侧只读） */
+    remoteMembers: [] as Array<{ memberId: string; displayName: string; connected: boolean }>,
+    /** 跨用户房间接入状态（P7）：settings 真相 + 当前连接态 */
+    relay: null as RelayStatus | null,
     stewardId: null as string | null,
     /** 群清单（P5 Step 4）：boot 与 v1.group.state 事件时刷新 */
     groups: [] as GroupEntry[],
@@ -285,6 +302,7 @@ export const useKernelStore = defineStore('kernel', {
         this.approvalMode = (await client.call<{ mode: 'manual' | 'auto' }>('v1.approval.mode')).mode
         await this.refreshSettings()
         await this.refreshLlmStatus()
+        await this.refreshRelay()
         const boxes = await client.call<Array<{ boxId: string; spec: { image: string; cpus?: number; memoryMb?: number }; state: BoxCard['state']; createdAt: number }>>('v1.boxes.list')
         this.boxes = boxes.map((b) => ({
           boxId: b.boxId,
@@ -332,6 +350,14 @@ export const useKernelStore = defineStore('kernel', {
       const created = await this.call<{ agentId: string }>('v1.system.registerAgent', input)
       await this.refreshRoster()
       return created.agentId
+    },
+    /** 跨用户房间接入（P7）：状态快照与写入（重启生效——装配期决策） */
+    async refreshRelay(): Promise<void> {
+      this.relay = await this.call<RelayStatus>('v1.relay.status')
+    },
+    async setRelay(input: Omit<RelayStatus, 'connected'>): Promise<void> {
+      await this.call('v1.relay.set', input)
+      await this.refreshRelay()
     },
     /** Box 休眠/唤醒（P4 Step 8）：状态转移经 v1.box.state 事件回放（boxes/ctx 灰化同一信号源） */
     async pauseBox(boxId: string): Promise<void> {
@@ -678,6 +704,24 @@ export const useKernelStore = defineStore('kernel', {
         case 'v1.group.state':
           void this.refreshGroups() // 群清单变更（created/removed）——拉快照为准
           return
+        case 'v1.system.remote-members':
+          // 远端成员快照（P7）：最新值语义（重放幂等——投影收敛到当前在场表）
+          this.remoteMembers = event.payload.members.map((m) => ({ ...m }))
+          return
+        case 'v1.message.remote': {
+          // 远端 mirror 消息（P7）：呈现于管家会话流（署名远端成员）；渲染走同一净化链
+          const p = event.payload
+          this.messages.push({
+            messageId: p.messageId,
+            kind: 'remote',
+            from: `remote:${p.fromMemberId}`,
+            to: 'user',
+            text: p.text,
+            at: event.at,
+            speakerName: p.speakerName,
+          })
+          return
+        }
         case 'v1.approval.requested': {
           // nonce 幂等：重放/重试不双弹窗
           if (this.pendingApprovals.some((a) => a.nonce === event.payload.nonce)) return

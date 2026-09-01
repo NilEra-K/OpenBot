@@ -32,6 +32,8 @@ const subOf = (agent: RosterEntry): string => {
 
 /** 群图标（prototype ICONS.chat 同源 path；视图 0 0 24 24） */
 const CHAT_ICON = '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
+/** 远端成员图标（P7）：地球两笔弧线——跨公网房间的语义（stroke 风格与图标体系一致） */
+const REMOTE_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 2.8 15.4 0 18M12 3c-2.8 2.6-2.8 15.4 0 18"/>'
 </script>
 
 <template>
@@ -86,6 +88,22 @@ const CHAT_ICON = '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1
       </span>
     </button>
     <button class="roster-new" type="button" @click="ui.openGroupWizard()">＋ 建群</button>
+
+    <!-- 房间成员分节（P7 mirror 一期）：远端 mirror 成员是易态投影（事件驱动快照）——
+         只读呈现不进会话路由（远端触达执行面的唯一通道是 turn-request，走审批闸门） -->
+    <template v-if="kernel.remoteMembers.length > 0">
+      <div class="roster-sec">房间成员</div>
+      <div v-for="m in kernel.remoteMembers" :key="m.memberId" class="roster-item" aria-label="远端成员">
+        <span class="avatar avatar-group">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="REMOTE_ICON"></svg>
+          <span class="stat-dot" :class="m.connected ? 'idle' : ''"></span>
+        </span>
+        <span class="ri-text">
+          <span class="ri-name">{{ m.displayName }}</span>
+          <span class="ri-sub">远端 mirror</span>
+        </span>
+      </div>
+    </template>
   </aside>
 </template>
 

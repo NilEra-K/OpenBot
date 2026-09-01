@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@openbot/core": "workspace:*",
-    "@openbot/state": "workspace:*"
+    "@openbot/state": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

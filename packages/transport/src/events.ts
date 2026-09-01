@@ -119,6 +119,22 @@ export const EventPayloadSchemas = {
     role: z.enum(['steward', 'worker']),
     cause: z.enum(['registered', 'removed', 'appointed', 'dismissed', 'transferred']),
   }),
+  'v1.system.remote-members': z.object({
+    members: z.array(
+      z.object({
+        memberId: z.string(),
+        displayName: z.string(),
+        connected: z.boolean(),
+      }),
+    ),
+  }),
+  'v1.message.remote': z.object({
+    messageId: z.string(),
+    fromMemberId: z.string(),
+    speakerKind: z.enum(['user', 'agent']),
+    speakerName: z.string(),
+    text: z.string(),
+  }),
 } as const
 
 export type EventPayloadSchemaName = keyof typeof EventPayloadSchemas

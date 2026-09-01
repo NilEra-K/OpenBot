@@ -4,5 +4,23 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "description": "跨用户房间公网 host（P5 占位，Hono + WS）"
+  "description": "跨用户房间公网 host（P7：Hono 控制面 + ws 数据面，自托管）",
+  "scripts": {
+    "start": "node dist/index.js",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/index.js",
+    "dist": "pnpm -w run build && pnpm run bundle"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@openbot/core": "workspace:*",
+    "@openbot/messaging": "workspace:*",
+    "hono": "^4.13.5",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
+    "vitest": "^3.2.7"
+  }
 }

@@ -34,12 +34,26 @@ export interface StoredProviderProfile {
  *  mac: utm→docker→podman，P6 Step 5），不可用如实回退 */
 export type SandboxPreference = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'
 
+/** 跨用户房间接入（P7）：mirror 一期——本端对话镜像外流 + 远端 turn-request 受控进入。
+ *  enabled 且 url/roomId/inviteCode 非空才装配（装配期决策，改动重启生效——与沙箱偏好同语义） */
+export interface RelaySettings {
+  enabled: boolean
+  /** host WS 地址（ws://host:port） */
+  url: string
+  roomId: string
+  inviteCode: string
+  /** 本端在房间的呈现名 */
+  displayName: string
+}
+
 export interface AppSettings {
   version: 1
   defaultProvider?: string
   providers: StoredProviderProfile[]
   /** 沙箱后端偏好；缺省 auto（可选字段：旧文件读取端兼容，version 不动） */
   sandbox?: SandboxPreference
+  /** 跨用户房间接入（P7）；可选字段（旧文件兼容） */
+  relay?: RelaySettings
   /** 全局回退端点（P4 Step 11）：引用 providers 内档案名；主力请求失败时本轮降级，下轮自动回主力（不粘滞） */
   fallbackProvider?: string
 }
@@ -207,6 +221,17 @@ export class SettingsStore {
   async setSandbox(pref: SandboxPreference): Promise<void> {
     const settings = await this.load()
     await this.#save({ ...settings, sandbox: pref })
+  }
+
+  /** 跨用户房间接入（P7）：缺省未启用（enabled=false 且字段空——旧文件读取端兼容，version 不动） */
+  async getRelay(): Promise<RelaySettings> {
+    const settings = await this.load()
+    return settings.relay ?? { enabled: false, url: '', roomId: '', inviteCode: '', displayName: '' }
+  }
+
+  async setRelay(relay: RelaySettings): Promise<void> {
+    const settings = await this.load()
+    await this.#save({ ...settings, relay })
   }
 
   /** 回退端点档案名（null = 清除）；引用不存在的档案时拒绝（悬空引用属配置错误，显式失败） */

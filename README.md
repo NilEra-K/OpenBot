@@ -9,7 +9,19 @@
 
 ## 状态
 
-P6 平台扩展与分发进行中（六后端矩阵齐 + win 打包链落地）。路线图与各阶段验收标准见 ARCHITECTURE.md §11。
+P7 relay 已收官（跨用户房间自托管 host + 桌面接入全链）。路线图与各阶段验收标准见 ARCHITECTURE.md §11。
+
+## 跨用户房间（P7，自托管）
+
+好友跨公网进房间协作（mirror 一期：本端对话镜像给房间 + 远端 turn 请求经审批闸门受控进入）。
+**relay 是自托管软件，官方不运营服务**——推荐 Tailscale/自组网内自建：
+
+    pnpm --filter @openbot/relay start          # node 进程（env 约定见文档）
+    docker build -f apps/relay/Dockerfile -t openbot-relay .
+
+接入：桌面设置页「跨用户房间」填 host 地址/房间码/invite 码，重启生效。
+协议四件套（turn-request/result、10 分钟 30 turn 预算、不可达退避、nonce 幂等）与安全基线
+见 [docs/relay-protocol.md](docs/relay-protocol.md)（§0 本地优先先读）。
 
 ## 开发
 

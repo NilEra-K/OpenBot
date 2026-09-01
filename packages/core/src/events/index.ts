@@ -141,6 +141,21 @@ export interface SystemRosterPayload {
   cause: 'registered' | 'removed' | 'appointed' | 'dismissed' | 'transferred'
 }
 
+/** 远端 mirror 成员快照（P7）：跨用户房间的远端成员——壳级易态投影（desktop 维护，
+ *  重连后 hello 重建；不持久化、不参与本地调度/建群——社交面成员而非执行面成员） */
+export interface SystemRemoteMembersPayload {
+  members: Array<{ memberId: string; displayName: string; connected: boolean }>
+}
+
+/** 远端 mirror 消息到达（P7）：跨用户房间成员的本端对话镜像——呈现侧必须过 DOMPurify */
+export interface MessageRemotePayload {
+  messageId: string
+  fromMemberId: string
+  speakerKind: 'user' | 'agent'
+  speakerName: string
+  text: string
+}
+
 /** 群消息（P5 Step 3）：kind=user（用户群消息）/ agent（成员发言）/ sys（sysnote——建群、
  *  成员缺席、轮转收敛等系统注记）。群 = 虚拟会话对象（groupId 进 transcript 键空间） */
 export interface GroupMessagePayload {
@@ -180,6 +195,8 @@ export interface KernelEventMap {
   'v1.approval.requested': ApprovalRequestedPayload
   'v1.approval.resolved': ApprovalResolvedPayload
   'v1.system.roster': SystemRosterPayload
+  'v1.system.remote-members': SystemRemoteMembersPayload
+  'v1.message.remote': MessageRemotePayload
 }
 
 export type KernelEventType = keyof KernelEventMap

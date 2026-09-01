@@ -144,8 +144,8 @@ type UnitPart = { kind: 'think'; block: LiveStreamBlock } | { kind: 'exec'; inde
 interface StreamUnit {
   key: string
   at: number
-  kind: 'divider' | 'msg-user' | 'relay' | 'agent' | 'pending' | 'ended'
-  /** msg-user / relay / agent（最终消息；块组与进行中单元无） */
+  kind: 'divider' | 'msg-user' | 'msg-remote' | 'relay' | 'agent' | 'pending' | 'ended'
+  /** msg-user / msg-remote / relay / agent（最终消息；块组与进行中单元无） */
   msgIndex?: number
   parts: UnitPart[]
 }
@@ -157,7 +157,7 @@ const partAt = (part: UnitPart): number =>
 interface RawRow {
   key: string
   at: number
-  kind: 'msg-user' | 'msg-agent' | 'relay' | 'exec' | 'think'
+  kind: 'msg-user' | 'msg-agent' | 'msg-remote' | 'relay' | 'exec' | 'think'
   msgIndex?: number
   execIndex?: number
   block?: LiveStreamBlock
@@ -167,17 +167,20 @@ const streamUnits = computed<StreamUnit[]>(() => {
   const active = ui.activeAgentId
   const raw: RawRow[] = []
   kernel.messages.forEach((m, i) => {
+    // 远端 mirror 消息（P7）：呈现于管家会话（房间是全局协作面——管家是默认对话入口）
     const related =
-      m.kind === 'user'
-        ? m.to === active
-        : m.kind === 'agent'
-          ? m.from === active
-          : m.from === active || m.to === active
+      m.kind === 'remote'
+        ? active === kernel.stewardId
+        : m.kind === 'user'
+          ? m.to === active
+          : m.kind === 'agent'
+            ? m.from === active
+            : m.from === active || m.to === active
     if (!related) return
     raw.push({
       key: `m${i}`,
       at: m.at,
-      kind: m.kind === 'user' ? 'msg-user' : m.kind === 'agent' ? 'msg-agent' : 'relay',
+      kind: m.kind === 'user' ? 'msg-user' : m.kind === 'agent' ? 'msg-agent' : m.kind === 'remote' ? 'msg-remote' : 'relay',
       msgIndex: i,
     })
   })
@@ -217,6 +220,9 @@ const streamUnits = computed<StreamUnit[]>(() => {
         pendingParts = []
       }
       units.push({ key: row.key, at: row.at, kind: 'msg-user', msgIndex: row.msgIndex, parts: [] })
+    } else if (row.kind === 'msg-remote') {
+      // 远端 mirror（P7）：独立消息卡（不吸收思考/exec 块——那些归属本端 agent 单元）
+      units.push({ key: row.key, at: row.at, kind: 'msg-remote', msgIndex: row.msgIndex, parts: [] })
     } else {
       // relay：流内标记，不清空累积（块仍归属后续 agent 消息）
       units.push({ key: row.key, at: row.at, kind: 'relay', msgIndex: row.msgIndex, parts: [] })
@@ -651,6 +657,20 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                   <button v-else-if="kernel.messages[unit.msgIndex!]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
                 </div>
                 <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
+              </div>
+            </div>
+
+            <!-- 远端 mirror 消息（P7）：房间成员发言——署名远端名 + 远端标识；
+                 渲染走同一 renderMarkdown（DOMPurify 链——远端内容必净化的协议约束） -->
+            <div v-else-if="unit.kind === 'msg-remote'" class="m">
+              <div class="avatar neutral">{{ (kernel.messages[unit.msgIndex!]!.speakerName ?? '远').slice(0, 1) }}</div>
+              <div class="m-body">
+                <div class="m-meta">
+                  <span class="m-name">{{ kernel.messages[unit.msgIndex!]!.speakerName ?? '远端成员' }}</span>
+                  <span class="m-state">房间 · 远端</span>
+                  <span class="m-time">{{ fmtTime(unit.at) }}</span>
+                </div>
+                <div class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
               </div>
             </div>
 

@@ -25,6 +25,8 @@ onMounted(() => {
     ?.version()
     .then((v: string) => (appVersion.value = v))
     .catch(() => (appVersion.value = null)) // 桥缺失（浏览器 dev）——如实显示
+  // 房间连接态是易态（boot 快照会过期）——进设置页现拉（v1.relay.status 实时值）
+  void kernel.refreshRelay()
 })
 
 // ---- 外观（呈现层偏好：localStorage 持久化，不进内核 settings——协议纯度） ----
@@ -241,6 +243,48 @@ const prefOptions = computed<PrefOption[]>(() => {
 
 const sandboxChoice = ref<SandboxPref>('auto')
 const sandboxError = ref<string | null>(null)
+
+// ---- 跨用户房间（P7 mirror 一期）：表单值与 stored 分离——未保存改动有提示 ----
+const relayForm = ref<null | { enabled: boolean; url: string; roomId: string; inviteCode: string; displayName: string }>(null)
+const relayError = ref<string | null>(null)
+const relaySaving = ref(false)
+const relaySaved = ref(false)
+watch(
+  () => kernel.relay,
+  (r) => {
+    if (r && relayForm.value === null) {
+      relayForm.value = { enabled: r.enabled, url: r.url, roomId: r.roomId, inviteCode: r.inviteCode, displayName: r.displayName }
+    }
+  },
+  { immediate: true },
+)
+const relayDirty = computed(() => {
+  const r = kernel.relay
+  const f = relayForm.value
+  return r !== null && f !== null && (r.enabled !== f.enabled || r.url !== f.url || r.roomId !== f.roomId || r.inviteCode !== f.inviteCode || r.displayName !== f.displayName)
+})
+/** 状态行 = 装配事实优先（env 通道接入时 settings.enabled 可能为 false——连接真相以实际为准） */
+const relayStateLabel = computed(() => {
+  if (kernel.relay?.connected) return '已连接'
+  if (kernel.relay?.enabled) return '连接中/退避重试'
+  return '未启用'
+})
+const saveRelay = async (): Promise<void> => {
+  const f = relayForm.value
+  if (f === null) return
+  relaySaving.value = true
+  relayError.value = null
+  try {
+    await kernel.setRelay(f)
+    relaySaved.value = true
+    setTimeout(() => (relaySaved.value = false), 4_000)
+    toast.push('房间配置已保存——重启应用后生效', 'success')
+  } catch (err) {
+    relayError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    relaySaving.value = false
+  }
+}
 /** stored 变化（boot 加载/set 成功）时同步表单值 */
 watch(
   () => kernel.sandbox,
@@ -454,6 +498,49 @@ const wslHelpNeeded = computed(() => {
         </div>
       </template>
       <p v-else class="settings-empty">开发模式（无壳）——数据路径由桌面壳提供</p>
+
+      <!-- 跨用户房间（P7 mirror 一期）：接入配置——本地优先叙事（自托管/Tailscale 优先） -->
+      <div class="set-sec">跨用户房间</div>
+      <div class="set-sec-note">
+        好友跨公网进房间协作（mirror 一期：本端对话镜像给房间，远端 turn 请求经审批受控进入）。
+        relay host 是<b>自托管软件</b>——优先跑在 Tailscale/自组网内（官方不运营服务）；公网暴露请自配 TLS 反代。
+        改动<b>重启后生效</b>（连接是装配期决策）。
+      </div>
+      <template v-if="relayForm">
+        <div class="kv">
+          <span class="k">状态</span>
+          <span class="v mono">{{ relayStateLabel }}</span>
+        </div>
+        <div class="relay-form">
+          <label class="relay-field">
+            <span class="field-label">Host 地址（ws://…）</span>
+            <input v-model="relayForm.url" class="field-input mono" placeholder="ws://100.x.y.z:8080" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="relay-field">
+            <span class="field-label">房间码</span>
+            <input v-model="relayForm.roomId" class="field-input mono" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="relay-field">
+            <span class="field-label">Invite 码（凭据——不外传）</span>
+            <input v-model="relayForm.inviteCode" class="field-input mono" type="password" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="relay-field">
+            <span class="field-label">本端呈现名</span>
+            <input v-model="relayForm.displayName" class="field-input" placeholder="例：BoneSue" autocomplete="off" maxlength="32" />
+          </label>
+          <label class="relay-toggle">
+            <input type="checkbox" v-model="relayForm.enabled" />
+            <span>启用房间连接</span>
+          </label>
+          <p v-if="relayError" class="form-error">{{ relayError }}</p>
+          <div class="relay-actions">
+            <button class="btn btn-primary" :disabled="!relayDirty || relaySaving" @click="saveRelay">
+              {{ relaySaving ? '保存中…' : '保存（重启生效）' }}
+            </button>
+          </div>
+          <p v-if="relaySaved" class="set-sec-note">已保存——重启应用后接入房间。</p>
+        </div>
+      </template>
 
       <!-- 外观（呈现层偏好，即时生效；复用沙箱偏好卡的交互与样式） -->
       <div class="set-sec">外观</div>

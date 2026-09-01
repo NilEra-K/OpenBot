@@ -1,6 +1,6 @@
 {
   "name": "@openbot/desktop",
-  "version": "0.0.29",
+  "version": "0.0.30",
   "private": true,
   "license": "Apache-2.0",
   "author": "BoneSue",
@@ -35,10 +35,12 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/markdown-it": "^14.2.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.8",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
-    "vite": "^8.2.1"
+    "vite": "^8.2.1",
+    "ws": "^8.21.3"
   }
 }
