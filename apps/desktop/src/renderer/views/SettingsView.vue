@@ -213,8 +213,8 @@ const PREF_OPTIONS: PrefOption[] = [
   { value: 'auto', label: '自动', note: '择优可用：WSL2 → Docker → Podman → mock' },
   { value: 'wsl', label: 'WSL2', note: '每 Box 一个发行版（Windows 主力）' },
   { value: 'mock', label: '模拟', note: '命令返回模拟输出（测试用）' },
-  { value: 'docker', label: 'Docker', note: '待实现（P3 Step 4）', disabled: true },
-  { value: 'podman', label: 'Podman', note: '待实现（P3 Step 4）', disabled: true },
+  { value: 'docker', label: 'Docker', note: '容器即 Box（需 Docker Desktop 运行）' },
+  { value: 'podman', label: 'Podman', note: '容器即 Box（需 podman machine 运行）' },
 ]
 
 const BACKEND_LABELS: Record<string, string> = {
