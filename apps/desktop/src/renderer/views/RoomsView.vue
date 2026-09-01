@@ -1,15 +1,13 @@
 <script setup lang="ts">
 /**
- * 跨用户房间视图（P7 原型对齐轮 · prototype.html 视图 5 迁移）：
- * 房间卡（成员链 / relay 事实 kv / 动作行）+ 接入配置模态（自 SettingsView 迁入——原型 settings
- * 无 relay 段）。演示值纪律：原型「12/30 预算、04:12 倒计时、142ms 延迟」是编造数值——本端是
- * mirror 执行端视角，预算按发起方向计（host 下发给发起端），**余量与 meter 本端不可见即不画**
- * （磁盘无上限只报数值的同款纪律）；呈现的全部是装配与事件事实（连接态/成员表/配置真值）。
- * 「我托管 / 我是访客」双卡为一期后域（本端无建房 UI、无被托管语义——plan-p7 记档）。
+ * 跨用户房间视图（P7 多房间轮 · prototype.html 视图 5 多卡形态）：每房一张卡（各自连接态/
+ * 成员链/事实 kv）+ 接入配置模态（列表：添加/编辑/删除——settings 全量写入，重启生效）。
+ * 演示值纪律：预算余量 host 只下发发起端（本端 mirror 执行端不可见），kv 与 meter 不画编造值；
+ * 呈现的全部是装配与事件事实。「我托管 / 我是访客」双视角为一期后域（无建房 UI 与被托管语义）。
  */
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useKernelStore } from '../stores/kernel'
-import type { RelayStatus } from '../stores/kernel'
+import type { RelayRoomStatus } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
 
@@ -20,26 +18,41 @@ const toast = useToastStore()
 /** 地球图标（prototype ICONS.rooms 同源——rail/名册/图谱共用语言） */
 const ROOMS_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'
 
-/** 房间显示名：备注名缺省回退房间码（房间码是 host 事实，备注名是本端记名） */
-const roomLabel = computed(() => kernel.relay?.roomName?.trim() || kernel.relay?.roomId || '')
+/** 房间显示名：备注名缺省回退房间码 */
+const roomLabel = (r: RelayRoomStatus): string => r.roomName?.trim() || r.roomId
 
 /** 连接态 chip（事实优先——env 通道接入时 settings.enabled 可能为 false） */
-const stateChip = computed<{ text: string; kind: 'accent' | 'info' | 'plain' }>(() => {
-  if (kernel.relay?.connected) return { text: '已连接', kind: 'accent' }
-  if (kernel.relay?.enabled) return { text: '连接中 · 退避重试', kind: 'info' }
+const stateChip = (r: RelayRoomStatus): { text: string; kind: 'accent' | 'info' | 'plain' } => {
+  if (r.connected) return { text: '已连接', kind: 'accent' }
+  if (r.enabled) return { text: '连接中 · 退避重试', kind: 'info' }
   return { text: '未启用', kind: 'plain' }
-})
+}
 
-// ---- 接入配置模态（AgentWizard 容器同款：Esc / 遮罩 / ✕） ----
-const configOpen = ref(false)
+/** 该房的远端成员表（事件投影——房间成员快照按 roomId 分组） */
+const membersOf = (roomId: string): Array<{ memberId: string; displayName: string; connected: boolean }> =>
+  kernel.remoteRooms.find((r) => r.roomId === roomId)?.members ?? []
+
+// ---- 接入配置模态：列表（增删改入口）⇄ 表单（单份编辑/新增）----
+const modalOpen = ref(false)
+/** 表单态：null=列表态；number=编辑第 i 份；'new'=新增 */
+const editing = ref<null | number | 'new'>(null)
 const formError = ref<string | null>(null)
 const saving = ref(false)
-const form = reactive({ enabled: false, url: '', roomId: '', inviteCode: '', displayName: '', roomName: '' })
-
-watch(
-  () => kernel.relay,
-  (r) => {
-    if (r) {
+const form = reactive({ enabled: true, url: '', roomId: '', inviteCode: '', displayName: '', roomName: '' })
+/** 打开表单（编辑预填 / 新增清空） */
+const openForm = (index: number | 'new'): void => {
+  editing.value = index
+  formError.value = null
+  if (index === 'new') {
+    form.enabled = true
+    form.url = ''
+    form.roomId = ''
+    form.inviteCode = ''
+    form.displayName = ''
+    form.roomName = ''
+  } else {
+    const r = kernel.relays[index]
+    if (r !== undefined) {
       form.enabled = r.enabled
       form.url = r.url
       form.roomId = r.roomId
@@ -47,37 +60,43 @@ watch(
       form.displayName = r.displayName
       form.roomName = r.roomName ?? ''
     }
-  },
-  { immediate: true },
+  }
+}
+
+const formValid = computed(
+  () => form.url.trim() !== '' && form.roomId.trim() !== '' && form.inviteCode.trim() !== '',
 )
 
-const formDirty = computed(() => {
-  const r = kernel.relay
-  return (
-    r !== null &&
-    (r.enabled !== form.enabled ||
-      r.url !== form.url ||
-      r.roomId !== form.roomId ||
-      r.inviteCode !== form.inviteCode ||
-      r.displayName !== form.displayName ||
-      (r.roomName ?? '') !== form.roomName)
-  )
-})
-
+/** 保存：编辑替换 / 新增追加 → settings 全量写入（重启生效——装配期决策） */
 const save = async (): Promise<void> => {
+  if (!formValid.value) {
+    formError.value = 'Host 地址、房间码、Invite 码为必填'
+    return
+  }
   saving.value = true
   formError.value = null
   try {
-    await kernel.setRelay({
+    const entry = {
       enabled: form.enabled,
-      url: form.url,
-      roomId: form.roomId,
-      inviteCode: form.inviteCode,
-      displayName: form.displayName,
+      url: form.url.trim(),
+      roomId: form.roomId.trim(),
+      inviteCode: form.inviteCode.trim(),
+      displayName: form.displayName.trim(),
       ...(form.roomName.trim() !== '' ? { roomName: form.roomName.trim() } : {}),
-    })
+    }
+    const next = kernel.relays.map((r) => ({ ...r }))
+    if (editing.value === 'new') {
+      if (next.some((r) => r.roomId === entry.roomId)) {
+        formError.value = `房间 ${entry.roomId} 已配置——不重复接入`
+        return
+      }
+      next.push(entry)
+    } else if (typeof editing.value === 'number') {
+      next[editing.value] = entry
+    }
+    await kernel.setRelays(next.map(({ connected: _c, ...rest }) => rest))
     toast.push('房间配置已保存——重启应用后生效', 'success')
-    configOpen.value = false
+    editing.value = null
   } catch (err) {
     formError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -85,10 +104,15 @@ const save = async (): Promise<void> => {
   }
 }
 
+/** 删除一份接入配置（直接删+toast——settings 全量写入） */
+const remove = async (index: number): Promise<void> => {
+  const next = kernel.relays.filter((_, i) => i !== index)
+  await kernel.setRelays(next.map(({ connected: _c, ...rest }) => rest))
+  toast.push('已移除该房间配置——重启应用后断开', 'success')
+}
+
 /** 复制邀请信息（房间码 + invite 码——凭据经用户手分享，不经内核外发） */
-const copyInvite = async (): Promise<void> => {
-  const r = kernel.relay
-  if (r === null) return
+const copyInvite = async (r: RelayRoomStatus): Promise<void> => {
   const text = `OpenBot 房间邀请\n房间码：${r.roomId}\nInvite 码：${r.inviteCode}\nHost：${r.url}`
   try {
     await navigator.clipboard.writeText(text)
@@ -98,10 +122,10 @@ const copyInvite = async (): Promise<void> => {
   }
 }
 
-/** 打开房间对话：首个远端成员会话（无人则在管家会话看镜像流） */
-const openRoomChat = (): void => {
-  const peer = kernel.remoteMembers[0]
-  ui.openAgent(peer !== undefined ? `remote:${peer.memberId}` : (kernel.stewardId ?? ''))
+/** 打开房间对话：该房首个远端成员会话（无人则管家会话） */
+const openRoomChat = (r: RelayRoomStatus): void => {
+  const peer = membersOf(r.roomId)[0]
+  ui.openAgent(peer !== undefined ? `remote:${r.roomId}:${peer.memberId}` : (kernel.stewardId ?? ''))
   ui.switchView('console')
 }
 
@@ -119,72 +143,92 @@ onMounted(() => {
 
     <div class="rooms">
       <!-- 未接入：居中空态（icon → 标题 → 一句话 → 主按钮 → 三步引导）——不造假数据 -->
-      <div v-if="!kernel.relay?.enabled && !kernel.relay?.connected" class="rooms-empty">
+      <div v-if="kernel.relays.length === 0" class="rooms-empty">
         <div class="empty-icon" aria-hidden="true">
           <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" v-html="ROOMS_ICON"></svg>
         </div>
         <div class="empty-title">未接入房间</div>
         <p class="empty-desc">接入后：本端对话镜像给房间成员，远端的 turn 请求经审批后在本端执行。</p>
-        <button class="btn btn-primary empty-cta" @click="configOpen = true">房间设置</button>
+        <button class="btn btn-primary empty-cta" @click="modalOpen = true; openForm('new')">添加房间</button>
         <div class="empty-steps">
           <div class="step"><span class="step-no">1</span>好友运行 relay host 并创建房间</div>
           <div class="step"><span class="step-no">2</span>把房间码与 invite 码分享给你</div>
-          <div class="step"><span class="step-no">3</span>在「房间设置」填入并重启应用</div>
+          <div class="step"><span class="step-no">3</span>在「添加房间」填入并重启应用</div>
         </div>
       </div>
 
-      <!-- 房间卡：全部真值投影 -->
-      <div v-else class="roomcard">
+      <!-- 房间卡：每房一张（原型多卡形态）——全部真值投影 -->
+      <div v-for="(r, i) in kernel.relays" :key="r.roomId" class="roomcard">
         <div class="room-head">
           <span class="room-ico" aria-hidden="true">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="ROOMS_ICON"></svg>
           </span>
-          <span class="room-name">{{ roomLabel || '房间' }}</span>
-          <span class="chip" :class="stateChip.kind === 'accent' ? 'chip-accent' : stateChip.kind === 'info' ? 'chip-info' : ''">
-            {{ stateChip.text }}
+          <span class="room-name">{{ roomLabel(r) }}</span>
+          <span class="chip" :class="stateChip(r).kind === 'accent' ? 'chip-accent' : stateChip(r).kind === 'info' ? 'chip-info' : ''">
+            {{ stateChip(r).text }}
           </span>
         </div>
         <div class="room-sub">
-          本端「{{ kernel.relay?.displayName || 'OpenBot 用户' }}」 · {{ kernel.remoteMembers.length }} 名远端成员 ·
+          本端「{{ r.displayName || 'OpenBot 用户' }}」 · {{ membersOf(r.roomId).length }} 名远端成员 ·
           远端成员以 mirror 身份参与
         </div>
 
         <!-- 成员链（原型 member-row/mchip）：本端主人 + 远端成员（在场/离场如实） -->
         <div class="member-row">
           <span class="mchip"><span class="mdot mdot-self"></span>你<span class="mrole">主人</span></span>
-          <span v-for="m in kernel.remoteMembers" :key="m.memberId" class="mchip" :class="{ 'is-off': !m.connected }">
+          <span v-for="m in membersOf(r.roomId)" :key="m.memberId" class="mchip" :class="{ 'is-off': !m.connected }">
             <span class="mdot mdot-remote"></span>{{ m.displayName }}<span class="mrole">{{ m.connected ? '远端 · mirror' : '离场' }}</span>
           </span>
         </div>
-        <p v-if="kernel.remoteMembers.length === 0" class="member-empty">尚无远端成员——点「复制邀请信息」分享给好友</p>
+        <p v-if="membersOf(r.roomId).length === 0" class="member-empty">尚无远端成员——点「复制邀请信息」分享给好友</p>
 
         <!-- relay 事实 kv（演示值纪律：预算余量是发起端视角本端不可见，如实不画 kv 与 meter） -->
         <div class="relay-grid">
-          <div class="relay-kv"><span class="k">relay 状态</span><span class="v" :class="kernel.relay?.connected ? 'v-ok' : ''">{{ stateChip.text }}</span></div>
-          <div class="relay-kv"><span class="k">远端成员</span><span class="v">{{ kernel.remoteMembers.length }} 名</span></div>
-          <div class="relay-kv"><span class="k">本端呈现名</span><span class="v">{{ kernel.relay?.displayName || '—' }}</span></div>
+          <div class="relay-kv"><span class="k">relay 状态</span><span class="v" :class="r.connected ? 'v-ok' : ''">{{ stateChip(r).text }}</span></div>
+          <div class="relay-kv"><span class="k">远端成员</span><span class="v">{{ membersOf(r.roomId).length }} 名</span></div>
+          <div class="relay-kv"><span class="k">本端呈现名</span><span class="v">{{ r.displayName || '—' }}</span></div>
           <div class="relay-kv"><span class="k">协议预算</span><span class="v">10 分钟窗口 · 30 turn</span></div>
         </div>
 
         <div class="room-actions">
-          <button class="btn btn-secondary" @click="copyInvite">复制邀请信息</button>
-          <button class="btn btn-ghost" @click="openRoomChat">打开房间对话</button>
-          <button class="btn btn-ghost" style="margin-left: auto" @click="configOpen = true">房间设置</button>
+          <button class="btn btn-secondary" @click="copyInvite(r)">复制邀请信息</button>
+          <button class="btn btn-ghost" @click="openRoomChat(r)">打开房间对话</button>
+          <button class="btn btn-ghost" style="margin-left: auto" @click="modalOpen = true; openForm(i)">房间设置</button>
         </div>
       </div>
 
-      <!-- 自托管叙事注脚（两态恒在——本地优先纪律的呈现面） -->
+      <!-- 已有卡时的追加入口 -->
+      <button v-if="kernel.relays.length > 0" class="rooms-add" type="button" @click="modalOpen = true; openForm('new')">＋ 添加房间</button>
+
+      <!-- 自托管叙事注脚（恒在——本地优先纪律的呈现面） -->
       <p class="rooms-note">relay 是自托管软件，官方不运营服务——优先跑在 Tailscale / 自组网内；公网暴露请自配 TLS 反代。</p>
     </div>
 
-    <!-- 配置模态（SettingsView 模型表单容器同款） -->
-    <div v-if="configOpen" class="wiz-overlay" @mousedown.self="configOpen = false">
-      <div class="wiz-card" role="dialog" aria-label="房间接入配置" @keydown.escape="configOpen = false">
+    <!-- 配置模态：列表（增删改）⇄ 表单（单份） -->
+    <div v-if="modalOpen" class="wiz-overlay" @mousedown.self="modalOpen = false; editing = null">
+      <div class="wiz-card" role="dialog" aria-label="房间接入配置" @keydown.escape="editing === null ? (modalOpen = false) : (editing = null)">
         <div class="wiz-head">
-          <span class="wiz-title">房间接入配置</span>
-          <button class="wiz-close" type="button" aria-label="关闭" @click="configOpen = false">✕</button>
+          <span class="wiz-title">{{ editing === null ? '房间接入' : editing === 'new' ? '添加房间' : '编辑房间' }}</span>
+          <button class="wiz-close" type="button" aria-label="关闭" @click="modalOpen = false; editing = null">✕</button>
         </div>
-        <div class="wiz-body relay-form">
+
+        <!-- 列表态：已配置房间 + 添加入口 -->
+        <div v-if="editing === null" class="wiz-body">
+          <p v-if="kernel.relays.length === 0" class="rooms-list-empty">尚无接入配置——点下方添加。</p>
+          <div v-for="(r, i) in kernel.relays" :key="r.roomId" class="rooms-row">
+            <span class="rooms-row-dot" :class="r.connected ? 'ok' : ''"></span>
+            <span class="rooms-row-name">{{ roomLabel(r) }}</span>
+            <span class="rooms-row-sub mono">{{ r.roomId }}</span>
+            <button class="btn btn-ghost btn-sm" @click="openForm(i)">编辑</button>
+            <button class="btn btn-ghost btn-sm btn-danger" @click="remove(i)">删除</button>
+          </div>
+          <div class="wiz-foot-flat">
+            <button class="btn btn-primary" @click="openForm('new')">＋ 添加房间</button>
+          </div>
+        </div>
+
+        <!-- 表单态：单份配置（新增/编辑共用） -->
+        <div v-else class="wiz-body relay-form">
           <label class="relay-field">
             <span class="field-label">Host 地址（ws://…）</span>
             <input v-model="form.url" class="field-input mono" placeholder="ws://100.x.y.z:8080" autocomplete="off" spellcheck="false" />
@@ -198,7 +242,7 @@ onMounted(() => {
             <input v-model="form.inviteCode" class="field-input mono" type="password" autocomplete="off" spellcheck="false" />
           </label>
           <label class="relay-field">
-            <span class="field-label">本端呈现名</span>
+            <span class="field-label">本端呈现名（可按房不同）</span>
             <input v-model="form.displayName" class="field-input" placeholder="例：BoneSue" autocomplete="off" maxlength="32" />
           </label>
           <label class="relay-field">
@@ -207,13 +251,19 @@ onMounted(() => {
           </label>
           <label class="relay-toggle">
             <input type="checkbox" v-model="form.enabled" />
-            <span>启用房间连接（保存并重启后生效——连接是装配期决策）</span>
+            <span>启用该房间连接（保存并重启后生效——连接是装配期决策）</span>
           </label>
           <p v-if="formError" class="form-error">{{ formError }}</p>
         </div>
+
         <div class="wiz-foot">
-          <button class="btn btn-primary" :disabled="!formDirty || saving" @click="save">{{ saving ? '保存中…' : '保存（重启生效）' }}</button>
-          <button class="btn btn-ghost" @click="configOpen = false">取消</button>
+          <template v-if="editing !== null">
+            <button class="btn btn-primary" :disabled="!formValid || saving" @click="save">{{ saving ? '保存中…' : '保存（重启生效）' }}</button>
+            <button class="btn btn-ghost" @click="editing = null">返回列表</button>
+          </template>
+          <template v-else>
+            <button class="btn btn-ghost" style="margin-left: auto" @click="modalOpen = false">关闭</button>
+          </template>
         </div>
       </div>
     </div>

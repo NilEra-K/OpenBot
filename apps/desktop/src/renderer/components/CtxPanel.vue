@@ -85,12 +85,13 @@ const GROUP_MAX_RECORDS = 200
 // ---- 档案模式（P4 Step 7）：全部为既有 store 投影，零内核改动（approvalMode 除外——boot 快照） ----
 
 const activeAgent = computed(() => kernel.roster.find((a) => a.agentId === ui.activeAgentId) ?? null)
-/** 远端 mirror 成员（P7 原型对齐）：activeAgentId 为 `remote:<memberId>` 命名空间 */
-const remotePeer = computed(() =>
-  ui.activeAgentId.startsWith('remote:')
-    ? (kernel.remoteMembers.find((m) => `remote:${m.memberId}` === ui.activeAgentId) ?? null)
-    : null,
-)
+/** 远端 mirror 成员（P7 多房间轮）：键空间 remote:<roomId>:<memberId> */
+const remotePeer = computed(() => {
+  if (!ui.activeAgentId.startsWith('remote:')) return null
+  const [, roomId, memberId] = ui.activeAgentId.split(':')
+  if (roomId === undefined || memberId === undefined) return null
+  return kernel.remoteRooms.find((r) => r.roomId === roomId)?.members.find((m) => m.memberId === memberId) ?? null
+})
 /** 档案标题（群会话时群名——ctx-top-sub） */
 const displayName = computed(
   () => activeGroup.value?.name ?? remotePeer.value?.displayName ?? activeAgent.value?.name ?? ui.activeAgentId,

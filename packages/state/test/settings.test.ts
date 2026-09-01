@@ -107,4 +107,29 @@ describe('SettingsStore', () => {
     await store.remove('backup')
     expect(await store.getFallback()).toBeNull()
   })
+
+  it('relays 多房间（P7 多房间轮）：全量写入与读回；旧 relay 单字段读取端回退；写入后旧键清除', async () => {
+    const { store, fs } = makeStore()
+    const relays = [
+      { enabled: true, url: 'ws://a:1', roomId: 'ra', inviteCode: 'ia', displayName: '甲' },
+      { enabled: false, url: 'ws://b:2', roomId: 'rb', inviteCode: 'ib', displayName: '乙', roomName: '备注' },
+    ]
+    await store.setRelays(relays)
+    expect(await store.getRelays()).toEqual(relays)
+    // 写入走 relays——旧 relay 键随之清除（单一真相）
+    expect(fs.snapshot()['data/settings.json'] ?? '').not.toContain('"relay"')
+
+    // 旧文件只有 relay 单字段（P7 早期）：读取回退为单元素数组（读取端兼容，不破坏性迁移）
+    const legacy = makeStore()
+    await legacy.fs.write(
+      'data/settings.json',
+      JSON.stringify({ version: 1, providers: [], relay: { enabled: true, url: 'ws://x', roomId: 'rx', inviteCode: 'ix', displayName: '旧' } }),
+    )
+    expect(await legacy.store.getRelays()).toEqual([
+      { enabled: true, url: 'ws://x', roomId: 'rx', inviteCode: 'ix', displayName: '旧' },
+    ])
+
+    // 无配置：空数组（未接入）
+    expect(await makeStore().store.getRelays()).toEqual([])
+  })
 })

@@ -171,11 +171,15 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     await expect(page.locator('.mchip', { hasText: '远端好友' })).toContainText('远端 · mirror')
     await expect(page.locator('.relay-kv', { hasText: '远端成员' })).toContainText('1 名')
     await expect(page.locator('.rooms-note')).toContainText('自托管')
-    // 房间设置模态：遮罩卡片形态（ wiz-overlay 家族）+ 表单内 Esc 关闭（与既有模态用例同惯例——先聚焦）
+    // 房间设置模态（P7 多房间轮：列表 ⇄ 表单两态——卡上按钮直开该房编辑表单；Esc 逐级返回）
     await page.locator('.room-actions .btn', { hasText: '房间设置' }).click()
     await expect(page.locator('.wiz-overlay .wiz-card[aria-label="房间接入配置"]')).toBeVisible()
-    await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('房间接入配置')
+    await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('编辑房间')
+    await expect(page.locator('.wiz-overlay input').first()).toHaveValue(/ws:\/\//)
     await page.locator('.wiz-overlay input').first().press('Escape')
+    await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('房间接入')
+    // 列表态无输入框（Esc 挂不上）——「关闭」按钮收模态
+    await page.locator('.wiz-overlay .wiz-foot .btn', { hasText: '关闭' }).click()
     await expect(page.locator('.wiz-overlay')).toHaveCount(0)
     // 设置页收窄：房间区块不在（配置已迁 rooms 视图模态）
     await page.getByRole('button', { name: '设置', exact: true }).click()
@@ -184,6 +188,101 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     await app.close()
     peer.close()
     await mock.close()
+    await host.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('多房间接入（P7 多房间轮）：双房并行连接 + 成员分组 + mirror 房间隔离', async () => {
+  const host: RelayServerHandle = await createRelayServer()
+  const createRoom = async (): Promise<{ roomId: string; inviteCode: string }> =>
+    (await (await fetch(`http://127.0.0.1:${host.port}/api/rooms`, { method: 'POST' })).json()) as {
+      roomId: string
+      inviteCode: string
+    }
+  const roomA = await createRoom()
+  const roomB = await createRoom()
+
+  // userData 预写两房接入配置（settings.json——装配期读取）
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-relays2-'))
+  await (await import('node:fs/promises')).mkdir(join(userData, 'data'), { recursive: true })
+  await (await import('node:fs/promises')).writeFile(
+    join(userData, 'data', 'settings.json'),
+    JSON.stringify({
+      version: 1,
+      providers: [],
+      relays: [
+        { enabled: true, url: `ws://127.0.0.1:${host.port}/ws`, roomId: roomA.roomId, inviteCode: roomA.inviteCode, displayName: '本端·甲', roomName: '互助会' },
+        { enabled: true, url: `ws://127.0.0.1:${host.port}/ws`, roomId: roomB.roomId, inviteCode: roomB.inviteCode, displayName: '本端·乙', roomName: '爬虫小队' },
+      ],
+    }),
+    'utf8',
+  )
+
+  // 两对端各连一房
+  const connectPeer = (room: { roomId: string; inviteCode: string }, name: string) => {
+    const messages: ServerMessage[] = []
+    const ws = new WebSocket(`ws://127.0.0.1:${host.port}/ws?room=${room.roomId}&invite=${encodeURIComponent(room.inviteCode)}&name=${encodeURIComponent(name)}`)
+    ws.on('message', (data) => {
+      const msg = JSON.parse(String(data)) as ServerMessage
+      if (msg.kind !== 'hello') messages.push(msg)
+    })
+    return { ws, messages, send: (obj: unknown) => ws.send(JSON.stringify(obj)) }
+  }
+  const peerA = connectPeer(roomA, '阿尔法好友')
+  const peerB = connectPeer(roomB, '小林')
+  await new Promise<void>((r) => {
+    let n = 0
+    const done = (): void => {
+      n += 1
+      if (n >= 2) r()
+    }
+    peerA.ws.once('open', done)
+    peerB.ws.once('open', done)
+  })
+
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 1) 两张房卡（各自备注名与已连接态）
+    await page.getByRole('button', { name: '跨用户房间', exact: true }).click()
+    await expect(page.locator('.roomcard', { hasText: '互助会' })).toContainText('已连接', { timeout: 15_000 })
+    await expect(page.locator('.roomcard', { hasText: '爬虫小队' })).toContainText('已连接')
+
+    // 2) 房 A 对端发 mirror：桌面收到（归属房 A 成员）；**房 B 对端收不到（房间隔离）**
+    peerA.send({ kind: 'mirror-message', nonce: 'pa:1', fromMemberId: 'm-1', speakerKind: 'user', speakerName: '阿尔法好友', text: '房A的消息', sentAt: Date.now() })
+    // 名册（控制台侧栏）：两组房名分节 + 各自成员
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await expect(page.locator('.roster-group-sub', { hasText: '互助会' })).toBeVisible()
+    await expect(page.locator('.roster-group-sub', { hasText: '爬虫小队' })).toBeVisible()
+    const peerANode = page.locator('.roster-item', { hasText: '阿尔法好友' })
+    await expect(peerANode).toBeVisible({ timeout: 15_000 })
+    await peerANode.click()
+    await expect(page.locator('.m', { hasText: '房A的消息' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.composer-box input')).toBeDisabled() // mirror 会话只读
+    // 隔离断言：房 B 对端不收房 A 消息（host fanout 按房）
+    await new Promise((r) => setTimeout(r, 300))
+    expect(peerB.messages.some((m) => m.kind === 'mirror-message' && m.text === '房A的消息')).toBe(false)
+
+    // 3) 图谱：两房远端节点在场（同 displayName 机制无碍——memberId 键空间隔离）
+    await page.getByRole('button', { name: '图谱', exact: true }).click()
+    await expect(page.locator('.gnode', { hasText: '阿尔法好友' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.gnode', { hasText: '小林' })).toBeVisible()
+  } finally {
+    await app.close()
+    peerA.ws.close()
+    peerB.ws.close()
     await host.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }

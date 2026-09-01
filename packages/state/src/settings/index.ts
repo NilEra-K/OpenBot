@@ -54,7 +54,9 @@ export interface AppSettings {
   providers: StoredProviderProfile[]
   /** 沙箱后端偏好；缺省 auto（可选字段：旧文件读取端兼容，version 不动） */
   sandbox?: SandboxPreference
-  /** 跨用户房间接入（P7）；可选字段（旧文件兼容） */
+  /** 跨用户房间接入（P7 多房间轮）：数组为真相；可选字段（旧文件兼容） */
+  relays?: RelaySettings[]
+  /** @deprecated P7 早期单房间字段——读取端兼容保留（getRelays 回退），写入走 relays */
   relay?: RelaySettings
   /** 全局回退端点（P4 Step 11）：引用 providers 内档案名；主力请求失败时本轮降级，下轮自动回主力（不粘滞） */
   fallbackProvider?: string
@@ -225,15 +227,20 @@ export class SettingsStore {
     await this.#save({ ...settings, sandbox: pref })
   }
 
-  /** 跨用户房间接入（P7）：缺省未启用（enabled=false 且字段空——旧文件读取端兼容，version 不动） */
-  async getRelay(): Promise<RelaySettings> {
+  /** 跨用户房间接入（P7 多房间轮）：relays 数组为真相；旧文件的 relay 单字段读取时回退为
+   *  单元素数组（读取端兼容，不破坏性迁移）；缺省空数组（未接入） */
+  async getRelays(): Promise<RelaySettings[]> {
     const settings = await this.load()
-    return settings.relay ?? { enabled: false, url: '', roomId: '', inviteCode: '', displayName: '' }
+    if (settings.relays !== undefined) return settings.relays
+    if (settings.relay !== undefined) return [settings.relay]
+    return []
   }
 
-  async setRelay(relay: RelaySettings): Promise<void> {
+  async setRelays(relays: RelaySettings[]): Promise<void> {
     const settings = await this.load()
-    await this.#save({ ...settings, relay })
+    // 全量替换（与沙箱偏好同语义——无增量 API）；旧 relay 字段随之清除（relays 已是真相）
+    const { relay: _dropLegacy, ...rest } = settings
+    await this.#save({ ...rest, relays })
   }
 
   /** 回退端点档案名（null = 清除）；引用不存在的档案时拒绝（悬空引用属配置错误，显式失败） */
@@ -273,6 +280,9 @@ function parseLoose(raw: string | null): AppSettings {
         ...(parsed.defaultProvider !== undefined ? { defaultProvider: parsed.defaultProvider } : {}),
         ...(parsed.sandbox !== undefined ? { sandbox: parsed.sandbox } : {}),
         ...(parsed.fallbackProvider !== undefined ? { fallbackProvider: parsed.fallbackProvider } : {}),
+        ...(parsed.relays !== undefined ? { relays: parsed.relays } : {}),
+        // P7 早期单房间字段：读兼容保留（getRelays 回退），写入走 relays
+        ...(parsed.relay !== undefined ? { relay: parsed.relay } : {}),
       }
     }
   } catch {

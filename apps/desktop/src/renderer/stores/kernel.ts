@@ -75,8 +75,8 @@ export interface GroupEntry {
   createdAt: number
 }
 
-/** 远端 mirror 成员（P7）：呈现形状（v1.system.remote-members 事件 payload 同构） */
-export interface RelayStatus {
+/** 跨用户房间接入状态（P7 多房间轮）：settings 全量 + 各房连接态 */
+export interface RelayRoomStatus {
   enabled: boolean
   url: string
   roomId: string
@@ -225,11 +225,11 @@ export const useKernelStore = defineStore('kernel', {
     /** 引导错误（网关不可达/装配失败）——空缺态提示的数据来源 */
     bootError: null as string | null,
     roster: [] as RosterEntry[],
-    /** 远端 mirror 成员（P7）：跨用户房间的易态投影（v1.system.remote-members 事件驱动；
-     *  重连后 hello 快照重建——不持久化，呈现侧只读） */
-    remoteMembers: [] as Array<{ memberId: string; displayName: string; connected: boolean }>,
-    /** 跨用户房间接入状态（P7）：settings 真相 + 当前连接态 */
-    relay: null as RelayStatus | null,
+    /** 远端 mirror 成员（P7 多房间轮）：按房间分组（v1.system.remote-members 事件按 roomId 下发；
+     *  键空间 remote:<roomId>:<memberId>——host 的 memberId 是房内自增跨房必撞） */
+    remoteRooms: [] as Array<{ roomId: string; members: Array<{ memberId: string; displayName: string; connected: boolean }> }>,
+    /** 跨用户房间接入状态（P7 多房间轮）：settings 全量 + env 叠加路，各房连接态实时 */
+    relays: [] as RelayRoomStatus[],
     stewardId: null as string | null,
     /** 群清单（P5 Step 4）：boot 与 v1.group.state 事件时刷新 */
     groups: [] as GroupEntry[],
@@ -352,12 +352,13 @@ export const useKernelStore = defineStore('kernel', {
       await this.refreshRoster()
       return created.agentId
     },
-    /** 跨用户房间接入（P7）：状态快照与写入（重启生效——装配期决策） */
+    /** 跨用户房间接入（P7 多房间轮）：状态快照与全量写入（重启生效——装配期决策） */
     async refreshRelay(): Promise<void> {
-      this.relay = await this.call<RelayStatus>('v1.relay.status')
+      const r = await this.call<{ relays: RelayRoomStatus[] }>('v1.relay.status')
+      this.relays = r.relays
     },
-    async setRelay(input: Omit<RelayStatus, 'connected'>): Promise<void> {
-      await this.call('v1.relay.set', input)
+    async setRelays(input: Omit<RelayRoomStatus, 'connected'>[]): Promise<void> {
+      await this.call('v1.relay.set', { relays: input })
       await this.refreshRelay()
     },
     /** Box 休眠/唤醒（P4 Step 8）：状态转移经 v1.box.state 事件回放（boxes/ctx 灰化同一信号源） */
@@ -705,19 +706,22 @@ export const useKernelStore = defineStore('kernel', {
         case 'v1.group.state':
           void this.refreshGroups() // 群清单变更（created/removed）——拉快照为准
           return
-        case 'v1.system.remote-members':
-          // 远端成员快照（P7）：最新值语义（重放幂等——投影收敛到当前在场表）
-          this.remoteMembers = event.payload.members.map((m) => ({ ...m }))
-          return
-        case 'v1.message.remote': {
-          // 远端 mirror 消息（P7）：归属该成员自己的会话（名册远端节可点）；渲染走同一净化链。
-          // 图谱边投影：user↔远端 计数（虚线 remote 边的数据源——与本地消息边同源投影）
+        case 'v1.system.remote-members': {
+          // 远端成员快照（P7 多房间轮）：按 roomId upsert（最新值语义——重放幂等收敛）
           const p = event.payload
-          this.bumpEdge('user', `remote:${p.fromMemberId}`)
+          const idx = this.remoteRooms.findIndex((r) => r.roomId === p.roomId)
+          if (idx >= 0) this.remoteRooms[idx] = { roomId: p.roomId, members: p.members.map((m) => ({ ...m })) }
+          else this.remoteRooms.push({ roomId: p.roomId, members: p.members.map((m) => ({ ...m })) })
+          return
+        }
+        case 'v1.message.remote': {
+          // 远端 mirror 消息（P7 多房间轮）：归属该房成员自己的会话（键空间 remote:<roomId>:<memberId>）
+          const p = event.payload
+          this.bumpEdge('user', `remote:${p.roomId}:${p.fromMemberId}`)
           this.messages.push({
             messageId: p.messageId,
             kind: 'remote',
-            from: `remote:${p.fromMemberId}`,
+            from: `remote:${p.roomId}:${p.fromMemberId}`,
             to: 'user',
             text: p.text,
             at: event.at,

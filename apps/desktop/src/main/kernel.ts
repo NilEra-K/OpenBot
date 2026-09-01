@@ -20,7 +20,7 @@ import { startGateway, RelayClient } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
 import { NodeFs, SettingsStore } from '@openbot/state'
-import type { SandboxPreference } from '@openbot/state'
+import type { SandboxPreference, RelaySettings } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
 import type { ResolvedProvider } from '@openbot/state'
@@ -146,7 +146,7 @@ const resolveSchema = z.object({
 })
 const sandboxPrefSchema = z.enum(['auto', 'mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm'])
 const sandboxSetSchema = z.object({ preference: sandboxPrefSchema })
-const relaySetSchema = z.object({
+const relayEntrySchema = z.object({
   enabled: z.boolean(),
   url: z.string().max(512),
   roomId: z.string().max(128),
@@ -154,6 +154,7 @@ const relaySetSchema = z.object({
   displayName: z.string().max(64),
   roomName: z.string().max(64).optional(),
 })
+const relaySetSchema = z.object({ relays: z.array(relayEntrySchema).max(8) })
 /** 注册 agent（P4 Step 5）：name 必填（去空白 1-24 字）；color hex6 可选；role 默认 worker（steward 走任命事务语义） */
 const registerAgentSchema = z.object({
   name: z.string().trim().min(1).max(24),
@@ -409,14 +410,23 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await settings.setSandbox(pref)
       return { ok: true, restartRequired: true }
     }, sandboxSetSchema)
-    // 跨用户房间（P7）：状态呈现 + 接入配置写入（重启生效——连接是装配期决策，不热切换）
-    .register('v1.relay.status', async () => ({
-      ...(await settings.getRelay()),
-      connected: relay?.connected ?? false,
-    }))
+    // 跨用户房间（P7 多房间轮）：状态呈现（settings 全量 + env 叠加路的连接态）+ 配置全量写入
+    .register('v1.relay.status', async () => {
+      const stored = await settings.getRelays()
+      const all = [...stored]
+      for (const { cfg } of relays) {
+        if (!all.some((c) => c.roomId === cfg.roomId)) all.push(cfg) // env 叠加路（不在 settings）
+      }
+      return {
+        relays: all.map((c) => ({
+          ...c,
+          connected: relays.some((r) => r.cfg.roomId === c.roomId && r.client.connected),
+        })),
+      }
+    })
     .register('v1.relay.set', async (payload) => {
       const input = relaySetSchema.parse(payload)
-      await settings.setRelay(input)
+      await settings.setRelays(input.relays)
       return { ok: true, restartRequired: true }
     }, relaySetSchema)
     // 注册 agent（P4 Step 5）：经装配 addAgent（名册+调度器+专属 Box+turn 接线）；
@@ -476,22 +486,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   kernel.startWatchdog()
   kernel.statsService.start() // Box 遥测 + 宿主磁盘压力轮询（Step 6）
 
-  // ---- 跨用户房间接入（P7 Step 4/5，mirror 一期）----
-  // settings.relay（env OPENBOT_RELAY_URL/ROOM/INVITE/NAME 覆盖供 E2E）；enabled 且字段齐才装配。
-  // 装配期决策（改动重启生效——与沙箱偏好同语义）；远端成员是壳级易态投影（hello 重建、不持久化）
-  const relayStored = await settings.getRelay()
-  const relayUrl = process.env.OPENBOT_RELAY_URL ?? relayStored.url
-  const relayRoomId = process.env.OPENBOT_RELAY_ROOM ?? relayStored.roomId
-  const relayInvite = process.env.OPENBOT_RELAY_INVITE ?? relayStored.inviteCode
-  const relayName = process.env.OPENBOT_RELAY_NAME ?? relayStored.displayName
-  const relayOn =
-    (process.env.OPENBOT_RELAY_URL !== undefined || relayStored.enabled) &&
-    relayUrl !== '' && relayRoomId !== '' && relayInvite !== ''
-
-  /** 远端 mirror 成员表（v1.system.remote-members 的单一来源；不含本端） */
-  const remoteMembers = new Map<string, { memberId: string; displayName: string; connected: boolean }>()
-  const publishRemoteMembers = (): void => {
-    kernel.bus.emit('v1.system.remote-members', { members: [...remoteMembers.values()] })
+  // ---- 跨用户房间接入（P7 多房间轮）：relays 数组并行连接 ----
+  // settings.relays（P7 早期 relay 单字段读取端兼容回退）+ env 单组叠加（E2E/无头通道）。
+  // 装配期决策（改动重启生效）；远端成员是壳级易态投影（hello 重建、不持久化）。
+  // 键空间纪律：host 的 memberId/requestId 是房内自增（跨房必撞）——事件带 roomId、
+  // turn 配对键与 nonce 一律 `<roomId>:<id>` 前缀
+  const relayConfigs = (await settings.getRelays()).filter(
+    (c) => c.enabled && c.url !== '' && c.roomId !== '' && c.inviteCode !== '',
+  )
+  if (
+    process.env.OPENBOT_RELAY_URL !== undefined &&
+    process.env.OPENBOT_RELAY_ROOM !== undefined &&
+    process.env.OPENBOT_RELAY_INVITE !== undefined
+  ) {
+    relayConfigs.push({
+      enabled: true,
+      url: process.env.OPENBOT_RELAY_URL,
+      roomId: process.env.OPENBOT_RELAY_ROOM,
+      inviteCode: process.env.OPENBOT_RELAY_INVITE,
+      displayName: process.env.OPENBOT_RELAY_NAME ?? 'OpenBot 用户',
+    })
   }
 
   /** agent 名缓存（mirror 出站署名用；名册事件刷新） */
@@ -504,100 +518,106 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     void refreshAgentNames()
   })
 
-  /** inbound turn 终答配对：requestId → 执行 agentId（FIFO 消费——远端请求经用户 lane 受理） */
-  const pendingTurns = new Map<string, string>()
+  /** inbound turn 终答配对：`<roomId>:<requestId>` → { 执行 agentId, 回程房间 }（FIFO 消费） */
+  const pendingTurns = new Map<string, { roomId: string; agentId: string }>()
 
-  const relay = relayOn
-    ? new RelayClient({
-        url: relayUrl,
-        roomId: relayRoomId,
-        inviteCode: relayInvite,
-        displayName: relayName === '' ? 'OpenBot 用户' : relayName,
-        onServerMessage: (msg) => {
-          if (msg.kind === 'hello') {
-            remoteMembers.clear()
-            for (const m of msg.room.members) {
-              if (m.memberId !== msg.memberId) remoteMembers.set(m.memberId, { ...m, connected: true })
-            }
-            publishRemoteMembers()
-          } else if (msg.kind === 'room-event') {
-            if (msg.event === 'member-joined') {
-              remoteMembers.set(msg.memberId, { memberId: msg.memberId, displayName: msg.displayName, connected: true })
-            } else {
-              remoteMembers.delete(msg.memberId)
-            }
-            publishRemoteMembers()
-          } else if (msg.kind === 'mirror-message') {
-            kernel.bus.emit('v1.message.remote', {
-              messageId: msg.nonce,
-              fromMemberId: msg.fromMemberId,
-              speakerKind: msg.speakerKind,
-              speakerName: msg.speakerName,
-              text: msg.text,
-            })
-          } else if (msg.kind === 'turn-request') {
-            // 受控进入（P7 裁定 D）：请求文本作为用户消息入队——lane 排队与审批闸门照走，零新特权路径
-            void (async () => {
-              const agents = await kernel.agentStore.list()
-              const hinted = msg.agentHint !== undefined ? agents.find((a) => a.name === msg.agentHint) : undefined
-              const target = hinted ?? agents.find((a) => a.role === 'steward')
-              if (target === undefined) {
-                relay?.sendTurnResult({ requestId: msg.requestId, status: 'rejected', text: '本端名册为空——无法受理远端 turn' })
-                return
-              }
-              pendingTurns.set(msg.requestId, target.agentId)
-              await kernel.messaging.sendUserMessage({
-                toAgentId: target.agentId,
-                text: msg.prompt,
-                nonce: `remote-turn:${msg.requestId}`,
-              })
-            })().catch((err) => {
-              console.error('[openbot] 远端 turn 受理失败：', err)
-              try {
-                relay?.sendTurnResult({ requestId: msg.requestId, status: 'rejected', text: '受理失败（见本端日志）' })
-              } catch {
-                /* 断连竞态——host 侧 pending 过期兜底 */
-              }
-            })
+  const relays = relayConfigs.map((cfg) => {
+    /** 本房远端成员表（memberId 房内命名——事件带 roomId 由消费方组织命名空间） */
+    const members = new Map<string, { memberId: string; displayName: string; connected: boolean }>()
+    const publishMembers = (): void => {
+      kernel.bus.emit('v1.system.remote-members', { roomId: cfg.roomId, members: [...members.values()] })
+    }
+    const client = new RelayClient({
+      url: cfg.url,
+      roomId: cfg.roomId,
+      inviteCode: cfg.inviteCode,
+      displayName: cfg.displayName === '' ? 'OpenBot 用户' : cfg.displayName,
+      onServerMessage: (msg) => {
+        if (msg.kind === 'hello') {
+          members.clear()
+          for (const m of msg.room.members) {
+            if (m.memberId !== msg.memberId) members.set(m.memberId, { ...m, connected: true })
           }
-          // turn-result 到达 = 本端发起请求的应答——一期本端无发起入口（协议对称，UI 入口记档后续）
-        },
-        onStateChange: (state, detail) => {
-          console.log(`[openbot] relay ${state}${detail?.retryInMs !== undefined ? `（${detail.retryInMs}ms 后重试）` : ''}`)
-        },
-      })
-    : null
+          publishMembers()
+        } else if (msg.kind === 'room-event') {
+          if (msg.event === 'member-joined') {
+            members.set(msg.memberId, { memberId: msg.memberId, displayName: msg.displayName, connected: true })
+          } else {
+            members.delete(msg.memberId)
+          }
+          publishMembers()
+        } else if (msg.kind === 'mirror-message') {
+          kernel.bus.emit('v1.message.remote', {
+            messageId: msg.nonce,
+            roomId: cfg.roomId,
+            fromMemberId: msg.fromMemberId,
+            speakerKind: msg.speakerKind,
+            speakerName: msg.speakerName,
+            text: msg.text,
+          })
+        } else if (msg.kind === 'turn-request') {
+          // 受控进入（P7 裁定 D）：请求文本作为用户消息入队——lane 排队与审批闸门照走，零新特权路径
+          void (async () => {
+            const agents = await kernel.agentStore.list()
+            const hinted = msg.agentHint !== undefined ? agents.find((a) => a.name === msg.agentHint) : undefined
+            const target = hinted ?? agents.find((a) => a.role === 'steward')
+            if (target === undefined) {
+              client.sendTurnResult({ requestId: msg.requestId, status: 'rejected', text: '本端名册为空——无法受理远端 turn' })
+              return
+            }
+            pendingTurns.set(`${cfg.roomId}:${msg.requestId}`, { roomId: cfg.roomId, agentId: target.agentId })
+            await kernel.messaging.sendUserMessage({
+              toAgentId: target.agentId,
+              text: msg.prompt,
+              nonce: `remote-turn:${cfg.roomId}:${msg.requestId}`,
+            })
+          })().catch((err) => {
+            console.error('[openbot] 远端 turn 受理失败：', err)
+            try {
+              client.sendTurnResult({ requestId: msg.requestId, status: 'rejected', text: '受理失败（见本端日志）' })
+            } catch {
+              /* 断连竞态——host 侧 pending 过期兜底 */
+            }
+          })
+        }
+        // turn-result 到达 = 本端发起请求的应答——一期本端无发起入口（协议对称，UI 入口记档后续）
+      },
+      onStateChange: (state, detail) => {
+        console.log(`[openbot] relay(${cfg.roomName ?? cfg.roomId}) ${state}${detail?.retryInMs !== undefined ? `（${detail.retryInMs}ms 后重试）` : ''}`)
+      },
+    })
+    return { cfg, client }
+  })
 
-  if (relay !== null) {
-    relay.start()
-    // 出站镜像：本端 user/agent 对话事件 → 房间（v1.message.remote 是独立键——远端来的不再镜像，天然不回环）
+  for (const { client } of relays) client.start()
+
+  if (relays.length > 0) {
+    /** 出站镜像到所有已连接房间（v1.message.remote 是独立键——远端来的不再镜像，天然不回环）；
+     *  user 署名按各房自己的呈现名（一端多房时在每房的名字可不同） */
+    const mirrorTo = (speakerKind: 'user' | 'agent', text: string, speakerOf: (cfg: RelaySettings) => string): void => {
+      for (const { cfg, client } of relays) {
+        if (!client.connected) continue
+        try {
+          client.sendMirror({ speakerKind, speakerName: speakerOf(cfg), text })
+        } catch {
+          /* 断连竞态——易态镜像丢弃不记账务 */
+        }
+      }
+    }
     kernel.bus.on('v1.message.user', (event) => {
       const { text } = event.payload as MessageUserPayload
-      if (!relay.connected) return
-      try {
-        relay.sendMirror({ speakerKind: 'user', speakerName: relayName === '' ? '你' : relayName, text })
-      } catch {
-        /* 断连竞态——易态镜像丢弃不记账务 */
-      }
+      mirrorTo('user', text, (cfg) => (cfg.displayName === '' ? '你' : cfg.displayName))
     })
     // agent 终答：mirror 出站 + inbound turn 的 result 配对（一个 handler 两个职责——同源事件）
     kernel.bus.on('v1.message.agent', (event) => {
       const { agentId, text } = event.payload as MessageAgentPayload
-      if (!relay.connected) return
-      try {
-        relay.sendMirror({
-          speakerKind: 'agent',
-          speakerName: agentNames.get(agentId) ?? agentId,
-          text,
-        })
-      } catch {
-        /* 断连竞态 */
-      }
-      for (const [requestId, targetId] of pendingTurns) {
-        if (targetId === agentId) {
-          pendingTurns.delete(requestId)
+      mirrorTo('agent', text, () => agentNames.get(agentId) ?? agentId)
+      for (const [key, pending] of pendingTurns) {
+        if (pending.agentId === agentId) {
+          pendingTurns.delete(key)
+          const target = relays.find((r) => r.cfg.roomId === pending.roomId)
           try {
-            relay.sendTurnResult({ requestId, status: 'ok', text })
+            target?.client.sendTurnResult({ requestId: key.slice(pending.roomId.length + 1), status: 'ok', text })
           } catch {
             /* 断连竞态——发起端超时语义兜底 */
           }
@@ -608,12 +628,17 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // run 非正常收敛（failed/aborted/escaped）：pending turn 如实回 rejected（终答不会再到）
     kernel.bus.on('v1.lifecycle.finished', (event) => {
       const { state, agentId, code } = event.payload as LifecycleFinishedPayload
-      if (state === 'succeeded' || !relay.connected) return
-      for (const [requestId, targetId] of pendingTurns) {
-        if (targetId === agentId) {
-          pendingTurns.delete(requestId)
+      if (state === 'succeeded') return
+      for (const [key, pending] of pendingTurns) {
+        if (pending.agentId === agentId) {
+          pendingTurns.delete(key)
+          const target = relays.find((r) => r.cfg.roomId === pending.roomId)
           try {
-            relay.sendTurnResult({ requestId, status: 'rejected', text: `执行未完成（${state}${code !== undefined ? `：${code}` : ''}）` })
+            target?.client.sendTurnResult({
+              requestId: key.slice(pending.roomId.length + 1),
+              status: 'rejected',
+              text: `执行未完成（${state}${code !== undefined ? `：${code}` : ''}）`,
+            })
           } catch {
             /* 断连竞态 */
           }
@@ -642,7 +667,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       kernel.shellService.dispose() // 杀全部 PTY 会话（不留后台 shell）
       kernel.statsService.stop()
       kernel.stopWatchdog()
-      await relay?.stop() // 断房间连接（清重连定时器——孤儿不留）
+      for (const { client } of relays) await client.stop() // 断全部房间连接（清重连定时器——孤儿不留）
       await gateway.close()
     },
   }

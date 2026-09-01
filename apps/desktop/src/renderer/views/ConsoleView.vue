@@ -37,13 +37,14 @@ const activeGroup = computed(() =>
   ui.activeGroupId !== null ? (kernel.groups.find((g) => g.groupId === ui.activeGroupId) ?? null) : null,
 )
 
-/** 远端 mirror 会话（P7 原型对齐）：只读——协议无「本端向远端自由发消息」语义
- *  （turn 是远端触达本端的通道，本端发起无 UI 入口记档后续） */
-const remotePeer = computed(() =>
-  ui.activeAgentId.startsWith('remote:')
-    ? (kernel.remoteMembers.find((m) => `remote:${m.memberId}` === ui.activeAgentId) ?? null)
-    : null,
-)
+/** 远端 mirror 会话（P7 多房间轮）：只读——键空间 remote:<roomId>:<memberId>（跨房隔离）；
+ *  协议无「本端向远端自由发消息」语义（turn 是远端触达本端的通道，本端发起无 UI 入口记档后续） */
+const remotePeer = computed(() => {
+  if (!ui.activeAgentId.startsWith('remote:')) return null
+  const [, roomId, memberId] = ui.activeAgentId.split(':')
+  if (roomId === undefined || memberId === undefined) return null
+  return kernel.remoteRooms.find((r) => r.roomId === roomId)?.members.find((m) => m.memberId === memberId) ?? null
+})
 
 /** 会话标题（stream-head）：群名 / agent 名 / 远端成员名 */
 const sessionTitle = computed(

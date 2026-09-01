@@ -47,13 +47,16 @@ interface EdgeGeom {
 const isGroupId = (id: string): boolean => kernel.groups.some((g) => g.groupId === id)
 const isRemoteId = (id: string): boolean => id.startsWith('remote:')
 
-/** user 居中、agents + 群 + 远端成员环形均布（原型为手工摆位，Vue 版按真实数据计算——同轨混布） */
+/** user 居中、agents + 群 + 远端成员环形均布（原型为手工摆位，Vue 版按真实数据计算——同轨混布；
+ *  远端成员按房间摊平——键空间 remote:<roomId>:<memberId>） */
 const nodes = computed<NodeGeom[]>(() => {
   const list: NodeGeom[] = [{ id: 'user', label: '你', initial: '你', x: CX, y: CY, r: 26, isUser: true, isGroup: false, isRemote: false }]
   const ring: Array<{ id: string; label: string }> = [
     ...kernel.roster.map((a) => ({ id: a.agentId, label: a.name ?? a.agentId })),
     ...kernel.groups.map((g) => ({ id: g.groupId, label: g.name })),
-    ...kernel.remoteMembers.map((m) => ({ id: `remote:${m.memberId}`, label: m.displayName })),
+    ...kernel.remoteRooms.flatMap((room) =>
+      room.members.map((m) => ({ id: `remote:${room.roomId}:${m.memberId}`, label: m.displayName })),
+    ),
   ]
   ring.forEach((it, i) => {
     const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(ring.length, 1)
@@ -136,8 +139,15 @@ const ranking = computed(() => [...edgeGeoms.value].sort((a, b) => b.count - a.c
 const labelOf = (id: string): string => nodes.value.find((n) => n.id === id)?.label ?? id
 const isSteward = (id: string): boolean => kernel.stewardId === id
 
-/** 远端成员在场判定（状态点事实源：remoteMembers 投影——离场仍留节点（会话历史可看）） */
-const remoteOnline = (id: string): boolean => kernel.remoteMembers.some((m) => `remote:${m.memberId}` === id && m.connected)
+/** 远端成员在场判定（状态点事实源：remoteRooms 投影——离场仍留节点（会话历史可看）；
+ *  键空间 remote:<roomId>:<memberId>） */
+const remoteOnline = (id: string): boolean => {
+  const [, roomId, memberId] = id.split(':')
+  if (roomId === undefined || memberId === undefined) return false
+  return kernel.remoteRooms.some(
+    (r) => r.roomId === roomId && r.members.some((m) => m.memberId === memberId && m.connected),
+  )
+}
 
 /** 节点取色（排行/详情 dot）：user 中性深灰、群中性 ink3（菱形不取身份色）、
  *  远端成员 info 蓝（mirror 身份——原型 delta 同款）、agent 身份色 */

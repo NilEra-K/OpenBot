@@ -120,6 +120,7 @@ export const EventPayloadSchemas = {
     cause: z.enum(['registered', 'removed', 'appointed', 'dismissed', 'transferred']),
   }),
   'v1.system.remote-members': z.object({
+    roomId: z.string(),
     members: z.array(
       z.object({
         memberId: z.string(),
@@ -130,6 +131,7 @@ export const EventPayloadSchemas = {
   }),
   'v1.message.remote': z.object({
     messageId: z.string(),
+    roomId: z.string(),
     fromMemberId: z.string(),
     speakerKind: z.enum(['user', 'agent']),
     speakerName: z.string(),

@@ -144,6 +144,31 @@
   先聚焦）；「自托管」断言迁 .rooms-note。坑⑧记档：新视图必须自查三族控件样式副本。
   版本 0.0.32。
 
+## 多房间轮（2026-09-01 · 用户委托追加）
+
+settings.relays 数组化（多 RelayClient 并行）——兑现原型多卡形态：
+
+- **settings**：`relays: RelaySettings[]` 为真相（全量替换写入）；旧 `relay` 单字段读取端
+  回退为单元素数组（不破坏性迁移）；写入时旧键清除。**坑⑨（本轮最大）**：`parseLoose`
+  是显式字段白名单——P7 初版加 relay 字段时就漏了（env 通道撑着没暴露），本轮 relays 同样
+  被静默丢弃（E2E 预写 settings.json 双房不生效定位）；白名单补 relays/relay 两键。
+- **事件形状演进**（P7 新事件无历史包袱，内存流零迁移）：`v1.system.remote-members` 与
+  `v1.message.remote` payload 加 `roomId`——host 的 memberId/requestId 是房内自增，跨房必撞。
+- **kernel 装配**：多实例并行；键空间纪律 `remote:<roomId>:<memberId>` / turn 配对键与
+  nonce `<roomId>:<id>` 前缀；出站 mirror 广播到全部已连接房（user 署名按各房 displayName——
+  一端多房可不同名）；env 单组（OPENBOT_RELAY_*）作为额外一路叠加（E2E 通道不变）。
+  命令面：v1.relay.status 返回数组（settings 全量 + env 路 + 各房 connected 实时）；
+  v1.relay.set 全量替换（z.array 上限 8）。
+- **UI**：RoomsView 多卡（每房一张：各自连接态/成员链/kv）+ 模态改「列表 ⇄ 表单」两态
+  （添加/编辑/删除；卡上「房间设置」直开该房编辑；Esc 逐级返回、列表态「关闭」收模态）；
+  有卡时底部虚线「＋ 添加房间」；名册房间成员按房分组（roster-group-sub 房名行）；
+  Console/Ctx/Graph 的 remotePeer 解析新键空间。
+- **E2E**：新增双房用例（同 host 两房、两对端——双卡/分组名册/房 A 消息归属与只读/
+  **房 B 对端收不到房 A 消息（隔离）**/图谱两远端节点）；既有 env 单房用例回归（模态
+  断言更新为两态语义）。单测 +1（relays 读写/回退/旧键清除）。
+- 收官：三命令零错/348 过 + 6 skipped；E2E 22/23（唯一失败仍为「中止」既有 flaky）。
+  版本 0.0.33。
+
 ## 设计要点（开工前逐条细化，先记已知决策）
 
 ### 协议与状态归属

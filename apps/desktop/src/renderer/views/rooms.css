@@ -404,3 +404,85 @@
 .relay-toggle input[type='checkbox'] {
   accent-color: var(--accent);
 }
+
+/* ---- 配置模态列表态（P7 多房间轮） ---- */
+
+.rooms-list-empty {
+  font-size: 12.5px;
+  color: var(--ink3);
+  margin: 4px 0 10px;
+}
+
+.rooms-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rooms-row:last-of-type {
+  border-bottom: none;
+}
+
+.rooms-row-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink3);
+  flex: none;
+}
+
+.rooms-row-dot.ok {
+  background: var(--success);
+}
+
+.rooms-row-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rooms-row-sub {
+  font-size: 11px;
+  color: var(--ink3);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiz-foot-flat {
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+}
+
+/* 追加入口（有卡时的虚线条——与名册「＋ 建群」同族形态） */
+.rooms-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 34px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: none;
+  color: var(--ink3);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.rooms-add:hover {
+  color: var(--ink2);
+  border-color: rgba(var(--accent-rgb), 0.35);
+}
+
+.btn-ghost.btn-danger:hover {
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.1);
+}

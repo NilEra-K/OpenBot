@@ -141,15 +141,19 @@ export interface SystemRosterPayload {
   cause: 'registered' | 'removed' | 'appointed' | 'dismissed' | 'transferred'
 }
 
-/** 远端 mirror 成员快照（P7）：跨用户房间的远端成员——壳级易态投影（desktop 维护，
- *  重连后 hello 重建；不持久化、不参与本地调度/建群——社交面成员而非执行面成员） */
+/** 远端 mirror 成员快照（P7）：按房间分组下发——host 的 memberId 是房内自增（跨房必撞，
+ *  消费方按 roomId 组织命名空间）。壳级易态投影（desktop 维护，重连后 hello 重建；
+ *  不持久化、不参与本地调度/建群——社交面成员而非执行面成员） */
 export interface SystemRemoteMembersPayload {
+  roomId: string
   members: Array<{ memberId: string; displayName: string; connected: boolean }>
 }
 
-/** 远端 mirror 消息到达（P7）：跨用户房间成员的本端对话镜像——呈现侧必须过 DOMPurify */
+/** 远端 mirror 消息到达（P7）：跨用户房间成员的本端对话镜像——呈现侧必须过 DOMPurify；
+ *  roomId 用于归属该房间的成员（键空间 remote:<roomId>:<memberId>） */
 export interface MessageRemotePayload {
   messageId: string
+  roomId: string
   fromMemberId: string
   speakerKind: 'user' | 'agent'
   speakerName: string

@@ -34,6 +34,10 @@ const subOf = (agent: RosterEntry): string => {
 const CHAT_ICON = '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
 /** 远端成员图标（P7）：地球两笔弧线——跨公网房间的语义（stroke 风格与图标体系一致） */
 const REMOTE_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 2.8 15.4 0 18M12 3c-2.8 2.6-2.8 15.4 0 18"/>'
+
+/** 房间显示名：备注名（接入状态表）缺省回退房间码 */
+const roomLabelOf = (roomId: string): string =>
+  kernel.relays.find((r) => r.roomId === roomId)?.roomName?.trim() || roomId
 </script>
 
 <template>
@@ -89,27 +93,30 @@ const REMOTE_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2
     </button>
     <button class="roster-new" type="button" @click="ui.openGroupWizard()">＋ 建群</button>
 
-    <!-- 房间成员分节（P7 mirror 一期）：远端 mirror 成员是易态投影（事件驱动快照）——
-         点击进该成员的 mirror 会话（只读——turn 是远端触达执行面的通道，本端发起记档后续） -->
-    <template v-if="kernel.remoteMembers.length > 0">
+    <!-- 房间成员分节（P7 多房间轮）：按房间分组（房名 sub + 成员行）——远端 mirror 成员是
+         易态投影，点击进该成员的 mirror 会话（只读） -->
+    <template v-if="kernel.remoteRooms.length > 0">
       <div class="roster-sec">房间成员</div>
-      <button
-        v-for="m in kernel.remoteMembers"
-        :key="m.memberId"
-        class="roster-item"
-        :class="{ active: ui.activeAgentId === `remote:${m.memberId}` }"
-        :aria-label="`远端成员 ${m.displayName} 的 mirror 会话`"
-        @click="ui.openAgent(`remote:${m.memberId}`)"
-      >
-        <span class="avatar avatar-group">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="REMOTE_ICON"></svg>
-          <span class="stat-dot" :class="m.connected ? 'idle' : ''"></span>
-        </span>
-        <span class="ri-text">
-          <span class="ri-name">{{ m.displayName }}</span>
-          <span class="ri-sub">远端 mirror</span>
-        </span>
-      </button>
+      <template v-for="room in kernel.remoteRooms" :key="room.roomId">
+        <div class="roster-group-sub">{{ roomLabelOf(room.roomId) }}</div>
+        <button
+          v-for="m in room.members"
+          :key="`${room.roomId}:${m.memberId}`"
+          class="roster-item"
+          :class="{ active: ui.activeAgentId === `remote:${room.roomId}:${m.memberId}` }"
+          :aria-label="`远端成员 ${m.displayName} 的 mirror 会话`"
+          @click="ui.openAgent(`remote:${room.roomId}:${m.memberId}`)"
+        >
+          <span class="avatar avatar-group">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="REMOTE_ICON"></svg>
+            <span class="stat-dot" :class="m.connected ? 'idle' : ''"></span>
+          </span>
+          <span class="ri-text">
+            <span class="ri-name">{{ m.displayName }}</span>
+            <span class="ri-sub">远端 mirror</span>
+          </span>
+        </button>
+      </template>
     </template>
   </aside>
 </template>
@@ -140,6 +147,16 @@ const REMOTE_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2
   color: var(--ink3);
   letter-spacing: 0.06em;
   padding: 14px 8px 5px;
+}
+
+/* 房间分组小节行（P7 多房间轮）：房名（备注名缺省房码）弱化呈现 */
+.roster-group-sub {
+  font-size: 10.5px;
+  color: var(--ink3);
+  padding: 2px 8px 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .roster-item {
