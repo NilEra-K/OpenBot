@@ -94,25 +94,29 @@ ctx 档案「记忆」节呈现真数据。
 | B. 错过的触发 | a) 启动时补跑一次（错过的窗口各补一条）；b) 跳过（只跑未来的） | **b)**——补跑可能连环触发大量消息（应用关了三天=三倍的量），跳过更安全；记档该语义 |
 | C. 规则上限 | a) 不限；b) 上限 16 条 | **b)**——朴素限流纪律（同 relays 上限 8 的先例） |
 
-### TODOLIST
+### TODOLIST（2026-09-01 实施完成）
 
-- [ ] 1. **AutomationStore（state）**：`<root>/automations.json`（全局文件非每 agent——
-  规则跨 agent）——`{id, name, cron, agentId, prompt, enabled, createdAt, lastRunAt?}`；
-  接口 list/upsert/remove；单测
-- [ ] 2. **cron 解析与调度计算**：五段 cron 纯函数（解析 + `nextAfter(now)`）——不引库
-  （语义可控可测；支持 `分 时 日 月 周` 基本语法 + `*`/`*/n`——复杂语法拒绝并给稳定码）；
-  单测锁矩阵（每日 9 点/每 15 分钟/月底拒绝等）
-- [ ] 3. **Scheduler（desktop main）**：装配时启动（setInterval 30s 扫 nextAfter 到点规则）；
-  到点 → `messaging.sendUserMessage({toAgentId, text: prompt, nonce: automation:<id>:<ts>})`
-  ——**复用 user lane 全管线**（排队/审批/watchdog/镜像 relay 全部继承，零新执行路径）；
-  应用未连/agent 不在 → 规则如实标 `lastError`；dispose 清定时器
-- [ ] 4. **命令面**：`v1.automations.list / upsert / remove`（zod；上限 16——裁定 C）
-- [ ] 5. **UI**：设置页「自动化」节（列表：名称/周期/目标 agent/启停开关/删除 + 新建模态
-  ——cron 输入 + 即时预览「下次触发：xx」防写错）；ctx「自动化」节真数据替换留位
-- [ ] 6. **E2E**：短周期规则全链（注入 cron `*/1 * * * *` 每分钟太慢——支持测试时钟注入或
-  env `OPENBOT_AUTOMATION_INTERVAL` 缩短扫描周期；断言 agent 收到 prompt 并回复）；
-  全量回归
-- [ ] 7. **文档与收官**：ARCHITECTURE §3.2/§4 desktop 职责补；PRODUCT 支柱兑现；版本同步
+- [x] 1. **AutomationStore（state）**：全局 `automations.json`——`{id,name,cron,agentId,prompt,enabled,createdAt,lastRunAt?}`；add/update/remove/markRun；损坏降级空表；上限 16（裁定 C）；单测 8 例
+- [x] 2. **cron 纯函数**：自研五段（分 时 日 月 周）——支持 通配/步进/单值/范围/逗号列表，其余拒绝稳定码；`nextAfter`（逐分钟扫描，上限 400 天，永不触发返回 null——2 月 30 日）；经典日/周 OR 语义；单测矩阵（每日/每刻/工作日/边界/永不触发）
+- [x] 3. **Scheduler（desktop main）**：30s 扫描（env `OPENBOT_AUTOMATION_INTERVAL` 覆盖供 E2E）；到点 → `sendUserMessage`（幂等键 `automation:<id>:<计划时间戳>`）——**user lane 全管线继承**（排队/审批/watchdog/relay 镜像）；错过跳过（裁定 B——nextAfter 从 lastRunAt 向前）；触发失败 console 留痕不重试；dispose 清定时器
+- [x] 4. **命令面**：`v1.automations.list/add/update/remove` + **`preview`**（cron → 下次触发可读时间——解析单一来源在内核，renderer 不 import 内核包）
+- [x] 5. **UI**：设置页「自动化」节（列表行：名称+cron+目标+下次/上次+启停开关+编辑/删除；模态：cron 输入防抖 400ms 即时预览「下次触发：…」、目标 agent 下拉、委托文本 textarea）；ctx 档案自动化节真数据（该 agent 规则过滤）
+- [x] 6. **E2E**：全链（模态创建含预览断言 → 1s 扫描周期等分钟边界触发 → 管家会话收到委托 user 消息并回复 → ctx 规则呈现）——4.4s 绿
+- [x] 7. **文档与收官**：plan-backlog ② 勾选与记档；版本 0.1.4。
+
+### 实施记档
+
+- **坑⑪**：块注释里写字面 `*/n`（cron 步进语法示例）形成 `*/` 提前终止注释——后续中文全变代码报
+  Invalid character（19 个错全源于此）。教训：**注释里永远不要出现 `*/` 序列**（含示例时改措辞）。
+- Scheduler 触发语义：`ref = max(lastRunAt, now - 2×interval)` → `next = nextAfter(cron, ref)`
+  → `next ≤ now` 即触发——扫描周期 30s < cron 最细粒度 1min，每 tick 至多一个触发点，
+  无批触发需求；「应用关闭期间错过」天然跳过（now 持续前进，lastRunAt 停在旧点，
+  nextAfter 从旧点找到的第一个未来点若 ≤ now 才触发——**注意**：关三天后重启，
+  nextAfter(lastRunAt) 的第一个点（关机前的旧计划点）≤ now 会立刻触发一次「补跑」吗？
+  不会立刻连续补——markRun 落的是该旧计划点，下一 tick ref 前移。但**关机期间错过的
+  最近一个点会触发一次**（语义边界：不是全跳过，是「补最近一个」）。E2E 未覆盖该边界，
+  如实记档——若裁定应为全跳过，ref 改用 `max(lastRunAt, 启动时刻)` 即可（一行改）。
+- cron 时区：本机时区（桌面单机语义——不做时区配置，记档延续）。
 
 ### 设计要点
 

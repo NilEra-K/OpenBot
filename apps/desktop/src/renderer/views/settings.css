@@ -633,3 +633,25 @@
   transform: translateX(16px);
   background: var(--accent-ink);
 }
+
+/* ---- 自动化（backlog ②）：cron 行内展示 + 预览行 ---- */
+
+.automation-cron {
+  font-size: 11px;
+  color: var(--ink3);
+  margin-left: 6px;
+}
+
+.cron-preview {
+  font-size: 11.5px;
+  color: var(--accent);
+  margin: -2px 0 2px;
+}
+
+.settings .field-input[type='textarea'],
+.settings textarea.field-input {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  font-family: inherit;
+}

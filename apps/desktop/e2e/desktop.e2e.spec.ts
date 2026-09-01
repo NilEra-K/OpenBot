@@ -1305,3 +1305,56 @@ test('记忆（backlog ①）：save_memory 落盘 → 重启注入新会话系�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→ 到点触发走 user lane → ctx 呈现', async () => {
+  const mock = await startMockOpenAi([
+    // 自动化触发的委托消息（user 消息进管家会话）→ 终答
+    { match: (l) => l.role === 'user' && l.content === '汇报昨天的任务', text: '自动化完成：昨日无事发生' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-auto-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+      OPENBOT_AUTOMATION_INTERVAL: '1000', // 扫描周期缩到 1s（E2E 确定性）
+    },
+  })
+  const page = await app.firstWindow()
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    // 配 provider
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.locator('#pfModel').fill('mock-model')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+
+    // 新建自动化（模态：cron 预览在场）
+    await page.getByRole('button', { name: '＋ 新建', exact: true }).click()
+    await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('新建自动化')
+    await page.locator('.wiz-overlay input.mono').fill('* * * * *')
+    await expect(page.locator('.cron-preview')).toContainText('下次触发', { timeout: 10_000 })
+    await page.locator('.wiz-overlay input').first().fill('每分钟汇报')
+    await page.locator('.wiz-overlay textarea').fill('汇报昨天的任务')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.locator('.setrow', { hasText: '每分钟汇报' })).toBeVisible({ timeout: 10_000 })
+
+    // 到点触发（1s 扫描 + 最长 70s 等下一个分钟边界）：管家会话收到委托并回复
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await expect(page.locator('.m-text', { hasText: '自动化完成：昨日无事发生' })).toBeVisible({ timeout: 75_000 })
+    // 委托文本在管家会话内（user 消息形态）
+    await expect(page.locator('.m.user .m-text', { hasText: '汇报昨天的任务' })).toBeVisible()
+
+    // ctx 档案：自动化节呈现该规则
+    await page.getByTitle('会话档案（Settings）').click()
+    await expect(page.locator('.mem-row', { hasText: '每分钟汇报' })).toBeVisible()
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

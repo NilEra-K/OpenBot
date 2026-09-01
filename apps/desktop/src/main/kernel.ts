@@ -19,7 +19,7 @@ import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinat
 import { startGateway, RelayClient } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
-import { NodeFs, SettingsStore, MemoryStore } from '@openbot/state'
+import { NodeFs, SettingsStore, MemoryStore, AutomationStore, nextAfter } from '@openbot/state'
 import type { SandboxPreference, RelaySettings } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
@@ -155,6 +155,14 @@ const relayEntrySchema = z.object({
   roomName: z.string().max(64).optional(),
 })
 const relaySetSchema = z.object({ relays: z.array(relayEntrySchema).max(8) })
+const automationInputSchema = z.object({
+  name: z.string().min(1).max(64),
+  cron: z.string().min(1).max(64),
+  agentId: z.string().min(1).max(128),
+  prompt: z.string().min(1).max(2_000),
+  enabled: z.boolean(),
+})
+const automationPatchSchema = automationInputSchema.partial().extend({ id: z.string() })
 /** 注册 agent（P4 Step 5）：name 必填（去空白 1-24 字）；color hex6 可选；role 默认 worker（steward 走任命事务语义） */
 const registerAgentSchema = z.object({
   name: z.string().trim().min(1).max(24),
@@ -293,6 +301,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   let approvalGate!: ManualApprovalGate
   // 记忆存储（backlog ①）：单一实例供装配（工具+注入）与命令面共用
   const memoryStore = new MemoryStore({ fs, root: dataRoot })
+  // 定时自动化（backlog ②）：Scheduler 扫描到点 → 以用户身份发消息（复用 user lane 全管线）。
+  // 错过跳过（裁定 B——nextAfter 从上次触发点向前找，应用关闭期间的自然跳过）；托盘常驻是运行前提
+  const automationStore = new AutomationStore({ fs, root: dataRoot, now: Date.now })
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
@@ -404,6 +415,38 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       const { agentId } = z.object({ agentId: z.string() }).parse(payload)
       return { entries: await memoryStore.list(agentId) }
     }, z.object({ agentId: z.string() }))
+    // 定时自动化（backlog ②）：CRUD + 下次触发预览（防 cron 写错——列表即带 nextAt）
+    .register('v1.automations.list', async () => {
+      const automations = await automationStore.list()
+      const now = Date.now()
+      return {
+        automations: await Promise.all(
+          automations.map(async (a) => ({
+            ...a,
+            nextAt: a.enabled ? nextAfter(a.cron, Math.max(a.lastRunAt ?? 0, now - 60_000)) : null,
+          })),
+        ),
+      }
+    })
+    .register('v1.automations.add', async (payload) => {
+      const input = automationInputSchema.parse(payload)
+      return { automation: await automationStore.add(input) }
+    }, automationInputSchema)
+    .register('v1.automations.update', async (payload) => {
+      const { id, ...patch } = automationPatchSchema.parse(payload)
+      return { automation: await automationStore.update(id, patch) }
+    }, automationPatchSchema)
+    .register('v1.automations.remove', async (payload) => {
+      const { id } = z.object({ id: z.string() }).parse(payload)
+      await automationStore.remove(id)
+      return { ok: true }
+    }, z.object({ id: z.string() }))
+    // cron 预览（模态输入即时反馈——解析单一来源在内核，renderer 不 import 内核包）
+    .register('v1.automations.preview', async (payload) => {
+      const { cron } = z.object({ cron: z.string() }).parse(payload)
+      const next = nextAfter(cron, Date.now())
+      return { nextAt: next, readable: next === null ? '该规则永不触发（如 2 月 30 日）' : new Date(next).toLocaleString('zh-CN') }
+    }, z.object({ cron: z.string() }))
     .register('v1.sandbox.status', async () => ({
       preference: sandboxStatus.preference,
       stored: await settings.getSandbox(),
@@ -494,6 +537,38 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const replayed = await approvalGate.replayPending()
   kernel.startWatchdog()
   kernel.statsService.start() // Box 遥测 + 宿主磁盘压力轮询（Step 6）
+
+  // ---- 定时自动化 Scheduler（backlog ②）：扫描到点 → sendUserMessage（user lane 全管线继承） ----
+  // 间隔默认 30s（env OPENBOT_AUTOMATION_INTERVAL 覆盖供 E2E 短周期）；触发幂等键
+  // automation:<id>:<计划时间戳>——Scheduler 竞态下同一计划点不双发；agent 不在/受理失败
+  // 照 markRun（每计划点只试一次，错误在 console 留痕——不无限重试打日志）
+  const automationIntervalMs = Number(process.env.OPENBOT_AUTOMATION_INTERVAL)
+  const automationTimer = setInterval(
+    () => {
+      void (async () => {
+        const now = Date.now()
+        for (const rule of await automationStore.list()) {
+          if (!rule.enabled) continue
+          const ref = Math.max(rule.lastRunAt ?? 0, now - 2 * (automationIntervalMs || 30_000))
+          const fireAt = nextAfter(rule.cron, ref)
+          if (fireAt === null || fireAt > now) continue
+          await automationStore.markRun(rule.id, fireAt)
+          try {
+            await kernel.messaging.sendUserMessage({
+              toAgentId: rule.agentId,
+              text: rule.prompt,
+              nonce: `automation:${rule.id}:${fireAt}`,
+            })
+            console.log(`[openbot] 自动化触发：${rule.name}（${rule.agentId} @ ${new Date(fireAt).toLocaleString('zh-CN')}）`)
+          } catch (err) {
+            console.error(`[openbot] 自动化触发失败（${rule.name}）：`, err instanceof Error ? err.message : err)
+          }
+        }
+      })()
+    },
+    Number.isFinite(automationIntervalMs) && automationIntervalMs >= 200 ? automationIntervalMs : 30_000,
+  )
+  automationTimer.unref()
 
   // ---- 跨用户房间接入（P7 多房间轮）：relays 数组并行连接 ----
   // settings.relays（P7 早期 relay 单字段读取端兼容回退）+ env 单组叠加（E2E/无头通道）。
@@ -676,6 +751,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       kernel.shellService.dispose() // 杀全部 PTY 会话（不留后台 shell）
       kernel.statsService.stop()
       kernel.stopWatchdog()
+      clearInterval(automationTimer) // Scheduler 孤儿定时器不留
       for (const { client } of relays) await client.stop() // 断全部房间连接（清重连定时器——孤儿不留）
       await gateway.close()
     },

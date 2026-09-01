@@ -86,6 +86,20 @@ export interface RelayRoomStatus {
   connected: boolean
 }
 
+/** 定时自动化规则（backlog ②）：v1.automations.list 返回形状 */
+export interface AutomationRow {
+  id: string
+  name: string
+  cron: string
+  agentId: string
+  prompt: string
+  enabled: boolean
+  createdAt: number
+  lastRunAt?: number
+  /** 下次触发预览（epoch ms；null=禁用或永不触发） */
+  nextAt: number | null
+}
+
 export interface PendingApproval {
   approvalId: string
   nonce: string
@@ -230,6 +244,8 @@ export const useKernelStore = defineStore('kernel', {
     remoteRooms: [] as Array<{ roomId: string; members: Array<{ memberId: string; displayName: string; connected: boolean }> }>,
     /** 跨用户房间接入状态（P7 多房间轮）：settings 全量 + env 叠加路，各房连接态实时 */
     relays: [] as RelayRoomStatus[],
+    /** 定时自动化（backlog ②）：规则 + 下次触发预览（nextAt null=禁用/永不触发） */
+    automations: [] as AutomationRow[],
     stewardId: null as string | null,
     /** 群清单（P5 Step 4）：boot 与 v1.group.state 事件时刷新 */
     groups: [] as GroupEntry[],
@@ -360,6 +376,27 @@ export const useKernelStore = defineStore('kernel', {
     async setRelays(input: Omit<RelayRoomStatus, 'connected'>[]): Promise<void> {
       await this.call('v1.relay.set', { relays: input })
       await this.refreshRelay()
+    },
+    // ---- 定时自动化（backlog ②）----
+    async refreshAutomations(): Promise<void> {
+      const r = await this.call<{ automations: AutomationRow[] }>('v1.automations.list')
+      this.automations = r.automations
+    },
+    async addAutomation(input: Omit<AutomationRow, 'id' | 'createdAt' | 'lastRunAt' | 'nextAt'>): Promise<void> {
+      await this.call('v1.automations.add', input)
+      await this.refreshAutomations()
+    },
+    async updateAutomation(id: string, patch: Partial<Omit<AutomationRow, 'id' | 'createdAt' | 'lastRunAt' | 'nextAt'>>): Promise<void> {
+      await this.call('v1.automations.update', { id, ...patch })
+      await this.refreshAutomations()
+    },
+    async removeAutomation(id: string): Promise<void> {
+      await this.call('v1.automations.remove', { id })
+      await this.refreshAutomations()
+    },
+    /** cron 输入即时预览（解析在内核——单一来源） */
+    async previewCron(cron: string): Promise<{ nextAt: number | null; readable: string }> {
+      return this.call('v1.automations.preview', { cron })
     },
     /** Box 休眠/唤醒（P4 Step 8）：状态转移经 v1.box.state 事件回放（boxes/ctx 灰化同一信号源） */
     async pauseBox(boxId: string): Promise<void> {

@@ -113,9 +113,13 @@ watch(
       .call<{ entries: MemoryRow[] }>('v1.memory.list', { agentId: ui.activeAgentId })
       .then((r) => (memories.value = r.entries))
       .catch(() => (memories.value = []))
+    void kernel.refreshAutomations().catch(() => {}) // ctx 呈现用（设置页也拉——幂等）
   },
   { immediate: true },
 )
+
+/** 该 agent 的自动化规则（backlog ②：ctx 呈现过滤） */
+const agentAutomations = computed(() => kernel.automations.filter((a) => a.agentId === ui.activeAgentId))
 
 /** 协作对象：edges 里与该 agent 相连的 agent↔agent 边（user 端不属协作叙事），按 count 聚合 */
 const collabs = computed(() => {
@@ -259,7 +263,14 @@ const lastAt = computed(() => {
         <div v-else class="mem-empty">尚无记忆——agent 在对话中调用 save_memory 后在此呈现</div>
 
         <div class="ctx-sec">自动化</div>
-        <div class="mem-empty">自动化属后续版本（P5+ backlog）——无数据源，不放占位条目</div>
+        <!-- 自动化（backlog ②）：该 agent 的定时规则（真数据——写路径在设置页） -->
+        <template v-if="agentAutomations.length > 0">
+          <div v-for="a in agentAutomations" :key="a.id" class="mem-row">
+            <span class="chip mem-kind">{{ a.enabled ? '定时' : '停用' }}</span>
+            <span class="mem-text">{{ a.name }} <span class="mono">{{ a.cron }}</span></span>
+          </div>
+        </template>
+        <div v-else class="mem-empty">该 agent 尚无自动化规则——设置页可创建</div>
       </template>
     </template>
 

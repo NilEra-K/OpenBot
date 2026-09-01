@@ -19,6 +19,82 @@ const kernel = useKernelStore()
 const ui = useUiStore()
 const toast = useToastStore()
 
+// ---- 定时自动化（backlog ②）：列表态挂 store；模态新建/编辑（cron 即时预览） ----
+const automationModal = ref(false)
+/** 编辑目标（null=新建） */
+const editingAutomation = ref<string | null>(null)
+const automationSaving = ref(false)
+const automationError = ref<string | null>(null)
+const cronPreview = ref<string | null>(null)
+const aForm = reactive({ name: '', cron: '', agentId: '', prompt: '', enabled: true })
+
+const agentNameOf = (agentId: string): string => kernel.roster.find((a) => a.agentId === agentId)?.name ?? agentId
+const fmtNext = (at: number): string => {
+  const d = new Date(at)
+  const today = new Date()
+  const sameDay = d.toDateString() === today.toDateString()
+  const hm = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return sameDay ? `今天 ${hm}` : `${d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} ${hm}`
+}
+
+const openAutomation = (row: { id: string; name: string; cron: string; agentId: string; prompt: string; enabled: boolean } | null): void => {
+  automationModal.value = true
+  automationError.value = null
+  cronPreview.value = null
+  editingAutomation.value = row?.id ?? null
+  if (row !== null) {
+    Object.assign(aForm, { name: row.name, cron: row.cron, agentId: row.agentId, prompt: row.prompt, enabled: row.enabled })
+  } else {
+    Object.assign(aForm, { name: '', cron: '', agentId: kernel.stewardId ?? '', prompt: '', enabled: true })
+  }
+}
+
+/** cron 输入即时预览（防抖 400ms——解析在内核 v1.automations.preview） */
+let cronPreviewTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => aForm.cron,
+  (cron) => {
+    cronPreview.value = null
+    if (cronPreviewTimer !== null) clearTimeout(cronPreviewTimer)
+    if (cron.trim() === '') return
+    cronPreviewTimer = setTimeout(() => {
+      void kernel.previewCron(cron.trim()).then((r) => (cronPreview.value = r.readable))
+    }, 400)
+  },
+)
+
+const automationValid = computed(() => aForm.name.trim() !== '' && aForm.cron.trim() !== '' && aForm.agentId !== '' && aForm.prompt.trim() !== '')
+
+const saveAutomation = async (): Promise<void> => {
+  automationSaving.value = true
+  automationError.value = null
+  try {
+    const input = { name: aForm.name.trim(), cron: aForm.cron.trim(), agentId: aForm.agentId, prompt: aForm.prompt.trim(), enabled: aForm.enabled }
+    if (editingAutomation.value === null) await kernel.addAutomation(input)
+    else await kernel.updateAutomation(editingAutomation.value, input)
+    toast.push(editingAutomation.value === null ? '自动化规则已创建' : '自动化规则已更新', 'success')
+    automationModal.value = false
+  } catch (err) {
+    automationError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    automationSaving.value = false
+  }
+}
+
+const toggleAutomation = (row: { id: string; enabled: boolean; name: string }): void => {
+  void kernel.updateAutomation(row.id, { enabled: !row.enabled }).then(() => {
+    toast.push(`${row.name} 已${row.enabled ? '停用' : '启用'}`, 'info')
+  })
+}
+
+const removeAutomationRow = (row: { id: string; name: string }): void => {
+  void kernel.removeAutomation(row.id).then(() => toast.push(`已删除：${row.name}`, 'info'))
+}
+
+onMounted(() => {
+  void kernel.refreshAutomations()
+})
+
 /** 应用版本（P4 Step 1）：main 经 preload 桥取 package.json version——不手写不过时 */
 const appVersion = ref<string | null>(null)
 // ---- 系统自启动（0.1.0 产品化）：注册表现状即真相——进页读、切换写（不另存偏好） ----
@@ -454,6 +530,36 @@ const wslHelpNeeded = computed(() => {
       </template>
       <p v-else class="settings-empty">沙箱状态未加载（网关未连接）</p>
 
+      <!-- 定时自动化（backlog ②）：规则到点 → 以用户身份给 agent 发消息（走既有审批管线）——
+           说明收进 ⓘ；列表 + 模态（cron 即时预览下次触发——防写错） -->
+      <div class="set-sec-row">
+        <div class="set-sec">自动化</div>
+        <HelpTip
+          text="定时规则到点后，以你的身份给指定 agent 发一条委托消息——排队、审批、执行与手动发消息完全一致（零旁路）。cron 为五段「分 时 日 月 周」（本机时区）；应用未运行期间错过的不补跑；规则上限 16 条。"
+        />
+        <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openAutomation(null)">＋ 新建</button>
+      </div>
+      <div v-for="a in kernel.automations" :key="a.id" class="setrow">
+        <div class="set-main">
+          <div class="set-name">{{ a.name }} <span class="mono automation-cron">{{ a.cron }}</span></div>
+          <div class="set-desc">
+            → {{ agentNameOf(a.agentId) }} · 下次 {{ a.enabled ? (a.nextAt === null ? '永不触发' : fmtNext(a.nextAt)) : '已停用' }}
+            <template v-if="a.lastRunAt !== undefined"> · 上次 {{ fmtNext(a.lastRunAt) }}</template>
+          </div>
+        </div>
+        <button
+          class="switch"
+          :class="{ 'is-on': a.enabled }"
+          role="switch"
+          :aria-checked="a.enabled"
+          :aria-label="`${a.name} 启停`"
+          @click="toggleAutomation(a)"
+        ></button>
+        <button class="btn btn-ghost btn-sm" @click="openAutomation(a)">编辑</button>
+        <button class="btn btn-ghost btn-sm btn-danger" @click="removeAutomationRow(a)">删除</button>
+      </div>
+      <p v-if="kernel.automations.length === 0" class="settings-empty">还没有自动化规则——到点让 agent 干活（如每天 9 点汇总）。</p>
+
       <!-- 权限策略（呈现现状，不放假开关）——说明收进 ⓘ（0.1.2 改版） -->
       <div class="set-sec-row">
         <div class="set-sec">权限策略</div>
@@ -513,6 +619,48 @@ const wslHelpNeeded = computed(() => {
           <span class="sandbox-row-label">{{ opt.label }}</span>
           <span class="sandbox-row-note">{{ opt.note }}</span>
         </label>
+      </div>
+
+      <!-- 自动化模态（新建/编辑共用；cron 即时预览下次触发） -->
+      <div v-if="automationModal" class="wiz-overlay" @mousedown.self="automationModal = false">
+        <div class="wiz-card" role="dialog" aria-label="自动化规则" @keydown.escape="automationModal = false">
+          <div class="wiz-head">
+            <span class="wiz-title">{{ editingAutomation === null ? '新建自动化' : '编辑自动化' }}</span>
+            <button class="wiz-close" type="button" aria-label="关闭" @click="automationModal = false">✕</button>
+          </div>
+          <div class="wiz-body relay-form">
+            <label class="relay-field">
+              <span class="field-label">规则名</span>
+              <input v-model="aForm.name" class="field-input" placeholder="例：每日早报" maxlength="32" />
+            </label>
+            <label class="relay-field">
+              <span class="field-label">cron（分 时 日 月 周——例：0 9 * * * 每天 9 点；*/15 * * * 1-5 工作日每 15 分钟）</span>
+              <input v-model="aForm.cron" class="field-input mono" placeholder="0 9 * * *" spellcheck="false" @keydown.enter.prevent />
+            </label>
+            <p v-if="cronPreview !== null" class="cron-preview mono">下次触发：{{ cronPreview }}</p>
+            <label class="relay-field">
+              <span class="field-label">目标 agent</span>
+              <select v-model="aForm.agentId" class="field-input">
+                <option v-for="a in kernel.roster" :key="a.agentId" :value="a.agentId">{{ a.name ?? a.agentId }}（{{ a.role }}）</option>
+              </select>
+            </label>
+            <label class="relay-field">
+              <span class="field-label">委托文本（到点后作为你的消息发给它）</span>
+              <textarea v-model="aForm.prompt" class="field-input" rows="3" maxlength="2000" placeholder="例：汇总昨天的任务与产物，简要汇报"></textarea>
+            </label>
+            <label class="relay-toggle">
+              <input type="checkbox" v-model="aForm.enabled" />
+              <span>启用该规则</span>
+            </label>
+            <p v-if="automationError" class="form-error">{{ automationError }}</p>
+          </div>
+          <div class="wiz-foot">
+            <button class="btn btn-primary" :disabled="!automationValid || automationSaving" @click="saveAutomation">
+              {{ automationSaving ? '保存中…' : '保存' }}
+            </button>
+            <button class="btn btn-ghost" @click="automationModal = false">取消</button>
+          </div>
+        </div>
       </div>
 
       <!-- 关于 -->
