@@ -360,6 +360,8 @@ export interface GuiTakeoverLock {
 }
 
 export interface ComputerToolDeps extends BoxToolDeps {
+  /** GUI 显示地址（exec 环境注入——WSLg 在场时 Xvfb 走 TCP 环回如 127.0.0.1:2；缺省 :0） */
+  display?: string
   /** 接管锁（可选——CLI 冒烟不带）；动作工具执行前等待 */
   lock?: Pick<GuiTakeoverLock, 'waitTurn'>
   /** 截图实现注入（默认真跑 scrot；测试/mock 注入替身） */
@@ -381,6 +383,7 @@ async function captureScreen(backend: BoxToolDeps['backend'], boxId: string): Pr
       `scrot -o /tmp/.openbot-shot.png && convert /tmp/.openbot-shot.png -resize '1280x>' -quality 80 ${shot} && base64 -w0 ${shot}`,
     ],
     timeoutMs: 15_000,
+    env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' },
   })
   if (r.exitCode !== 0) throw new KernelError('COMPUTER_CAPTURE_FAILED', `截图失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
   const b64 = r.stdout.trim()
@@ -391,7 +394,7 @@ async function captureScreen(backend: BoxToolDeps['backend'], boxId: string): Pr
 /** 默认动作：xdotool 经 sh -c（组合键等 shell 语义）；命令由本层构造（非用户输入拼 shell——
  *  type 文本经单引号转义） */
 async function actXdotool(backend: BoxToolDeps['backend'], boxId: string, script: string): Promise<void> {
-  const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000 })
+  const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000, env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' } })
   if (r.exitCode !== 0) throw new KernelError('COMPUTER_ACT_FAILED', `xdotool 失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
 }
 

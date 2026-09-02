@@ -153,10 +153,13 @@ export class WslBoxBackend implements BoxBackend {
 
   async exec(boxId: BoxId, spec: ExecSpec): Promise<ExecResult> {
     const box = this.#require(boxId)
-    // 环境变量经 coreutils env 注入（argv 直传、零 shell 拼接，无注入面）
+    // 环境变量经 coreutils env 注入（argv 直传、零 shell 拼接，无注入面）。
+    // 坑⑭（GUI 栈真机实测）：不带 `--` 分隔符——rootfs 的 env（busybox 系）不认 `--`，
+    // 报 "env: '--': No such file or directory"；我们注入的键（DISPLAY 等）不以 - 开头，
+    // 无选项歧义，`env K=V cmd` 全兼容。E2E 是 mock 后端抓不到此坑——真 WSL 首用户是 GUI。
     const envPairs = Object.entries(spec.env ?? {}).map(([k, v]) => `${k}=${v}`)
     const command = ['wsl', '-d', box.name, '--cd', spec.cwd ?? this.#workdir]
-    if (envPairs.length > 0) command.push('--', 'env', ...envPairs, '--', ...spec.command)
+    if (envPairs.length > 0) command.push('--', 'env', ...envPairs, ...spec.command)
     else command.push('--', ...spec.command)
     const r = await this.#run({
       command,

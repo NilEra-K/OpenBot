@@ -469,6 +469,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       const r = await backend.exec(boxId, {
         command: ['sh', '-c', "scrot -o /tmp/.openbot-live.png && convert /tmp/.openbot-live.png -resize '960x>' -quality 75 /tmp/.openbot-live.jpg && base64 -w0 /tmp/.openbot-live.jpg"],
         timeoutMs: 15_000,
+        env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' },
       })
       if (r.exitCode !== 0) return { image: null, reason: `截图失败：${r.stderr.trim().slice(0, 120)}` }
       return { image: { base64: r.stdout.trim(), mime: 'image/jpeg' } }
@@ -476,7 +477,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     .register('v1.box.gui.input', async (payload) => {
       const { boxId, script } = z.object({ boxId: z.string(), script: z.string().max(500) }).parse(payload)
       if (!takeoverHeld) guiTakeover(true) // 首笔用户输入即接管（挂起 agent 下一个动作）
-      const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000 })
+      const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000, env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' } })
       return { ok: r.exitCode === 0 }
     }, z.object({ boxId: z.string(), script: z.string().max(500) }))
     .register('v1.box.gui.release', async () => {

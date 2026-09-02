@@ -79,7 +79,7 @@ describe('WslBoxBackend（脚本化替身）', () => {
       onChunk: (c) => chunks.push(c),
     })
     expect(last(calls)).toEqual([
-      'wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--cd', '/work', '--', 'env', 'K=V', '--', 'node', '-v',
+      'wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--cd', '/work', '--', 'env', 'K=V', 'node', '-v',
     ])
     expect(chunks).toEqual([{ stream: 'stdout', text: 'hi\n' }])
     expect(r).toEqual({ exitCode: 0, stdout: 'hi\n', stderr: '' })
