@@ -411,6 +411,7 @@ export function computerScreenshotTool(deps: ComputerToolDeps): Tool {
     spec: {
       name: 'computer_screenshot',
       description: '截取沙箱桌面全屏（返回图像）。坐标语义：截图分辨率即点击坐标系。初次看屏或核实状态时用。',
+      argsSchema: { type: 'object', properties: {}, additionalProperties: false },
     },
     async execute(ctx) {
       const boxId = requireBox(ctx)
@@ -452,24 +453,24 @@ export function computerTools(deps: ComputerToolDeps): Tool[] {
   }
   return [
     computerScreenshotTool(deps),
-    computerActionTool(deps, { name: 'computer_click', description: '点击沙箱桌面坐标 (x, y)——左键单击' }, (a) =>
+    computerActionTool(deps, { name: 'computer_click', description: '点击沙箱桌面坐标 (x, y)——左键单击', argsSchema: { type: 'object', properties: { x: { type: 'number', description: '横坐标（像素，截图分辨率坐标系）' }, y: { type: 'number', description: '纵坐标（像素）' } }, required: ['x', 'y'], additionalProperties: false } }, (a) =>
       `xdotool mousemove ${num(a['x'])} ${num(a['y'])} click 1`,
     ),
-    computerActionTool(deps, { name: 'computer_double_click', description: '双击坐标 (x, y)' }, (a) =>
+    computerActionTool(deps, { name: 'computer_double_click', description: '双击坐标 (x, y)', argsSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'], additionalProperties: false } }, (a) =>
       `xdotool mousemove ${num(a['x'])} ${num(a['y'])} click --repeat 2 --delay 150 1`,
     ),
-    computerActionTool(deps, { name: 'computer_type', description: '在焦点元素键入文本（先 click 定位输入框）' }, (a) => {
+    computerActionTool(deps, { name: 'computer_type', description: '在焦点元素键入文本（先 click 定位输入框）', argsSchema: { type: 'object', properties: { text: { type: 'string', description: '要键入的文本' } }, required: ['text'], additionalProperties: false } }, (a) => {
       const text = requireText(a['text'])
       return `xdotool type --delay 30 -- ${shQuote(text)}`
     }),
-    computerActionTool(deps, { name: 'computer_key', description: '按键或组合键（如 ctrl+a / Return / ctrl+w）' }, (a) => {
+    computerActionTool(deps, { name: 'computer_key', description: '按键或组合键（如 ctrl+a / Return / ctrl+w）', argsSchema: { type: 'object', properties: { key: { type: 'string', description: '键名或组合（ctrl+a / Return / space / alt+Tab）' } }, required: ['key'], additionalProperties: false } }, (a) => {
       const key = requireText(a['key']).trim()
       if (!/^[a-zA-Z0-9_+\-]+(\+[a-zA-Z0-9_+\-]+)*$/.test(key)) {
         throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, `key 只接受组合键语法（字母数字与 +，收到：${key}）`)
       }
       return `xdotool key ${key}`
     }),
-    computerActionTool(deps, { name: 'computer_scroll', description: '滚动（dy 正=向下，负=向上；步长约 120/格）' }, (a) => {
+    computerActionTool(deps, { name: 'computer_scroll', description: '滚动（dy 正=向下，负=向上；步长约 120/格）', argsSchema: { type: 'object', properties: { dy: { type: 'number', description: '滚动量（像素，正=向下）' } }, required: ['dy'], additionalProperties: false } }, (a) => {
       const dy = num(a['dy'])
       const btn = dy >= 0 ? 5 : 4
       const steps = Math.max(1, Math.min(Math.abs(dy) / 120, 20))
