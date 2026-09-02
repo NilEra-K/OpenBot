@@ -148,3 +148,57 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
   交还 → 回落旁观中）。单测 5 例（锁语义/argv/转义/校验/lastImageOf）。
 - **真机验收（如实未验收）**：GUI 容器构建/启动（podman machine 未启——与 nspawn/UTM/Docker
   镜像同待设备池）；xdotool/scrot 实际行为由单测替身锁 argv。版本 0.1.6。
+
+## 二期：30 FPS 实况流（2026-09-02 用户需求——规划待批）
+
+一期截图轮询（1.5s）是裁定 B 的刻意最小面（零端口零新协议），不是架构天花板——**WS /stream
+数据面在 ARCHITECTURE §5 第一天就按 10-30fps 设计**（二进制帧 + 背压，PTY 流已跑其上）。
+二期把 GUI 画面搬上这条既有通道。
+
+### 目标与验收
+
+- GUI 视图 30 FPS 实况（用户接管操作时流畅反馈）；agent 旁观时段低频兜底（省资源）；
+- 按需开流：**接管时才开高频流**（agent 桌面无动静时 30fps 是纯浪费——用户操作才需要流畅）；
+- 背压生效（渲染端跟不上自动降速不堆积——WS /stream 既有语义）；
+- 键入批量合并（一期单键一发 exec 往返 ~10-30ms，连续打字卡顿——50ms 窗口合并成一串 xdotool type）。
+
+### 待裁定（批准时表态，未表态按推荐）
+
+| 项 | 选项 | 推荐 |
+|---|---|---|
+| A. 采集引擎 | a) ffmpeg x11grab 常驻管道（`-f x11grab -r 30 ... -f mjpeg image2pipe`——spawn 拿 stdout 拆帧，GUI 栈加 ffmpeg 包；实现简单无新协议库）；b) x11vnc（RFB 增量更新，空闲近零流量——但要引 RFB 客户端库或自解析协议） | **a)**——mjpeg 管道零协议依赖拆帧即帧；环回带宽 mjpeg 30fps@1280x800 约 30-60MB/s 无压力；H.264+WebCodecs 压缩上限记档三期 |
+| B. 开流策略 | a) 一直 30fps；b) 接管时 30fps / 旁观时 1.5s 轮询兜底 | **b)**——按需开流省资源；切流无缝（blob 帧与轮询帧同一 img 槽） |
+| C. 流生命周期 | a) GUI 视图开即起流、关即杀 ffmpeg；b) 装配起常驻 | **a)**——随视图开关（孤儿进程纪律——dispose 杀干净，坑③教训） |
+
+### TODOLIST
+
+- [ ] 1. **采集管道（desktop main）**：spawn `ffmpeg -f x11grab -r 30 -s 1280x800 -i :0 -f mjpeg
+  pipe:1`（经 boxes 后端的宿主侧进程？否——**x11grab 在 Box 内**：exec 起常驻会话？一期 exec
+  有 timeout 上限不适用常驻——经 backend 的 spawnShell（PTY 通道）或新增 backend.pipe 语义。
+  实现时定：倾向 shell 会话跑 ffmpeg + 增量读（PTY 流即是既有常驻通道——BoxOps 终端同款），
+  拆帧器（mjpeg 边界 FFD8/FFD9 扫描）纯函数单测
+- [ ] 2. **WS /stream 扩帧型**：stream-protocol 加 `gui` 帧类型（meta: boxId；二进制 jpeg 帧 +
+  背压——复用既有 multiplex）；hub 汇流（StreamHub attach 同款）
+- [ ] 3. **GuiScreen 双态帧源**：接管/视图可见 → 订阅 gui 流（blob URL 每帧换 src——Chromium
+  30fps 可行）；旁观 → 沿用 1.5s 轮询；切流无缝
+- [ ] 4. **键入批量**：前端 50ms 窗口合并键入为一串（xdotool type 整串）；点击即时不动
+- [ ] 5. **E2E**：mock 流（假 ffmpeg——PTY 替身推两帧 mjpeg）断言帧到达 + 切流状态；接管开流/
+  交还降频的 UI 断言；单测（mjpeg 拆帧器纯函数）
+- [ ] 6. **文档收官**：ARCHITECTURE §5 数据面补 gui 帧型一行；plan 勾选；版本同步
+
+### 设计要点
+
+- **帧源唯一化**：ffmpeg 管道与轮询截图共用「最近帧」槽位（接管切流时无黑屏间隙）。
+- **背压即降速**：WS /stream 既有——渲染端 img 解码慢时 hub 自动暂停读取管道（不丢帧不堆积）。
+- **token 纪律不变**：30fps 流只进 UI（用户眼睛看），**不进 LLM**——agent 的截图回喂仍走一期
+  工具链（1280/960 宽单帧），两条通道互不干扰。
+- **WSL 路径零端口**：ffmpeg 在发行版内跑（x11grab 直连 :0），帧经 PTY 管道出——不经 TCP，
+  WSL localhost 转发都不需要；容器路径同构（exec/PTY 通道）。
+
+### 风险与地雷
+
+- **PTY 二进制安全**：box-term 通道若按 UTF-8 解码会毁 jpeg 字节——需二进制模式会话（实现时
+  核 shellService 的解码层；必要时经 backend 新增 pipe 语义而非 PTY——实施第一步定夺）；
+- **拆帧鲁棒性**：mjpeg 边界扫描要处理跨块帧（纯函数 + fuzz 单测）；
+- **ffmpeg 包体**：GUI 栈 apt 增 ~100MB（镜像/发行版体积）——如实记档；
+- Windows 侧无 ffmpeg 依赖（帧在 Box 内编码，宿主只搬运字节）。
