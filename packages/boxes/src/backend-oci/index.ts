@@ -166,7 +166,11 @@ export class OciBoxBackend implements BoxBackend {
     await this.#ensureRunning(box.name)
     const command = [this.#cli, 'exec', '-w', spec.cwd ?? this.#workdir]
     for (const [k, v] of Object.entries(spec.env ?? {})) command.push('-e', `${k}=${v}`)
-    command.push(box.name, '--', ...spec.command)
+    // 坑⑮（CLI 方言，podman 真机首证）：不带 '--' 分隔符——docker CLI 认它为选项结束符，
+    // podman/crun 原样传给运行时当可执行名（"crun: executable file `--` not found"）；脚本化
+    // 单测 mock 的 ProcRunner 抓不到此层（v0.0.26 记档「真机剩余风险」的应验）。容器名在前
+    // 命令在后本无歧义（首元素是程序名不以 - 开头）——与 WSL env 的坑⑭同族修法：去掉 --
+    command.push(box.name, ...spec.command)
     const r = await this.#run({
       command,
       timeoutMs: spec.timeoutMs,

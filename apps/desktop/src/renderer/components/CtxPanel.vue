@@ -102,12 +102,22 @@ const initialOf = computed(() => displayName.value.trim().charAt(0) || '?')
 // ---- GUI 桌面视图（plan-computer-use Step 6）：computer-use 启用时屏幕区可切「终端 ⇄ GUI」 ----
 const guiMode = ref(false)
 const computerEnabled = ref(false)
-onMounted(() => {
+const fetchComputerState = (): void => {
   void kernel
     .call<{ enabled: boolean }>('v1.box.gui.state')
     .then((r) => (computerEnabled.value = r.enabled))
     .catch(() => (computerEnabled.value = false))
-})
+}
+onMounted(fetchComputerState)
+// 网关竞态兜底（podman 真机首证）：装配慢（建箱秒级拖住网关就绪）时挂载早于网关——
+// 首调失败置 false 且一次性不再拉，GUI 入口永久消失（mock 后端快，E2E 从不触发）；
+// connected 翻真即重拉——能力驱动 UI 的真值必须到达，不赌挂载时序
+watch(
+  () => kernel.connected,
+  (on) => {
+    if (on) fetchComputerState()
+  },
+)
 
 // ---- 记忆（backlog ①）：ctx 档案打开时现拉（易态呈现——写入经 agent 工具，无事件推送；
 //      拉取失败如实空，不放假条目） ----

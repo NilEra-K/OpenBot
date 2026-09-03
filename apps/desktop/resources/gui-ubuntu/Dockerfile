@@ -1,30 +1,45 @@
-# OpenBot GUI 容器模板（plan-computer-use 裁定 A 轻栈）
-# 目标：给 computer-use 工具族一张可操作的操作面——xvfb 虚拟显示 + openbox 轻窗口管理
-# （不装完整桌面：一期目标是「操作 GUI 应用」不是「仿真桌面」）+ xdotool（输入注入）/
-# scrot（截图）工具对。agent 与用户共用同一条 xdotool/scrot 通路（CLI 即接口）。
+# OpenBot GUI 容器模板（2026-09-03 用户裁定 A2：xfce 全桌面——v0.1.6 openbox 轻栈升级）
+# 目标：VMWare 式可接管桌面——Xvfb 虚拟显示 + xfce4 完整桌面（面板/桌面图标/应用菜单/窗口管理）
+# + xdotool（输入注入）/ scrot（截图）工具对。agent 与用户共用同一条 xdotool/scrot 通路（CLI 即接口）。
 #
 # 构建（podman 为例；docker 同）：
 #   podman build -t openbot-gui:24.04 -f Dockerfile .
-# 运行不是手动做的——desktop 装配把该镜像作为 Box 创建（OPENBOT_GUI_IMAGE 覆盖镜像名）。
+# 运行不是手动做的——desktop 装配把该镜像作为 Box 创建：
+#   OPENBOT_SANDBOX=podman OPENBOT_PODMAN_IMAGE=openbot-gui:24.04 OPENBOT_COMPUTER=1 OPENBOT_GUI_DISPLAY=:0
 
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:0 \
-    SCREEN_W=1280 \
-    SCREEN_H=800
+    SCREEN_W=1920 \
+    SCREEN_H=1080
 
-# 最小 GUI 集：显示栈（xvfb/openbox）+ 工具（xdotool/scrot/imagemagick 截图缩放）+
-# 常用应用（firefox 浏览器 / pcmanfm 文件管理器 / xterm 终端）+ 中文字体（截图可读）
+# 国内源加速（machine 内直连官方源慢；24.04 为 deb822 格式 ubuntu.sources）。
+# 镜像选型实测（2026-09-03，machine 内 DNS 有污染）：tuna 1.55MB/s ✓ / 华为云 1.40MB/s ✓ /
+# aliyun 被污染到假 IP 111KB/s ✗ / 腾讯云假 IP 0 ✗——锁定 tuna
+RUN sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/ubuntu.sources
+
+# 桌面栈：Xvfb 虚拟显示 + xfce4 元包（会话+面板+thunar 文件管理+窗口管理）+ 终端/编辑器
+# + 工具对 + 中文字体（坑记档：首版清单漏 xvfb——容器能起但入口报 Xvfb: not found，
+# scrot 连不上 :0，排查靠 podman logs 看入口 stderr）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      xvfb openbox xdotool scrot imagemagick \
-      firefox pcmanfm xterm \
+      xvfb \
+      xfce4 xfce4-terminal mousepad \
+      dbus-x11 x11-utils \
+      xdotool scrot imagemagick \
       fonts-noto-cjk \
-      x11-utils \
+      wget ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 常驻入口：Xvfb 起虚拟显示 → openbox 接管窗口管理 → 尾随 sleep 保持容器存活。
-# DISPLAY 环境对 exec 会话可见（computer 工具的 xdotool/scrot 依赖它）。
+# firefox 走 Mozilla 官方 apt 仓：24.04 的 apt firefox 是 snap 空壳、容器内 snap 不可用（坑记档）
+RUN install -d -m 0755 /etc/apt/keyrings \
+    && wget -q -O /etc/apt/keyrings/packages.mozilla.org.asc https://packages.mozilla.org/apt/repo-signing-key.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" > /etc/apt/sources.list.d/mozilla.list \
+    && printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla \
+    && apt-get update && apt-get install -y --no-install-recommends firefox \
+    && rm -rf /var/lib/apt/lists/*
+
+# 常驻入口：Xvfb 起虚拟显示 → dbus 会话包裹 xfce4 桌面 → sleep 保持容器存活
 COPY start.sh /usr/local/bin/openbot-gui-start
 RUN chmod +x /usr/local/bin/openbot-gui-start
 

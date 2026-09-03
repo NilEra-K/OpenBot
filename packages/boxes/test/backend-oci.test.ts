@@ -106,14 +106,14 @@ describe('OciBoxBackend（脚本化替身）', () => {
     })
   })
 
-  it('exec：-w/-e 注入 + -- 分隔；Running 容器直通（零额外动作）', async () => {
+  it('exec：-w/-e 注入，无 -- 分隔符（坑⑮：podman/crun 把 -- 当可执行名）；Running 容器直通（零额外动作）', async () => {
     const { run, calls } = scripted(psRespond('up'))
     const backend = new OciBoxBackend({ id: 'docker', cli: 'docker', run })
     await backend.create({ image: 'default' })
     const r = await backend.exec('box-1', { command: ['node', '-v'], env: { K: 'V' }, cwd: '/tmp' })
     expect(r.exitCode).toBe(0)
     expect(last(calls)).toEqual([
-      'docker', 'exec', '-w', '/tmp', '-e', 'K=V', `${OCI_BOX_PREFIX}box-1`, '--', 'node', '-v',
+      'docker', 'exec', '-w', '/tmp', '-e', 'K=V', `${OCI_BOX_PREFIX}box-1`, 'node', '-v',
     ])
   })
 

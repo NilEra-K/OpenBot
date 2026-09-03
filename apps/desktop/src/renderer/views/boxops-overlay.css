@@ -2,11 +2,13 @@
 
 .boxops {
   position: fixed;
-  /* 对齐原型语义（boxops 覆盖 main 主区、rail 侧栏保留可见可点）：留出 titlebar 38px 与 rail 56px */
+  /* 对齐原型语义（boxops 覆盖 main 主区、rail 侧栏保留可见可点）：留出 titlebar 38px、rail 56px
+     与 statusbar 28px——bottom:0 会把 bo-hint 直接压在 statusbar 上（用户实测报障；statusbar 的
+     沙箱/网关真值在操作台下也常驻可见，与 rail 让位同理） */
   top: 38px;
   left: 56px;
   right: 0;
-  bottom: 0;
+  bottom: 28px;
   z-index: 80;
   /* 全屏 overlay 显式退出拖窗区：fixed 盖住 titlebar 不改变 drag 判定（Chromium 行为）。
      现已让出 titlebar 区域，此声明保留作防御（z 轴仍在 drag 矩形延伸判定内） */
