@@ -141,8 +141,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 内容宽起步（v0.1.2 审计漏项的根治）：flex:1 的 basis=0 使假想尺寸恒为 0——box-gauges 的
+     flex-wrap 永不触发；min-width:0 又放行压缩到内容宽以下，gauge-v(flex:none) 只能溢出压相邻
+     仪表（实测 365px 卡内「256 MB / 2.0 GB」被「磁盘」压字 31px）。改 basis:auto：假想尺寸=内容宽，
+     放不下真换行、放得下 grow 分余宽（变体实测 365px 卡单行、两条比例条各 32px 零溢出）。
+     坑记档：min-width:min-content 无效——内在尺寸计算不吃内部 basis-0 项（gauge-bar）的显式
+     min-width，地板≈125px 仍低于 122px 分段，注入实测布局纹丝不动 */
   min-width: 0;
-  flex: 1;
+  flex: 1 1 auto;
 }
 
 /* 纯数值维度（无上限事实，Step 10）：收内容宽，余宽留给 CPU 真比例条 */
@@ -302,6 +308,10 @@
   font-size: 11px;
   color: var(--ink3);
   margin-top: 1px;
+  /* 窄卡不折行：状态真值由行内 chip 承担（「· active」与其语义重复），溢出收省略号 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .box-actions {

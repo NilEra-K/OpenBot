@@ -154,4 +154,44 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- btn 家族副本（模板 .btn/.btn-secondary/.btn-sm 此前无定义——裸按钮）。
+   gui-bar 恒深底（rgba(26,24,21,.85) 不随主题翻转）——配色定死深色方案（同 .gui-idle #8a938e 先例）；
+   不取 --bg2/--ink/--accent：日间主题下会翻成浅色系与深 bar 割裂 ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #eaeaea;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: background 140ms var(--ease), border-color 140ms var(--ease);
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-sm {
+  height: 26px;
+  padding: 0 12px;
+}
+
+.btn-secondary {
+  border-color: rgba(238, 177, 84, 0.4);
+  background: rgba(238, 177, 84, 0.08);
+  color: #eeb154;
+}
+
+.btn-secondary:hover {
+  background: rgba(238, 177, 84, 0.16);
+  border-color: rgba(238, 177, 84, 0.6);
+}
 </style>

@@ -42,6 +42,7 @@
 
 .empty-cta {
   min-width: 132px;
+  justify-content: center; /* .btn 基类无此行：min-width 撑开后剩余空隙全落右侧，文字偏左 */
 }
 
 .empty-steps {

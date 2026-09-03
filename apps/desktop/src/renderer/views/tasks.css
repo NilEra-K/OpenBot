@@ -227,3 +227,26 @@
   color: var(--danger);
   background: rgba(var(--danger-rgb), 0.1);
 }
+
+/* run-top 内嵌「中止」按钮（模板有类此前无定义——裸按钮）：m-stop 同款 danger-ghost 形态（console.css）适配 run 卡片，
+   右缘对齐卡片级动作 */
+.run-stop {
+  margin-left: auto;
+  border: 1px solid rgba(var(--danger-rgb), 0.4);
+  border-radius: 6px;
+  background: transparent;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--danger);
+  cursor: pointer;
+  transition: background 140ms var(--ease);
+}
+
+.run-stop:hover:not(:disabled) {
+  background: rgba(var(--danger-rgb), 0.12);
+}
+
+.run-stop:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
