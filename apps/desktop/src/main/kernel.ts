@@ -35,7 +35,7 @@ import {
   probeAll,
   runProcess,
 } from '@openbot/boxes'
-import type { BackendProbe, BoxBackend, BoxStats } from '@openbot/boxes'
+import type { BackendProbe, BoxBackend, BoxStats, PipeSession, PipeSpec } from '@openbot/boxes'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
 
@@ -233,6 +233,44 @@ function mockStatsEnv(): { stats?: BoxStats } {
   return Object.keys(stats).length > 0 ? { stats } : {}
 }
 
+/** mock 假 ffmpeg（GUI 实况流 E2E/演示）：OPENBOT_COMPUTER=1 时给 mock 后端注入周期吐帧的
+ *  假采集管道——真 ffmpeg 在 Box 内（backend.openPipe 直出帧字节），mock 只演同一条帧流：
+ *  1x1 JPEG 每 150ms 一帧（约 6-7fps 的确定性低速帧，够断言「流开、帧到、停流」，不灌爆） */
+const MOCK_GUI_JPEG_BASE64 =
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iiigD//2Q=='
+
+function mockGuiPipe(): ((boxId: string, spec: PipeSpec) => PipeSession) | undefined {
+  if (process.env.OPENBOT_COMPUTER !== '1') return undefined
+  const frame = new Uint8Array(Buffer.from(MOCK_GUI_JPEG_BASE64, 'base64'))
+  return () => {
+    let dataCb: ((chunk: Uint8Array) => void) | null = null
+    let exitCb: ((code: number | null) => void) | null = null
+    let closed = false
+    const timer = setInterval(() => {
+      if (!closed && dataCb !== null) dataCb(frame)
+    }, 150)
+    timer.unref?.()
+    return {
+      onData: (cb) => {
+        dataCb = cb
+      },
+      onExit: (cb) => {
+        exitCb = cb
+      },
+      stderrTail: () => '',
+      write: (_line) => {
+        /* 假 ffmpeg 不吃输入 */
+      },
+      close: () => {
+        if (closed) return
+        closed = true
+        clearInterval(timer)
+        exitCb?.(0)
+      },
+    }
+  }
+}
+
 /** 装配桌面内核（app ready 后调用；safeStorage 依赖 ready 状态） */
 export async function assembleDesktop(): Promise<DesktopKernel> {
   // NodeFs 路径约定 posix 风格（Windows 同样接受 '/'）
@@ -273,6 +311,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     implemented: ['mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm'],
     order: platformOrder[platform] ?? ['wsl', 'docker', 'podman'],
   })
+  const mockPipe = mockGuiPipe()
   const backend: BoxBackend =
     chosen.backendId === 'wsl'
       ? new WslBoxBackend({ rootfs: rootfsPath, dir: `${userDataRoot}/boxes`, now: Date.now })
@@ -289,7 +328,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
               })
             : chosen.backendId === 'utm'
               ? new UtmBoxBackend({ template: utmTemplate, now: Date.now })
-              : new MockBoxBackend({ now: Date.now, ...mockStatsEnv() })
+              : new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
   // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
   const sandboxStatus: SandboxStatus = {
     preference,
@@ -358,6 +397,38 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       }
     })(),
   })
+
+  // ---- GUI 注入常驻通道（P0-1，2026-09-04 优化轮）：Box 内常驻 `sh -s` 读行执行——
+  // 事件延迟 = 容器内 xdotool 执行（~数 ms）；对照逐事件 podman exec 冷启实测 410-550ms
+  // （「不跟手」的根治——与采集管道对称：采集常驻了，注入不能再逐次冷启）。
+  // 惰性建立（首笔 GUI 输入）、随 Box 切换重建、进程退出自动除名（下次输入重建）、
+  // dispose 兜底杀（孤儿纪律）。通道不可用（后端无 openPipe / 启动失败）回退逐事件 exec ----
+  let guiInputChannel: { boxId: string; pipe: PipeSession } | null = null
+  const guiDisplay = (): string => process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2'
+  const ensureGuiInputChannel = async (boxId: string): Promise<void> => {
+    if (guiInputChannel !== null && guiInputChannel.boxId === boxId) return
+    guiInputChannel?.pipe.close()
+    guiInputChannel = null
+    if (!backend.openPipe) return
+    try {
+      // 坑⑱同款清场：硬杀后残留的旧注入 sh（argv $0 标签定位——$0 进 /proc cmdline）；
+      // 同坑⑱b 模式拆半拼接（防 pkill 命中执行自身命令的 sh）
+      await backend
+        // 模式拆半（坑⑱b）：shell 相邻单引号段拼接 'openbot-gui-''input'——sh 自身 cmdline
+        // 含引号字符不被 pkill 模式命中（防自杀），解析后模式仍为 openbot-gui-input
+        .exec(boxId, { command: ['sh', '-c', "pkill -9 -f 'openbot-gui-''input' 2>/dev/null; true"], timeoutMs: 5_000 })
+        .catch(() => {})
+      // argv 第三参是 $0 标签（进 /proc cmdline 供 pkill 定位；不影响 -s 行式读 stdin）
+      const pipe = await backend.openPipe(boxId, { command: ['sh', '-s', 'openbot-gui-input'], env: { DISPLAY: guiDisplay() } })
+      pipe.onExit(() => {
+        if (guiInputChannel?.pipe === pipe) guiInputChannel = null
+      })
+      guiInputChannel = { boxId, pipe }
+      console.log(`[openbot] gui 注入通道开启（${boxId}，display ${guiDisplay()}）`)
+    } catch (err) {
+      console.warn('[openbot] gui 注入通道建立失败（回退逐事件 exec）：', err instanceof Error ? err.message : err)
+    }
+  }
 
   /**
    * 模型覆盖分流（backlog ③）：档案名指定 → 静态 provider 实例（resolve 时构造——运行中档案
@@ -477,7 +548,14 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     .register('v1.box.gui.input', async (payload) => {
       const { boxId, script } = z.object({ boxId: z.string(), script: z.string().max(500) }).parse(payload)
       if (!takeoverHeld) guiTakeover(true) // 首笔用户输入即接管（挂起 agent 下一个动作）
-      const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000, env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' } })
+      // 常驻通道优先：行式写入 sh -s（容器内逐行执行，天然串行合并突发）；不可用回退逐事件 exec
+      if (guiInputChannel === null || guiInputChannel.boxId !== boxId) await ensureGuiInputChannel(boxId)
+      const channel = guiInputChannel !== null && guiInputChannel.boxId === boxId ? guiInputChannel.pipe : null
+      if (channel !== null) {
+        channel.write(`${script}\n`)
+        return { ok: true }
+      }
+      const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000, env: { DISPLAY: guiDisplay() } })
       return { ok: r.exitCode === 0 }
     }, z.object({ boxId: z.string(), script: z.string().max(500) }))
     .register('v1.box.gui.release', async () => {
@@ -485,6 +563,18 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       return { ok: true }
     })
     .register('v1.box.gui.state', async () => ({ enabled: computerEnabled, takeover: takeoverHeld }))
+    // GUI 实况流（plan-computer-use 二期）：开流/停流命令（帧走 WS /stream 的 gui 帧型）。
+    // 开流策略（裁定 B）由渲染层驱动——接管时才开高频流，旁观 1.5s 轮询兜底；
+    // 生命周期（裁定 C）随视图开关——unmount 必停，孤儿 ffmpeg 由 service dispose 兜底
+    .register('v1.box.gui.stream.start', async (payload) => {
+      const { boxId } = z.object({ boxId: z.string() }).parse(payload)
+      return kernel.guiStream.start(boxId)
+    }, z.object({ boxId: z.string() }))
+    .register('v1.box.gui.stream.stop', async (payload) => {
+      const { boxId } = z.object({ boxId: z.string() }).parse(payload)
+      kernel.guiStream.stop(boxId)
+      return { ok: true }
+    }, z.object({ boxId: z.string() }))
     // 记忆（backlog ①）：ctx 档案呈现拉取（写路径只在 agent 工具——用户不可直接编辑）
     .register('v1.memory.list', async (payload) => {
       const { agentId } = z.object({ agentId: z.string() }).parse(payload)
@@ -621,11 +711,14 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const gateway = await startGateway({
     transport: kernel.transport,
     bus: kernel.bus,
-    // WS /stream 连接登记：run 实况（hub）与 PTY 会话流（shellService）并联；断连各自惰性清理
+    // WS /stream 连接登记：run 实况（hub）与 PTY 会话流（shellService）、GUI 实况（guiStream）
+    // 三源并联；断连各自惰性清理。对向 PAUSE/RESUME 转发给 gui 流（背压即降帧的信号源）
     onStreamSession: (session) => {
       kernel.streamHub.attach(session)
       kernel.shellService.attach(session)
+      kernel.guiStream.attach(session)
     },
+    onStreamPause: (session, streamId, paused) => kernel.guiStream.onRemotePause(session, streamId, paused),
   })
   const replayed = await approvalGate.replayPending()
   kernel.startWatchdog()
@@ -842,6 +935,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     sandbox: sandboxStatus,
     async dispose() {
       kernel.shellService.dispose() // 杀全部 PTY 会话（不留后台 shell）
+      kernel.guiStream.dispose() // 杀全部 GUI 采集管道（不留后台 ffmpeg——孤儿纪律同款）
+      guiInputChannel?.pipe.close() // 杀注入常驻 sh（同款孤儿纪律）
       kernel.statsService.stop()
       kernel.stopWatchdog()
       clearInterval(automationTimer) // Scheduler 孤儿定时器不留

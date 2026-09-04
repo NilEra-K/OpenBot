@@ -130,6 +130,17 @@
   white-space: pre;
 }
 
+/* gui 大屏模式（2026-09-04 用户裁定）：GuiScreen 的 .gui-screen 是 flex:1 子项——bo-screen
+   在 gui 态须转 flex 容器（默认块容器下高度塌缩成内容高，视口只剩一条缝）；
+   padding 归零（2026-09-04 用户反馈：实况画面满幅呈现，终端的 18/22px 内衬是文本阅读语义）；
+   :has 限定只影响 gui 态，终端态（BoxTerm/BoxScreen）布局零变化 */
+.bo-screen:has(> .gui-screen) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* gui 视口自管 contain 缩放，不走长行滚动 */
+  padding: 0;
+}
+
 .bo-hint {
   flex: none;
   min-height: 30px;

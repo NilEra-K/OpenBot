@@ -9,8 +9,8 @@
 import { KernelError } from '@openbot/core'
 import { mkdir, stat } from 'node:fs/promises'
 import { readdir } from 'node:fs/promises'
-import { runProcess, spawnShellProcess } from '../procexec/index.js'
-import type { ProcRunner, ShellSpawner } from '../procexec/index.js'
+import { runProcess, spawnShellProcess, spawnPipeProcess, pipeSessionOf } from '../procexec/index.js'
+import type { ProcRunner, ShellSpawner, PipeSpawner } from '../procexec/index.js'
 import { BoxesErrorCodes } from '../types.js'
 import type {
   BoxBackend,
@@ -21,6 +21,8 @@ import type {
   BoxStats,
   ExecResult,
   ExecSpec,
+  PipeSession,
+  PipeSpec,
   ShellOpenOptions,
   ShellSession,
   SnapshotId,
@@ -62,6 +64,8 @@ export interface WslBoxBackendOptions {
   run?: ProcRunner
   /** 交互进程启动器注入（默认真实 spawn；测试注入替身断言 argv） */
   spawnShell?: ShellSpawner
+  /** 管道进程启动器注入（默认真实 spawn；测试注入替身断言 argv） */
+  spawnPipe?: PipeSpawner
   now?: () => number
   nextBoxId?: () => BoxId
   /** Box 内默认工作目录（exec cwd 缺省值） */
@@ -86,6 +90,7 @@ export class WslBoxBackend implements BoxBackend {
   readonly #snapshotDir: string
   readonly #run: ProcRunner
   readonly #spawnShell: ShellSpawner
+  readonly #spawnPipe: PipeSpawner
   readonly #statFile: (path: string) => Promise<{ size: number }>
   readonly #listDir: (path: string) => Promise<string[]>
   readonly #now: () => number
@@ -102,6 +107,7 @@ export class WslBoxBackend implements BoxBackend {
     this.#snapshotDir = options.snapshotDir ?? `${options.dir}/snapshots`
     this.#run = options.run ?? runProcess
     this.#spawnShell = options.spawnShell ?? spawnShellProcess
+    this.#spawnPipe = options.spawnPipe ?? spawnPipeProcess
     this.#statFile = options.statFile ?? stat
     this.#listDir = options.listDir ?? readdir
     this.#now = options.now ?? (() => 0)
@@ -211,6 +217,17 @@ export class WslBoxBackend implements BoxBackend {
       },
       close: () => proc.kill(),
     }
+  }
+
+  async openPipe(boxId: BoxId, spec: PipeSpec): Promise<PipeSession> {
+    const box = this.#require(boxId)
+    // env 注入与 exec 同款（坑⑭：busybox env 不认 `--` 分隔符——键不以 - 开头无歧义）
+    const envPairs = Object.entries(spec.env ?? {}).map(([k, v]) => `${k}=${v}`)
+    const command = ['wsl', '-d', box.name, '--cd', spec.cwd ?? this.#workdir]
+    if (envPairs.length > 0) command.push('--', 'env', ...envPairs, ...spec.command)
+    else command.push('--', ...spec.command)
+    // wsl.exe 起 Box 内常驻进程：发行版自启 = 自然唤醒（与 exec 同一机制）；stdout 原始字节直出
+    return pipeSessionOf(this.#spawnPipe(command))
   }
 
   async fsRead(boxId: BoxId, path: string): Promise<string | null> {

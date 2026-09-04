@@ -22,11 +22,14 @@ RUN sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubun
 # 桌面栈：Xvfb 虚拟显示 + xfce4 元包（会话+面板+thunar 文件管理+窗口管理）+ 终端/编辑器
 # + 工具对 + 中文字体（坑记档：首版清单漏 xvfb——容器能起但入口报 Xvfb: not found，
 # scrot 连不上 :0，排查靠 podman logs 看入口 stderr）
+# ffmpeg（二期 30fps 实况流）：x11grab 采集 + mjpeg 管道输出，帧经 backend.openPipe 原始字节
+# 直出（PTY 文本链路会毁 jpeg）；包体 ~100MB 如实记档（plan-computer-use 二期风险项）
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb \
       xfce4 xfce4-terminal mousepad \
       dbus-x11 x11-utils \
       xdotool scrot imagemagick \
+      ffmpeg \
       fonts-noto-cjk \
       wget ca-certificates \
     && rm -rf /var/lib/apt/lists/*

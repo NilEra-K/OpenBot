@@ -8,6 +8,7 @@
  */
 import { spawn } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
+import type { PipeSession } from '../types.js'
 
 export interface ProcChunk {
   stream: 'stdout' | 'stderr'
@@ -200,5 +201,96 @@ export function spawnShellProcess(command: string[]): ShellProcess {
     kill() {
       child.kill()
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 二进制管道进程（backend.openPipe 的进程底座）：stdout 原始字节直出、零解码——
+// 与 spawnShellProcess 的本质差别就在这层解码（jpeg 字节过 UTF-8 解码必毁）。
+// stdin 直接关闭（采集进程不吃输入，ffmpeg 加 -nostdin 双保险）；
+// stderr 只留滚动诊断尾巴（UTF-8 解码仅用于人看日志，不进数据面）。
+// ---------------------------------------------------------------------------
+
+/** 长驻二进制管道进程句柄（backend.openPipe 的进程底座；注入替身可测 argv 与转发） */
+export interface PipeProcess {
+  /** 输出增量（stdout 原始字节——零解码、零聚合） */
+  onOutput(cb: (chunk: Uint8Array) => void): void
+  /** 进程退出（exit / 被杀 / spawn 失败均为 code|null） */
+  onExit(cb: (code: number | null) => void): void
+  /** 最近 stderr 文本（滚动保留尾部 4KB——诊断窗口，如 ffmpeg 报错原因） */
+  stderrTail(): string
+  /** stdin 写入（行式注入通道；采集进程带 -nostdin 自兜底不受影响） */
+  write(text: string): void
+  /** 杀进程（幂等） */
+  kill(): void
+}
+
+/** 可注入的管道进程启动器（默认 spawnPipeProcess；测试注入替身断言 argv） */
+export type PipeSpawner = (command: string[]) => PipeProcess
+
+const PIPE_STDERR_TAIL_BYTES = 4 * 1024
+
+/** spawn 长驻二进制管道进程：无超时、无聚合、零解码（与 spawnShellProcess 对照——那层是文本）。
+ *  stdin 保持打开（行式注入通道——GUI 输入的常驻 sh -s 依赖；不读 stdin 的进程如 ffmpeg
+ *  带 -nostdin 自兜底，开着无害） */
+export function spawnPipeProcess(command: string[]): PipeProcess {
+  const file = command[0]
+  if (file === undefined) throw new Error('procexec: command 不能为空')
+  const child = spawn(file, command.slice(1), { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  const outputCbs = new Set<(chunk: Uint8Array) => void>()
+  const exitCbs = new Set<(code: number | null) => void>()
+  const stderrDecoder = new TextDecoder('utf8')
+  let stderrTail = ''
+  let exited = false
+  const finish = (code: number | null): void => {
+    if (exited) return
+    exited = true
+    for (const cb of exitCbs) cb(code)
+  }
+  child.stdout?.on('data', (buf: Buffer) => {
+    if (outputCbs.size === 0) return
+    const chunk = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+    for (const cb of outputCbs) cb(chunk)
+  })
+  child.stderr?.on('data', (buf: Buffer) => {
+    stderrTail = (stderrTail + stderrDecoder.decode(buf, { stream: true })).slice(-PIPE_STDERR_TAIL_BYTES)
+  })
+  child.on('close', (code) => finish(code))
+  child.on('error', () => finish(null)) // spawn 失败（ENOENT 等）：close 可能不再触发
+  return {
+    onOutput(cb) {
+      outputCbs.add(cb)
+    },
+    onExit(cb) {
+      exitCbs.add(cb)
+    },
+    stderrTail() {
+      return stderrTail
+    },
+    write(text) {
+      if (!child.stdin?.destroyed) child.stdin?.write(text)
+    },
+    kill() {
+      child.kill()
+    },
+  }
+}
+
+/** PipeProcess → PipeSession 适配（后端共用：回调单注册语义与 ShellSession 包装同构） */
+export function pipeSessionOf(proc: PipeProcess): PipeSession {
+  let dataCb: ((chunk: Uint8Array) => void) | null = null
+  let exitCb: ((code: number | null) => void) | null = null
+  proc.onOutput((chunk) => dataCb?.(chunk))
+  proc.onExit((code) => exitCb?.(code))
+  return {
+    onData: (cb) => {
+      dataCb = cb
+    },
+    onExit: (cb) => {
+      exitCb = cb
+    },
+    stderrTail: () => proc.stderrTail(),
+    write: (text) => proc.write(text),
+    close: () => proc.kill(),
   }
 }

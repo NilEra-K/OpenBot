@@ -232,6 +232,11 @@ let unsubscribe: (() => void) | null = null
 /** pty 会话事件订阅者（终端组件挂载注册、卸载退订——实况只发给在看的眼睛） */
 type PtyListener = (ev: { type: 'open' | 'data' | 'end'; shellId: string; boxId: string; text?: string }) => void
 const ptyListeners = new Set<PtyListener>()
+/** gui 流事件订阅者（GuiScreen 挂载注册、卸载退订——实况只发给在看的眼睛） */
+export type GuiStreamListener = (
+  ev: { type: 'open' | 'data' | 'end'; boxId: string; streamId?: number; chunk?: Uint8Array; reason?: string },
+) => void
+const guiListeners = new Set<GuiStreamListener>()
 /** 已拉取 transcript 历史的 agent（懒加载去重；内核不重启时 SSE 重放已覆盖） */
 const loadedHistory = new Set<string>()
 
@@ -276,6 +281,8 @@ export const useKernelStore = defineStore('kernel', {
     snapshots: [] as Array<{ snapshotId: string; sizeBytes?: number; createdAt?: number }>,
     /** 宿主磁盘压力（Step 6）：null=无压力/未知；warn/critical 档事实（文案归视图层） */
     pressure: null as { level: 'warn' | 'critical'; freeBytes: number; totalBytes: number } | null,
+    /** GUI 接管真值（main 内存态经 v1.box.gui-takeover 广播；ctx 小屏/BoxOps 大屏两实例同源） */
+    guiTakeover: false,
     /** 审批闸门模式（P4 Step 7 档案事实）：manual=出 Box 需批准（桌面装配固定值，如实呈现） */
     approvalMode: 'manual' as 'manual' | 'auto',
     /** run 实况流块（ctx 面板；容量有限——只保留最近） */
@@ -314,6 +321,9 @@ export const useKernelStore = defineStore('kernel', {
           onPtyOpen: (meta) => this.dispatchPty({ type: 'open', ...meta }),
           onPtyData: (meta, text) => this.dispatchPty({ type: 'data', ...meta, text }),
           onPtyEnd: (meta) => this.dispatchPty({ type: 'end', ...meta }),
+          onGuiOpen: (meta) => this.dispatchGui({ type: 'open', boxId: meta.boxId, streamId: meta.streamId }),
+          onGuiData: (meta, chunk) => this.dispatchGui({ type: 'data', boxId: meta.boxId, streamId: meta.streamId, chunk }),
+          onGuiEnd: (meta, reason) => this.dispatchGui({ type: 'end', boxId: meta.boxId, reason }),
         })
         await this.refreshRoster()
         const steward = await client.call<{ agentId: string } | null>('v1.system.getSteward')
@@ -809,6 +819,11 @@ export const useKernelStore = defineStore('kernel', {
           this.boxStats[boxId] = { ...fields, at: event.at }
           return
         }
+        case 'v1.box.gui-takeover': {
+          // 接管真值单源（main 内存态经事件广播）——ctx 小屏与 BoxOps 大屏两个 GuiScreen 实例同源呈现
+          this.guiTakeover = event.payload.held
+          return
+        }
         case 'v1.system.pressure': {
           // 压力投影：ok 归零（角标消退）；纯事实，文案组合归视图层
           const { level, freeBytes, totalBytes } = event.payload
@@ -937,6 +952,38 @@ export const useKernelStore = defineStore('kernel', {
 
     dispatchPty(ev: { type: 'open' | 'data' | 'end'; shellId: string; boxId: string; text?: string }): void {
       for (const listener of ptyListeners) listener(ev)
+    },
+
+    // ---- GUI 实况流（plan-computer-use 二期；帧走 /stream 的 gui 帧型，mjpeg 原始字节） ----
+
+    /** gui 流事件订阅（GuiScreen 挂载注册、卸载退订） */
+    onGuiStreamEvent(listener: GuiStreamListener): () => void {
+      guiListeners.add(listener)
+      return () => guiListeners.delete(listener)
+    },
+
+    /** 接管真值乐观置位（首笔输入零延迟呈现；v1.box.gui-takeover 事件幂等收敛同值） */
+    setGuiTakeover(held: boolean): void {
+      this.guiTakeover = held
+    },
+
+    dispatchGui(ev: { type: 'open' | 'data' | 'end'; boxId: string; streamId?: number; chunk?: Uint8Array; reason?: string }): void {
+      // 孤儿纪律（渲染层侧）：流开着但没有任何观看组件（重载后无人接管）——立即停采集，
+      // 不让 ffmpeg 白跑（主进程没有「零订阅者自动停」语义——重连回放依赖它）
+      if (guiListeners.size === 0 && ev.type === 'open') {
+        void this.call('v1.box.gui.stream.stop', { boxId: ev.boxId }).catch(() => {})
+        return
+      }
+      for (const listener of guiListeners) listener(ev)
+    },
+
+    /** 背压对向信号（GuiScreen 解码堆积时暂停服务端发送——背压即降帧） */
+    guiStreamPause(streamId: number): void {
+      streamClient?.pause(streamId)
+    },
+
+    guiStreamResume(streamId: number): void {
+      streamClient?.resume(streamId)
     },
 
     /** 起会话（操作台打开时调用；尺寸与后端钳制约定一致） */

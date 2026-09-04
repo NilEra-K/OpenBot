@@ -38,16 +38,17 @@ u8 版本(=1) | u8 帧类型 | u32 流 ID | u32 帧序号 | u32 负载长度 | �
 
 | 帧类型 | 值 | 方向 | 说明 |
 |---|---|---|---|
-| OPEN | 0x01 | 双向 | 打开流；负载 JSON `{ kind: 'frames'\|'file', boxId?, meta? }` |
+| OPEN | 0x01 | 双向 | 打开流；负载 JSON `{ kind: 'frames'\|'file'\|'pty'\|'gui', boxId?, meta? }` |
 | DATA | 0x02 | 双向 | 数据块 ≤ 256KB；序号流内连续 |
 | END | 0x03 | 双向 | 正常结束 |
 | ABORT | 0x04 | 双向 | 异常中止；负载 JSON `{ reason? }` |
 | PAUSE | 0x05 | 接收方→发送方 | 背压：暂停指定流（流 ID=0 表示全流） |
-| RESUME | 0x06 | 接收方→发送方 | 恢复；发送方须补发暂停期间入队的块 |
+| RESUME | 0x06 | 接收方→发送方 | 恢复；文件类须补发暂停期间入队的块，gui 实况流只补发最新帧（实况不排旧帧队——背压即降帧） |
 | ACK | 0x07 | 接收方→发送方 | 确认；seq 字段=已连续收到的最高帧序号 |
 
 - 流 ID 连接内单调分配不复用（0 保留连接级）；OPEN/DATA/END/ABORT 的 seq 从 0 起流内连续，接收方校验；PAUSE/RESUME/ACK 是带外信号不占序。
 - 协议违规（坏帧/序号跳跃/未知流）→ 接收方断连。P2 只回环自测，真实信号源 P3 接入。
+- gui 实况流（plan-computer-use 二期）：OPEN `kind:'gui'`、`meta:{boxId}`；DATA 负载是 mjpeg 原始字节流（ffmpeg `-f mjpeg pipe:1` 经 backend.openPipe 直出，**非 JSON**）——消费方按 SOI/EOI 标记拆帧；>256KB 帧由发送方切块、拆帧器跨块重组。生命周期随 GUI 视图开关（`v1.box.gui.stream.start/stop` 命令面驱动；晚接入会话补开流并立即回放最新帧——无黑屏间隙）。
 
 ## wire 校验与错误 code
 
@@ -62,5 +63,5 @@ u8 版本(=1) | u8 帧类型 | u32 流 ID | u32 帧序号 | u32 负载长度 | �
 
 ## 待填充（P3）
 
-- WS /stream 真实信号源接入（Box 实况帧、文件传输路由）
+- WS /stream 文件传输路由（Box 实况帧已接入——run 实况 frames / pty 会话流 / gui 桌面实况三源并联）
 - v1.task / v1.graph 事件族落地（P2 backlog）

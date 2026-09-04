@@ -3,10 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <title>OpenBot</title>
-    <!-- CSP：业务面只连环回网关（任意随机端口）；ws 为 P3 数据面与 dev HMR 预留 -->
+    <!-- CSP：业务面只连环回网关（任意随机端口）；ws 为 P3 数据面与 dev HMR 预留；
+         img-src blob: 为 gui 实况流帧（URL.createObjectURL——30fps mjpeg 帧槽） -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
     />
   </head>
   <body>

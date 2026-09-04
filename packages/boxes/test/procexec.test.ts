@@ -103,3 +103,29 @@ describe('runProcess', () => {
     expect(r.stdout.trim()).toBe('injected')
   })
 })
+
+describe('spawnPipeProcess', () => {
+  it('stdin 可写、stdout 原始字节直出（GUI 注入/采集通道的进程底座——零解码零聚合）', async () => {
+    const { spawnPipeProcess } = await import('../src/procexec/index.js')
+    // node 自指：stdin 收到文本行 'ping' → 主动写回「echo + FF 00 D8」原始字节。
+    // 二进制安全探针放子进程侧（write 是文本 API，宿主侧 0xFF 会被 UTF-8 编码成 C3 BF——
+    // 注入通道本来就是行式文本；stdout 零解码才是本测试要锁的契约）
+    const proc = spawnPipeProcess([
+      node, '-e',
+      "process.stdin.on('data', (d) => { if (d.includes('ping')) { process.stdout.write(Buffer.from([0x65,0x63,0x68,0x6f,0xff,0x00,0xd8])) } })",
+    ])
+    const received: number[] = []
+    let done: (() => void) | null = null
+    const finished = new Promise<void>((resolve) => {
+      done = resolve
+    })
+    proc.onOutput((chunk) => {
+      for (const b of chunk) received.push(b)
+      if (received.length >= 7) done?.() // 期望恰 7 字节：echo(4) + FF 00 D8
+    })
+    proc.write('ping\n')
+    await finished
+    expect(received).toEqual([0x65, 0x63, 0x68, 0x6f, 0xff, 0x00, 0xd8]) // 0xFF/0x00 原样直出不毁
+    proc.kill()
+  }, 10_000)
+})

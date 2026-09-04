@@ -214,7 +214,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 |---|---|---|
 | `POST /api/*` | 控制面 | 请求/响应，全部幂等可重试（nonce） |
 | `GET /events` | 事件流 | SSE，七族事件实时推送，Last-Event-ID 续传 |
-| `WS /stream` | 数据面 | **OpenBot 新增**：Box 实况帧（10–30fps）、文件传输。二进制帧 + 背压。SSE 纯文本单向，撑不住数据面——明知需要就第一天设计进去 |
+| `WS /stream` | 数据面 | **OpenBot 新增**：Box 实况帧（10–30fps）、文件传输。二进制帧 + 背压。SSE 纯文本单向，撑不住数据面——明知需要就第一天设计进去。已接入三源：run 实况（frames）/ PTY 会话流（pty）/ GUI 桌面实况（gui，plan-computer-use 二期——30fps mjpeg，背压即降帧只补最新帧） |
 
 ### 事件目录（我们自己的，带版本前缀）
 

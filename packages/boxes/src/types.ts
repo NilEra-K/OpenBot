@@ -110,6 +110,31 @@ export interface ShellOpenOptions {
   rows?: number
 }
 
+/** 二进制管道启动参数：argv 直传（无 shell 无注入面）+ 环境注入（与 ExecSpec.env 同语义） */
+export interface PipeSpec {
+  command: string[]
+  cwd?: string
+  env?: Record<string, string>
+}
+
+/** 二进制管道会话（常驻进程）：stdout **原始字节**直出、零解码——Box 内常驻采集进程
+ *  （如 ffmpeg x11grab mjpeg）的帧字节搬运通道。与 ShellSession（PTY 文本）的分工：
+ *  会话输出进 UTF-8 解码层，jpeg 字节过解码必毁——实况帧必须走本接口（plan-computer-use
+ *  二期「PTY 二进制安全」定夺点：新增 pipe 语义而非改造 PTY）。
+ *  无界语义同 ShellSession：无超时无聚合，边界是调用方 close（孤儿进程纪律——dispose 必杀）。 */
+export interface PipeSession {
+  /** 输出增量（原始字节；不做任何解码、不合流 stderr） */
+  onData(cb: (chunk: Uint8Array) => void): void
+  /** 进程退出（exit / 被杀 / spawn 失败均为 code|null）；close 后不再回调 */
+  onExit(cb: (code: number | null) => void): void
+  /** 最近 stderr 文本（滚动尾部——常驻进程异常退出时的诊断面，如 ffmpeg 报错） */
+  stderrTail(): string
+  /** stdin 写入（行式注入——常驻 sh -s 的命令通道；不读 stdin 的进程永不调用即可） */
+  write(text: string): void
+  /** 关闭（杀进程；幂等） */
+  close(): void
+}
+
 /** 沙箱后端接口——实现见 backend-wsl / backend-docker / backend-mock */
 export interface BoxBackend {
   readonly id: string
@@ -125,6 +150,9 @@ export interface BoxBackend {
   list(): Promise<BoxInstance[]>
   /** 交互式 shell（可选实现；caps.interactive=true 时必须存在——caps 与接口永不背离） */
   openShell?(box: BoxId, opts?: ShellOpenOptions): Promise<ShellSession>
+  /** 二进制管道（可选实现）：常驻进程 stdout 原始字节直出——GUI 实况流（ffmpeg mjpeg）用；
+   *  未实现时调用方如实降级（GUI 流起不来 → 截图轮询兜底） */
+  openPipe?(box: BoxId, spec: PipeSpec): Promise<PipeSession>
   /** 休眠（可选实现；caps.suspendable=true 时必须存在）——释放 CPU/内存，rootfs 留在磁盘 */
   pause?(box: BoxId): Promise<void>
   /** 唤醒（可选实现）：轻量触发发行版自启；休眠中的 exec 也会自然唤醒（同一机制） */

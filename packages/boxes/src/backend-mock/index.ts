@@ -14,6 +14,8 @@ import type {
   BoxStats,
   ExecResult,
   ExecSpec,
+  PipeSession,
+  PipeSpec,
   ShellOpenOptions,
   ShellSession,
   SnapshotId,
@@ -40,11 +42,21 @@ export interface MockExecCall {
   at: number
 }
 
+/** 一次 openPipe 的留痕（断言「GUI 流让沙箱跑了什么 argv」——与 exec 留痕同哲学） */
+export interface MockPipeCall {
+  boxId: BoxId
+  spec: PipeSpec
+  at: number
+}
+
 export interface MockBoxBackendOptions {
   now?: () => number
   nextBoxId?: () => BoxId
   /** 自定义 exec 行为；默认 exit 0、stdout = 'mock: <command>' */
   exec?: (boxId: BoxId, spec: ExecSpec) => ExecResult | Promise<ExecResult>
+  /** 自定义 openPipe 行为；缺省返回静默常驻会话（记录调用、零输出——
+   *  假 ffmpeg 流由装配层注入：E2E 传周期吐帧的实现，断言帧到达与切流） */
+  pipe?: (boxId: BoxId, spec: PipeSpec) => PipeSession
   /** 整包覆盖 stats 确定值（缺省 {cpu 12/mem 256/disk 1200}）——E2E 色档高值档位的注入面（P5 Step 7） */
   stats?: BoxStats
 }
@@ -69,11 +81,13 @@ export class MockBoxBackend implements BoxBackend {
   readonly #now: () => number
   readonly #nextBoxId: () => BoxId
   readonly #execImpl: (boxId: BoxId, spec: ExecSpec) => ExecResult | Promise<ExecResult>
+  readonly #pipeImpl: ((boxId: BoxId, spec: PipeSpec) => PipeSession) | null
   readonly #statsImpl: BoxStats
   readonly #boxes = new Map<BoxId, MockBox>()
   readonly #snapshots = new Map<SnapshotId, MockSnapshot>()
   #snapshotCounter = 0
   readonly calls: MockExecCall[] = []
+  readonly pipeCalls: MockPipeCall[] = []
 
   constructor(options: MockBoxBackendOptions = {}) {
     this.#now = options.now ?? (() => 0)
@@ -86,6 +100,7 @@ export class MockBoxBackend implements BoxBackend {
         stdout: `mock: ${spec.command.join(' ')}`,
         stderr: '',
       }))
+    this.#pipeImpl = options.pipe ?? null
     this.#statsImpl = options.stats ?? { cpuPercent: 12, memoryMb: 256, diskMb: 1200 }
   }
 
@@ -197,6 +212,33 @@ export class MockBoxBackend implements BoxBackend {
       close(): void {
         if (closed) return
         finish(null)
+      },
+    }
+  }
+
+  async openPipe(boxId: BoxId, spec: PipeSpec): Promise<PipeSession> {
+    this.#require(boxId)
+    this.pipeCalls.push({ boxId, spec, at: this.#now() })
+    if (this.#pipeImpl) return this.#pipeImpl(boxId, spec)
+    // 缺省静默常驻会话（流开成功但零帧——如实；降帧兜底路径由 GuiScreen 轮询接住）
+    let dataCb: ((chunk: Uint8Array) => void) | null = null
+    let exitCb: ((code: number | null) => void) | null = null
+    let closed = false
+    return {
+      onData(cb) {
+        dataCb = cb
+      },
+      onExit(cb) {
+        exitCb = cb
+      },
+      stderrTail: () => '',
+      write(_text) {
+        /* 静默会话无 stdin 面（记录型替身由 options.pipe 注入） */
+      },
+      close() {
+        if (closed) return
+        closed = true
+        exitCb?.(null)
       },
     }
   }

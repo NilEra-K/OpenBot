@@ -42,7 +42,8 @@ const boxAsleep = computed(
 )
 
 const openOps = (): void => {
-  if (screenBoxId.value) ui.openBoxOps(screenBoxId.value)
+  // GUI 模式点击同终端语义开大屏（2026-09-04 用户裁定）——接管只发生在 BoxOps 大屏内
+  if (screenBoxId.value) ui.openBoxOps(screenBoxId.value, guiMode.value ? 'gui' : 'term')
 }
 
 // ---- 群会话（P5 Step 4）：全部为既有 store 投影，零内核改动 ----

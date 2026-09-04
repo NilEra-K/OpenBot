@@ -1462,19 +1462,71 @@ test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image
     const toolMsg = second?.messages.find((m) => (m as { role?: string }).role === 'tool')
     expect(JSON.stringify(toolMsg)).toContain('image_url')
     expect(JSON.stringify(toolMsg)).toContain('data:image/jpeg;base64,')
-    // GUI 视图在场（computerEnabled）+ 接管状态机走真实 UI 链路：
-    // 开 GUI 视图 → 点视口（mousedown = 用户输入 → 内核置锁）→「你已接管」→ 交还 → 回落
+    // GUI 视图在场（computerEnabled）+ 接管状态机走真实 UI 链路（2026-09-04 裁定：接管入口
+    // 收进 BoxOps 大屏）：开 GUI 视图 → 点小屏（冒泡开操作台）→ 大屏内点视口（首笔输入置锁）
+    // →「你已接管」→ 接管真值单源（ctx 小屏同源呈现）→ 交还 → 两处回落旁观
     await expect(page.locator('.gui-toggle')).toBeVisible({ timeout: 10_000 })
     await page.locator('.gui-toggle').click()
-    await expect(page.locator('.gui-screen')).toBeVisible()
-    await expect(page.locator('.gui-state')).toContainText('旁观中')
-    await page.locator('.gui-viewport').click({ position: { x: 100, y: 60 } })
-    await expect(page.locator('.gui-state.is-takeover')).toContainText('你已接管', { timeout: 10_000 })
-    await page.getByRole('button', { name: '交还 agent' }).click()
-    await expect(page.locator('.gui-state')).toContainText('旁观中', { timeout: 10_000 })
+    await expect(page.locator('.ctx-screen .gui-screen')).toBeVisible()
+    await expect(page.locator('.ctx-screen .gui-state')).toContainText('旁观中')
+    await page.locator('.ctx-screen .gui-viewport').click({ position: { x: 100, y: 60 } })
+    await expect(page.locator('.boxops')).toBeVisible()
+    await page.locator('.boxops .gui-viewport').click({ position: { x: 80, y: 50 } })
+    await expect(page.locator('.boxops .gui-state.is-takeover')).toContainText('你已接管', { timeout: 10_000 })
+    await expect(page.locator('.ctx-screen .gui-state')).toContainText('接管中', { timeout: 10_000 })
+    await page.locator('.boxops').getByRole('button', { name: '交还 agent' }).click()
+    await expect(page.locator('.boxops .gui-state')).toContainText('旁观中', { timeout: 10_000 })
+    await expect(page.locator('.ctx-screen .gui-state')).toContainText('旁观中', { timeout: 10_000 })
   } finally {
     await app.close()
     await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('GUI 实况流（plan-computer-use 二期）：大屏接管开流 → 30fps 帧到达 → 交还降频回落轮询', async () => {
+  // 零 LLM 依赖：GUI 视图入口 = computerEnabled ∩ 名册 boxId（装配即建 Box）——mock 假 ffmpeg
+  // 由 OPENBOT_COMPUTER=1 联动注入（mock 后端 pipe 替身：1x1 JPEG 每 150ms 一帧）。
+  // 交互链路（2026-09-04 裁定）：ctx 小屏点击冒泡开 BoxOps 大屏，接管/实况都发生在大屏内
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-guistream-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+      OPENBOT_COMPUTER: '1',
+    },
+  })
+  const page = await app.firstWindow()
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.roster-item', { hasText: '管家' }).click()
+    // GUI 视图在场：小屏旁观态（轮询帧源、流未开——小屏永不开流）
+    await expect(page.locator('.gui-toggle')).toBeVisible({ timeout: 10_000 })
+    await page.locator('.gui-toggle').click()
+    await expect(page.locator('.ctx-screen .gui-screen')).toBeVisible()
+    await expect(page.locator('.ctx-screen .gui-screen')).toHaveAttribute('data-stream', '0')
+    // 点小屏 → 冒泡开操作台大屏（gui 模式）→ 大屏内点击接管 → watch 自动开流
+    await page.locator('.ctx-screen .gui-viewport').click({ position: { x: 100, y: 60 } })
+    await expect(page.locator('.boxops')).toBeVisible()
+    await page.locator('.boxops .gui-viewport').click({ position: { x: 80, y: 50 } })
+    await expect(page.locator('.boxops .gui-state.is-takeover')).toContainText('你已接管', { timeout: 10_000 })
+    await expect(page.locator('.boxops .gui-screen')).toHaveAttribute('data-stream', '1', { timeout: 10_000 })
+    // 帧到达：mock 150ms/帧——data-frames 计数递增（拆帧重组 + canvas 解码画帧的全链证据）
+    await expect
+      .poll(async () => {
+        const v = await page.locator('.boxops .gui-viewport canvas').getAttribute('data-frames')
+        return Number(v ?? '0')
+      }, { timeout: 10_000 })
+      .toBeGreaterThanOrEqual(2)
+    // 交还 agent → 停流（服务端杀 ffmpeg）→ 大屏回落旁观轮询
+    await page.locator('.boxops').getByRole('button', { name: '交还 agent' }).click()
+    await expect(page.locator('.boxops .gui-screen')).toHaveAttribute('data-stream', '0', { timeout: 10_000 })
+    await expect(page.locator('.boxops .gui-state')).toContainText('旁观中', { timeout: 10_000 })
+  } finally {
+    await app.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })

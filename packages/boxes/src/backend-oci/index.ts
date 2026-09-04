@@ -18,8 +18,8 @@
  * - CLI 子进程方案天然屏蔽端点差异（Docker 命名管道 / podman unix socket）。
  */
 import { KernelError } from '@openbot/core'
-import { runProcess, spawnShellProcess } from '../procexec/index.js'
-import type { ProcRunner, ShellSpawner } from '../procexec/index.js'
+import { runProcess, spawnShellProcess, spawnPipeProcess, pipeSessionOf } from '../procexec/index.js'
+import type { ProcRunner, ShellSpawner, PipeSpawner } from '../procexec/index.js'
 import { BoxesErrorCodes } from '../types.js'
 import type {
   BoxBackend,
@@ -30,6 +30,8 @@ import type {
   BoxStats,
   ExecResult,
   ExecSpec,
+  PipeSession,
+  PipeSpec,
   ShellOpenOptions,
   ShellSession,
   SnapshotId,
@@ -78,6 +80,8 @@ export interface OciBackendOptions {
   run?: ProcRunner
   /** 交互进程启动器注入（默认真实 spawn；测试注入替身断言 argv） */
   spawnShell?: ShellSpawner
+  /** 管道进程启动器注入（默认真实 spawn；测试注入替身断言 argv） */
+  spawnPipe?: PipeSpawner
   now?: () => number
   nextBoxId?: () => BoxId
   /** Box 内默认工作目录（exec cwd 缺省值） */
@@ -102,6 +106,7 @@ export class OciBoxBackend implements BoxBackend {
   readonly #image: string
   readonly #run: ProcRunner
   readonly #spawnShell: ShellSpawner
+  readonly #spawnPipe: PipeSpawner
   readonly #now: () => number
   readonly #nextBoxId: () => BoxId
   readonly #workdir: string
@@ -114,6 +119,7 @@ export class OciBoxBackend implements BoxBackend {
     this.#image = options.image ?? 'ubuntu:24.04'
     this.#run = options.run ?? runProcess
     this.#spawnShell = options.spawnShell ?? spawnShellProcess
+    this.#spawnPipe = options.spawnPipe ?? spawnPipeProcess
     this.#now = options.now ?? (() => 0)
     let counter = 0
     this.#nextBoxId = options.nextBoxId ?? (() => `box-${++counter}`)
@@ -215,6 +221,19 @@ export class OciBoxBackend implements BoxBackend {
       },
       close: () => proc.kill(),
     }
+  }
+
+  async openPipe(boxId: BoxId, spec: PipeSpec): Promise<PipeSession> {
+    const box = this.#require(boxId)
+    await this.#ensureRunning(box.name)
+    // env 注入与 exec 同款；坑⑮（podman/crun）：不带 '--' 分隔符——CLI 方言与 exec 一致。
+    // -i 必带（坑⑰，GUI 注入通道首证）：无 -i 时 exec 不接 stdin——常驻 `sh -s` 立即 EOF
+    // 退出、注入通道死路（采集进程 -nostdin 不受影响，-i 开着无害）
+    const command = [this.#cli, 'exec', '-i', '-w', spec.cwd ?? this.#workdir]
+    for (const [k, v] of Object.entries(spec.env ?? {})) command.push('-e', `${k}=${v}`)
+    command.push(box.name, ...spec.command)
+    // stdout 原始字节直出容器（stdin 保持打开——write 行式注入）
+    return pipeSessionOf(this.#spawnPipe(command))
   }
 
   async fsRead(boxId: BoxId, path: string): Promise<string | null> {

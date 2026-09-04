@@ -18,6 +18,7 @@ import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
 import { StreamHub } from '../stream-hub/index.js'
 import { ShellService } from '../shell-service/index.js'
+import { GuiStreamService } from '../gui-stream/index.js'
 import { StatsService } from '../stats-service/index.js'
 import type { DiskProbe } from '../stats-service/index.js'
 import { z } from 'zod'
@@ -101,6 +102,8 @@ export interface AssembledKernel {
   readonly streamHub: StreamHub
   /** 交互式 shell 会话（PTY）管理与流分发（gateway 回调与 streamHub 并联 attach） */
   readonly shellService: ShellService
+  /** GUI 桌面实况流（30fps mjpeg）管理与分发（gateway 回调三件套并联 attach + onStreamPause） */
+  readonly guiStream: GuiStreamService
   /** Box 统计轮询与宿主磁盘压力判定（Step 6；生产经 startStats 定时驱动） */
   readonly statsService: StatsService
   readonly schedulers: ReadonlyMap<string, AgentScheduler>
@@ -195,6 +198,9 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const streamHub = new StreamHub()
   // 交互式 shell（PTY）：用户亲手操作，不经 run/审批/预算——与 agent exec 路线完全分离
   const shellService = new ShellService({ backend })
+  // GUI 桌面实况（二期 30fps）：采集在 Box 内 ffmpeg（backend.openPipe 二进制管道），
+  // 帧走 WS /stream 的 gui 帧型；显示地址 env OPENBOT_GUI_DISPLAY 与 computer 工具族同源
+  const guiStream = new GuiStreamService({ backend })
   // Box 统计轮询与宿主磁盘压力判定（Step 6）：盒清单读装配层映射——零子进程开销；
   // backend.list 的跨重启真相职责不变（两者分工：在册盒遥测 vs 全盘发现）
   const statsService = new StatsService({
@@ -459,6 +465,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     groups,
     streamHub,
     shellService,
+    guiStream,
     statsService,
     schedulers,
     async addAgent(registration) {

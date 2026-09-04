@@ -40,6 +40,8 @@ export interface GatewayOptions {
   token?: string
   /** WS /stream 每连接注入回调（回环自测注入 PAUSE 时机；P3 接真实信号源路由） */
   onStreamSession?: (session: StreamSession) => void
+  /** 接收方对向信号转发（gui 实况流的背压即降帧依赖它：RESUME 时信号源补发最新帧） */
+  onStreamPause?: (session: StreamSession, streamId: number | 0, paused: boolean) => void
 }
 
 export interface GatewayHandle {
@@ -82,7 +84,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayHand
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      attachStreamReceiver(ws, options.onStreamSession)
+      attachStreamReceiver(ws, options.onStreamSession, options.onStreamPause)
     })
   })
 
@@ -122,12 +124,19 @@ function wsWire(ws: WebSocket): StreamWire {
  * （END 帧序号即该流最高连续序号——端到端丢帧可见）；协议违规 → 断连。
  * onStreamSession 可注入测试钩子（如特定时机 PAUSE）；P3 换真实信号源路由。
  */
-function attachStreamReceiver(ws: WebSocket, onSession?: (session: StreamSession) => void): void {
+function attachStreamReceiver(
+  ws: WebSocket,
+  onSession?: (session: StreamSession) => void,
+  onStreamPause?: (session: StreamSession, streamId: number | 0, paused: boolean) => void,
+): void {
   const wire = wsWire(ws)
   const session = new StreamSession(wire, {
     onEnd: (streamId, seq) => session.sendAck(streamId, seq),
     onAbort: (streamId, seq) => session.sendAck(streamId, seq),
     onViolation: () => wire.close(),
+    ...(onStreamPause !== undefined
+      ? { onPauseChanged: (streamId: number | 0, paused: boolean) => onStreamPause(session, streamId, paused) }
+      : {}),
   })
   onSession?.(session)
 }

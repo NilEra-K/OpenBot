@@ -47,8 +47,9 @@ export const useUiStore = defineStore('ui', {
     draft: '',
     /** 审批弹窗「稍后处理」的 nonce（只影响弹窗呈现，不碰内核挂起；流内 gate 卡与角标仍可见） */
     dismissedApprovals: [] as string[],
-    /** Box 操作台（VMware 控制台式大屏）：当前打开的 Box id；null = 关闭 */
-    boxOps: null as string | null,
+    /** Box 操作台（VMware 控制台式大屏）：当前打开的 Box 与模式（term=PTY 终端 / gui=桌面实况接管）；
+     *  null = 关闭。GUI 模式（2026-09-04 用户裁定）：ctx-screen 点击同终端语义开大屏，接管只发生在大屏 */
+    boxOps: null as { boxId: string; mode: 'term' | 'gui' } | null,
     /** 主题偏好（持久化）；dark 默认——既有观感不变 */
     theme: readStoredTheme() as ThemePref,
     /** 实效主题（auto 的解析结果；驱动 <html data-theme> 与标题栏切换图标） */
@@ -131,8 +132,8 @@ export const useUiStore = defineStore('ui', {
     focusComposer() {
       this.composerFocus = true
     },
-    openBoxOps(boxId: string) {
-      this.boxOps = boxId
+    openBoxOps(boxId: string, mode: 'term' | 'gui' = 'term') {
+      this.boxOps = { boxId, mode }
     },
     closeBoxOps() {
       this.boxOps = null

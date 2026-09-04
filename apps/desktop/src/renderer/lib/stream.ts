@@ -1,24 +1,29 @@
 /**
- * WS /stream 流客户端（renderer 内存版）：手写 14 字节帧头解码（一期只收——
- * OPEN/DATA/END/ABORT；PAUSE/RESUME/ACK 背压信号随后续需要）。
+ * WS /stream 流客户端（renderer 内存版）：手写 14 字节帧头解码（收 OPEN/DATA/END/ABORT；
+ * 发 PAUSE/RESUME——gui 实况流的背压信号）。
  * 与 lib/gateway.ts 同一哲学：零内核 import（transport 包带 node 依赖进不了 renderer），
  * 帧格式与 packages/transport stream-protocol 双向对照（编译期无法锁，改协议须两侧同步）。
  *
  * 实况语义：断线自动重连，但**不补历史**（hub 只把新流发给已连接会话）——
- * 聚合事实走 SSE 事件流，这里丢的只是实况。
+ * 聚合事实走 SSE 事件流，这里丢的只是实况。gui 流例外：服务端留「最新帧」槽位，
+ * 晚接入/重连后第一帧即回放（无黑屏间隙）。
  */
 
-/** 帧类型（与 transport FrameType 对应；这里只声明会收到的四种） */
+/** 帧类型（与 transport FrameType 对应） */
 const FRAME_OPEN = 0x01
 const FRAME_DATA = 0x02
 const FRAME_END = 0x03
 const FRAME_ABORT = 0x04
+const FRAME_PAUSE = 0x05
+const FRAME_RESUME = 0x06
 
 const HEADER_BYTES = 14
+const STREAM_PROTOCOL_VERSION = 1
 
-/** OPEN 负载 JSON（hub 侧约定：kind:'frames' 的 run 实况流；kind:'pty' 的交互会话流） */
+/** OPEN 负载 JSON（hub 侧约定：kind:'frames' 的 run 实况流；kind:'pty' 的交互会话流；
+ *  kind:'gui' 的 Box 桌面实况流——DATA 负载是 mjpeg 原始字节，非 JSON） */
 export interface RunStreamOpenMeta {
-  kind: 'frames' | 'pty'
+  kind: 'frames' | 'pty' | 'gui'
   meta?: {
     agentId: string
     runId: string
@@ -31,6 +36,7 @@ export interface RunStreamOpenMeta {
     round?: number
     /** pty 流：会话标识（kind:'pty' 时存在；键入走命令面 shellWrite） */
     shellId?: string
+    /** gui 流：所属 Box（kind:'gui' 时存在） */
   }
 }
 
@@ -48,11 +54,18 @@ export interface StreamClientHandlers {
   onPtyOpen?: (meta: { shellId: string; boxId: string }) => void
   onPtyData?: (meta: { shellId: string; boxId: string }, text: string) => void
   onPtyEnd?: (meta: { shellId: string; boxId: string }) => void
+  /** gui 流（可选）：Box 桌面实况（mjpeg 原始字节——消费方用拆帧器按 SOI/EOI 重组） */
+  onGuiOpen?: (meta: { boxId: string; streamId: number }) => void
+  onGuiData?: (meta: { boxId: string; streamId: number }, chunk: Uint8Array) => void
+  onGuiEnd?: (meta: { boxId: string }, reason?: string) => void
 }
 
 export interface StreamClient {
   close(): void
   readonly connected: boolean
+  /** 背压对向信号（gui 流消费方在解码堆积时暂停/恢复服务端发送） */
+  pause(streamId: number): void
+  resume(streamId: number): void
 }
 
 interface StreamRecord {
@@ -67,6 +80,11 @@ interface PtyRecord {
   boxId: string
 }
 
+/** gui 流归属（OPEN 登记，END/ABORT 除名） */
+interface GuiRecord {
+  boxId: string
+}
+
 /** 连接 WS /stream：断线自动重连（3s 退避）；返回关闭句柄 */
 export function connectRunStreams(
   endpoint: { port: number; token: string },
@@ -74,9 +92,10 @@ export function connectRunStreams(
 ): StreamClient {
   let closed = false
   let socket: WebSocket | null = null
-  /** streamId → 归属（OPEN 登记，END/ABORT 除名）；run 流与 pty 流分表 */
+  /** streamId → 归属（OPEN 登记，END/ABORT 除名）；run/pty/gui 流分表 */
   const streams = new Map<number, StreamRecord>()
   const ptys = new Map<number, PtyRecord>()
+  const guis = new Map<number, GuiRecord>()
 
   const connect = (): void => {
     if (closed) return
@@ -94,14 +113,33 @@ export function connectRunStreams(
     socket.onclose = () => {
       streams.clear()
       ptys.clear()
+      guis.clear()
       if (!closed) setTimeout(connect, 3_000)
     }
+  }
+
+  /** 对向控制帧（PAUSE/RESUME）：14 字节头、零负载、seq=0（协议约定带外信号不参与连续性） */
+  const sendControl = (type: number, streamId: number): void => {
+    if (socket === null || socket.readyState !== WebSocket.OPEN) return
+    const buf = new Uint8Array(HEADER_BYTES)
+    const view = new DataView(buf.buffer)
+    view.setUint8(0, STREAM_PROTOCOL_VERSION)
+    view.setUint8(1, type)
+    view.setUint32(2, streamId)
+    view.setUint32(6, 0)
+    view.setUint32(10, 0)
+    socket.send(buf)
   }
 
   const handle = (frame: { type: number; streamId: number; payload: Uint8Array }): void => {
     if (frame.type === FRAME_OPEN) {
       const meta = parseJson(frame.payload) as RunStreamOpenMeta
       const m = meta?.meta
+      if (meta?.kind === 'gui' && m && typeof m.boxId === 'string') {
+        guis.set(frame.streamId, { boxId: m.boxId })
+        handlers.onGuiOpen?.({ boxId: m.boxId, streamId: frame.streamId })
+        return
+      }
       if (meta?.kind === 'pty' && m && typeof m.shellId === 'string' && typeof m.boxId === 'string') {
         ptys.set(frame.streamId, { shellId: m.shellId, boxId: m.boxId })
         handlers.onPtyOpen?.({ shellId: m.shellId, boxId: m.boxId })
@@ -110,6 +148,21 @@ export function connectRunStreams(
       if (m && typeof m.agentId === 'string' && typeof m.runId === 'string' && (m.stream === 'llm' || m.stream === 'exec')) {
         streams.set(frame.streamId, { agentId: m.agentId, runId: m.runId, stream: m.stream })
         handlers.onOpen(m)
+      }
+      return
+    }
+    const gui = guis.get(frame.streamId)
+    if (gui) {
+      if (frame.type === FRAME_DATA) {
+        handlers.onGuiData?.({ boxId: gui.boxId, streamId: frame.streamId }, frame.payload)
+        return
+      }
+      if (frame.type === FRAME_END || frame.type === FRAME_ABORT) {
+        guis.delete(frame.streamId)
+        const body = frame.type === FRAME_ABORT && frame.payload.byteLength > 0
+          ? (parseJson(frame.payload) as { reason?: string } | null)
+          : null
+        handlers.onGuiEnd?.({ boxId: gui.boxId }, body?.reason)
       }
       return
     }
@@ -155,6 +208,8 @@ export function connectRunStreams(
     get connected() {
       return socket?.readyState === WebSocket.OPEN
     },
+    pause: (streamId) => sendControl(FRAME_PAUSE, streamId),
+    resume: (streamId) => sendControl(FRAME_RESUME, streamId),
   }
 }
 
@@ -162,7 +217,7 @@ export function connectRunStreams(
 function decodeFrame(data: Uint8Array): { type: number; streamId: number; payload: Uint8Array } | null {
   if (data.byteLength < HEADER_BYTES) return null
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-  if (view.getUint8(0) !== 1) return null // 协议版本
+  if (view.getUint8(0) !== STREAM_PROTOCOL_VERSION) return null // 协议版本
   const type = view.getUint8(1)
   const streamId = view.getUint32(2)
   view.getUint32(6) // seq：接收端不校验（内核侧 hub 已保证发送连续；renderer 信任环回）

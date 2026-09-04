@@ -149,7 +149,7 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 - **真机验收（如实未验收）**：GUI 容器构建/启动（podman machine 未启——与 nspawn/UTM/Docker
   镜像同待设备池）；xdotool/scrot 实际行为由单测替身锁 argv。版本 0.1.6。
 
-## 二期：30 FPS 实况流（2026-09-02 用户需求——规划待批）
+## 二期：30 FPS 实况流（2026-09-02 用户需求——2026-09-03 按推荐裁定实施）
 
 一期截图轮询（1.5s）是裁定 B 的刻意最小面（零端口零新协议），不是架构天花板——**WS /stream
 数据面在 ARCHITECTURE §5 第一天就按 10-30fps 设计**（二进制帧 + 背压，PTY 流已跑其上）。
@@ -172,19 +172,35 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 
 ### TODOLIST
 
-- [ ] 1. **采集管道（desktop main）**：spawn `ffmpeg -f x11grab -r 30 -s 1280x800 -i :0 -f mjpeg
-  pipe:1`（经 boxes 后端的宿主侧进程？否——**x11grab 在 Box 内**：exec 起常驻会话？一期 exec
-  有 timeout 上限不适用常驻——经 backend 的 spawnShell（PTY 通道）或新增 backend.pipe 语义。
-  实现时定：倾向 shell 会话跑 ffmpeg + 增量读（PTY 流即是既有常驻通道——BoxOps 终端同款），
-  拆帧器（mjpeg 边界 FFD8/FFD9 扫描）纯函数单测
-- [ ] 2. **WS /stream 扩帧型**：stream-protocol 加 `gui` 帧类型（meta: boxId；二进制 jpeg 帧 +
-  背压——复用既有 multiplex）；hub 汇流（StreamHub attach 同款）
-- [ ] 3. **GuiScreen 双态帧源**：接管/视图可见 → 订阅 gui 流（blob URL 每帧换 src——Chromium
-  30fps 可行）；旁观 → 沿用 1.5s 轮询；切流无缝
-- [ ] 4. **键入批量**：前端 50ms 窗口合并键入为一串（xdotool type 整串）；点击即时不动
-- [ ] 5. **E2E**：mock 流（假 ffmpeg——PTY 替身推两帧 mjpeg）断言帧到达 + 切流状态；接管开流/
-  交还降频的 UI 断言；单测（mjpeg 拆帧器纯函数）
-- [ ] 6. **文档收官**：ARCHITECTURE §5 数据面补 gui 帧型一行；plan 勾选；版本同步
+- [x] 1. **采集管道（backend pipe 语义）**：**实施定夺：不走 PTY**——`spawnShellProcess` 全链
+  UTF-8 解码（procexec→ShellService→WS JSON `{t}`），jpeg 字节过解码必毁；规划倾向的
+  「PTY 增量读」落点即规划自留的地雷。改为 `BoxBackend.openPipe?`（PipeSession：stdout
+  **原始字节**直出零解码 + stderr 滚动诊断尾巴 4KB + 无界 close 收口），procexec 增
+  `spawnPipeProcess`（stdin 'ignore'，与 spawnShellProcess 并列）；wsl（env 注入同款坑⑭）/
+  oci（同款坑⑮）/mock 三后端实现。缺省采集 argv：`ffmpeg -nostdin -f x11grab -framerate 30
+  -video_size WxH -i <display> -f mjpeg -q:v 5 pipe:1`——**-video_size 必填**（x11grab 缺省
+  640x480 是 libavdevice 的 vga 默认，不传就是小窗），几何经 `xdotool getdisplaygeometry`
+  现查（失败 1280x800 兜底放行）；拆帧器（SOI/EOI 标记扫描纯函数，跨块/超长自愈）单测锁定
+- [x] 2. **WS /stream 扩帧型**：`StreamOpenMeta.kind` 加 `'gui'`；**GuiStreamService**
+  （coordinator，与 streamHub/shellService 并联装配）——单屏纪律（换 Box 开流先杀旧 ffmpeg）、
+  单帧 latest 槽位（内存有界）、晚接入会话补开流+立即回放 latest（无黑屏间隙）、
+  **背压即降帧**（PAUSE 期不入队不排旧帧只更新 latest，RESUME 补发最新一帧——StreamSession
+  缓冲语义对实况流会越积越陈，丢弃策略在此落地）；gateway 增 `onStreamPause` 对向信号转发；
+  >256KB 帧发送方切块（协议契约）
+- [x] 3. **GuiScreen 双态帧源**：接管/交还 watch 联动 start/stop 命令（裁定 B：接管才 30fps，
+  旁观 1.5s 轮询兜底——轮询 timer 常驻 pull 门禁零动作）；同 img 槽（blob 帧与轮询 data URL
+  同形，切流无黑屏）；渲染节流+背压（img load/error 为解码确认：赋值未确认帧数 >12 → PAUSE，
+  确认即追帧/RESUME）；重进视图经 `v1.box.gui.state` 恢复接管态自动续流；store 侧孤儿纪律
+  （gui OPEN 到达但零观看组件 → 立即 stop）；renderer lib/stream.ts 手写解码器同步 gui 帧型
+  + PAUSE/RESUME 发送（对照镜像纪律）；mjpeg 拆帧器 renderer 侧手抄副本（lib/mjpeg.ts）
+- [x] 4. **键入批量**：50ms 窗口合并单键为一串 `xdotool type --delay 0 -- '…'`（POSIX 单引号
+  转义）；特殊键与点击前 flush 保序；50ms 窗口连击量级小、500 字符 script 上限实际触不到
+- [x] 5. **E2E**：mock 假 ffmpeg（OPENBOT_COMPUTER=1 联动注入：1x1 JPEG 每 150ms 一帧的
+  pipe 替身）——新用例「接管开流 → data-frames 递增 → 交还 data-stream 归零」走真实 UI 全链；
+  既有 computer-use 用例零改动回归绿；单测 21 例（拆帧器 9 含逐字节切块遍历强性质 /
+  GuiStreamService 10 / openPipe argv 2——wsl/oci 方言锁定）
+- [x] 6. **文档收官**：ARCHITECTURE §5 三源并联注记；protocol.md 帧型表 + gui 流语义；
+  Dockerfile 加 ffmpeg（包体 ~100MB）；plan-backlog ④ 无涉（一期已记）；版本同步
 
 ### 设计要点
 
@@ -202,3 +218,73 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 - **拆帧鲁棒性**：mjpeg 边界扫描要处理跨块帧（纯函数 + fuzz 单测）；
 - **ffmpeg 包体**：GUI 栈 apt 增 ~100MB（镜像/发行版体积）——如实记档；
 - Windows 侧无 ffmpeg 依赖（帧在 Box 内编码，宿主只搬运字节）。
+
+### 实施记档（2026-09-03）
+
+- **采集引擎（裁定 A 按推荐）**：ffmpeg x11grab mjpeg 管道——零协议依赖拆帧即帧；x11vnc
+  （RFB 增量）与 H.264+WebCodecs 维持记档不取。**PTY 二进制安全定夺落地为 pipe 语义**：
+  规划倾向的「PTY 会话增量读」与自留地雷（UTF-8 解码毁字节）同点——实施改为
+  `BoxBackend.openPipe?`/`PipeSession`（stdout 原始字节零解码 + stderr 诊断尾巴），与
+  openShell 并列的可选实现（wsl/oci/mock 三后端兑现，nspawn/utm 未实现——如实缺省）。
+- **帧协议（裁定 B/C 按推荐）**：接管才 30fps（GuiScreen watch takeover ↔ start/stop 命令）、
+  随视图开关（unmount 必停 + dispose 兜底 + store 零观看者自动停——三层孤儿纪律）。
+  服务端最新帧槽位同时服务两个场景：背压期丢弃与晚接入回放。
+- **背压实测语义**：StreamSession 的 PAUSE 缓冲语义（buffer-and-resume 不丢帧）对文件流正确、
+  对实况流错误（30fps×100KB 排队=看历史不是看现在）——GuiStreamService 在 PAUSE 期跳过
+  sendChunk（不入队），RESUME 时经 gateway `onStreamPause` 转发补发 latest 一帧。
+  renderer 侧以「img 赋值未确认帧数」为堆积信号（>12 帧 PAUSE / load-error 确认 RESUME），
+  同槽只追最新帧（painting 期间候补帧只留一帧）。
+- **坑（单测首抓）**：GuiStreamService.#kill 原实现先清 targets 再杀管道——同步替身下
+  onExit 的收流路径（END→观看端）被自己切断；修为只杀、收流全权交 onExit（ShellService
+  close 同款纪律）。测试侧坑：大帧禁用展开构造（30 万元素 spread 超 V8 参数上限）。
+- **E2E**：mock 假 ffmpeg 与 OPENBOT_COMPUTER=1 门联动（pipe 替身 150ms/帧 1x1 JPEG）；
+  断言锚点 `data-stream`（流开关）+ `data-frames`（拆帧重组计数）——不截图不灌帧，2s 跑完。
+  全量 28 E2E + 398 单测（+21）零回退。
+- **真机验收（podman 路径，2026-09-03 全链实证）**：gui-ubuntu 镜像 apt 层加 ffmpeg（tuna 源
+  重构建）；真机套件 `gui-stream-real.test.ts`（门控 OPENBOT_TEST_GUI_STREAM=1 + 镜像在位，
+  独立 Box id 不碰桌面实例容器）——容器内真 ffmpeg x11grab → openPipe 原始字节 → 拆帧 →
+  WS 会话分发全链绿：**4s 窗口 107 帧（≈27fps）/ 3.8MB / 单帧中位 ≈36KB**（1920x1080 xfce
+  桌面、-q:v 5——远低于规划 30-60MB/s 保守估计；静置桌面 mjpeg 同帧高度压缩）；
+  停流后容器内 pgrep ffmpeg 清零 + END 收流；teardown 容器清理干净（hook 超时放宽 60s 记档）。
+- **坑⑯（podman 真机首证）**：杀宿主侧 `podman exec`/`wsl.exe` CLI 客户端**不传导**容器/发行版
+  内进程——pipe.close() 后容器内 ffmpeg 变孤儿继续编码（真机套件 pgrep 抓到）；修法 = start 时
+  `sh -c 'echo $$ > /tmp/.openbot-gui-stream.pid; exec "$@"'` 包装记 pid（argv 走 exec 参数零
+  引号地狱），stop/dispose 按 pidfile 精确补刀 kill（与一期 exec timeout kill 的「有界」契约
+  不同——openPipe 的无界语义必须自带收口）。
+- **坑⑰（真机首证）**：CSP `img-src` 补 `blob:`——实况帧是 createObjectURL 的 blob URL，
+  旧 CSP `'self' data:` 全量拦截（日志 1126 次，画面黑屏帧在流）；E2E 的 data-frames 计数
+  断言不覆盖渲染层放行，真机目验补位。
+- **交互裁定（2026-09-04 用户）**：GUI 接管入口收进 BoxOps 大屏，对齐终端「点 ctx-screen 开
+  操作台」语义——ctx 小屏纯旁观（点击冒泡开大屏、不绑键盘不开流），接管/键鼠注入/30fps 全在
+  大屏（GuiScreen `interactive` prop 分野）；接管真值收 store 单源（`guiTakeover` +
+  `v1.box.gui-takeover` 事件广播——大小屏两实例同源）；流随大屏开关（大屏关即停流，接管未
+  交还时重开自动续流——裁定 C 的「视图」收窄为大屏）。坑记档：bo-screen 默认块容器令
+  `flex:1` 塌缩（gui 态 `:has(> .gui-screen)` 转 flex 容器，终端态零变化）。
+
+### 优化轮记档（2026-09-04 用户实测「没有 30fps、不跟手」——P0/P1 落地）
+
+- **实测根因（podman 真机）**：注入链路每事件一次 `podman exec` 冷启 **410-550ms**（宿主起
+  CLI → 穿 machine → 容器起 sh）——「不跟手」的主因；mousemove 一期根本未转发（只实现
+  click），光标纹丝不动是观感叠加。「没有 30fps」观感：吞吐实测 27fps 在流内，渲染端
+  img.src 逐帧整图解码（1080p JPEG × 30/s 主线程抖动）吃掉流畅度。
+- **P0-1 常驻注入通道**：Box 内常驻 `sh -s`（openPipe stdin 行式写入——事件延迟从 ~500ms
+  降到容器内 xdotool 执行 ~数 ms）；`PipeSession` 加 `write`、`spawnPipeProcess` stdin 保持
+  打开（采集进程 -nostdin 自兜底）、mock 假 pipe 补空实现；kernel 惰性建立/随 Box 切换
+  重建/退出自动除名回退逐事件 exec/dispose 兜底杀。
+- **坑⑰（OCI 首证）**：`podman exec` 无 `-i` 时不接 stdin——常驻 `sh -s` 立即 EOF 退出、
+  注入通道死路（采集无感，通道是命门）；openPipe 补 `-i`（与 openShell 同款）。
+- **P0-2 全指针面**：mousemove 30Hz 合帧转发（固定节拍防通道洪泛）+ 点击拆 mousedown/up
+  （拖拽真语义，setPointerCapture 出画布可收）+ 右键（button 3）+ 中键 + 滚轮（deltaY 折算
+  `--repeat`）；接管语义收敛「点击捕获」（悬停不接管——防路过挂起 agent，VMware 同款）。
+- **P1-1 canvas 渲染管线**：`createImageBitmap`（解码离主线程）+ rAF 对齐画帧替代 img.src
+  逐帧换；解码忙时候补帧只留最新（实况不排队）；背压信号改为解码队列深度（unconfirmed>12
+  → PAUSE / 画帧确认 → RESUME）；轮询帧同泵（坏 base64 静默跳过——mock 的 frame 回显非真
+  图，img onerror 语义对齐，E2E 首训）。
+- **坑⑱（podman 真机首证）**：应用硬杀（taskkill/崩溃）时 dispose/pidfile 补刀没跑——容器内
+  ffmpeg 孤儿继续编码（实测 3 只）；修法 = 开流/建通道前按签名 pkill -9 清场。坑⑱b：模式串
+  经 `sh -c` 传入时执行它的 sh 自身 cmdline 含完整模式——pkill 连自己杀（exit 143 自杀），
+  模式拆半拼接绕开。坑⑱c：SIGTERM 下 ffmpeg 优雅收尾迟迟不退——清场与 pidfile 补刀一律
+  `kill -9`/`pkill -9`（真机探针实证 0.5s+ 不退 vs 立即清零）。注入 sh 带 argv $0 标签
+  （openbot-gui-input）供清场定位。
+- **验证**：单测 393（+1 spawnPipeProcess stdin/stdout 二进制安全自指）+ E2E 28/28 全绿
+  （接管链路选择器 canvas 化）；真机探针 `-i` 修复前后 `sh -s` EOF 退出 vs 行命令即执行。
