@@ -219,6 +219,30 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 - **ffmpeg 包体**：GUI 栈 apt 增 ~100MB（镜像/发行版体积）——如实记档；
 - Windows 侧无 ffmpeg 依赖（帧在 Box 内编码，宿主只搬运字节）。
 
+### run 生命周期语义升级（2026-09-06 用户报障「思考半天静默回收」——进展驱动 grace）
+
+用户实测：Agent 会话里一直「思考中」，之后才发现排程界面「已回收」——为什么被回收、被回收
+了有没有任何提示。诊断三层断层：watchdog grace 用**活跃时长**判据（120s）系统性误杀慢任务
+（弱模型一轮 LLM 60-90s + 工具循环必超）；逃逸事件渲染层只翻排程卡（会话界面零提示）；
+zombie 底层跑成功也无人知晓（finished 事件不发）。对照 Claude Code/Codex 的「在动就一直跑、
+停止只因为完成/报错/用户」——语义升级而非参数调优：
+
+- **grace 改进展驱动**：`AgentScheduler.touch(runId)` 刷新活跃 run 的 `lastProgressAt`；
+  tick 的逃逸判据从「启动后时长」改为「**无进展时长**」——在动的 run 永不逃逸。
+  进展信号接线（assemble）：llm/exec 流事件（onStream 双职责）、审批挂起
+  （`v1.approval.requested`——等用户=有理由的停）。deadline 仍为总时长硬限（失控兜底）。
+- **单步超时核查**：LLM 请求已有缺省 120s 超时（AbortSignal.timeout）、exec 30s——每步
+  有界 + 8 轮预算 = run 必然收敛，watchdog 退化为纯防御兜底（真死挂才触发）。
+- **zombie 真实终态**：#finish zombie 分支补发 `lifecycle.finished`（成功=成功/失败=失败码；
+  ticket 结局保持 escaped 不变——回执先行的发送语义不变，二次 settle 幂等跳过）。
+  终答本就由 execute 内部投递（v1.message.agent——迟到但到达）。
+- **desktop RunPolicy 上调**：grace 300_000 / deadline 900_000（无进展 5 分钟才逃逸、
+  15 分钟总硬限）；CLI/测试保持内核缺省。AssembleOptions.runPolicy 装配选项。
+- **渲染层**：escaped → toast（agent 名 + 无进展秒数 + 「已转入后台，结果仍会送达」）；
+  TasksView「已逃逸 · zombie」→「转后台」/「已回收」→「后台已结束」+ title 原因说明。
+- **验证**：单测 414 全绿（+3：touch 保鲜不逃逸/停止进展逃逸/zombie 成功终态补发；
+  既有 grace 用例语义天然兼容——无 touch 即无进展）；E2E 28/28。
+
 ### 工具参数面补齐（2026-09-05 用户报障——v0.1.14）
 
 用户实测：agent 操作容器反复出现「传参格式有误，重新正确调用」（模型把自然语言当 command 传，

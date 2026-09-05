@@ -40,11 +40,14 @@ export interface RunTicket extends RunAck {
   settled: Promise<RunOutcome>
 }
 
-/** 期限与逃逸窗口：策略是数据，watchdog 驱动归装配方（真实=定时器，测试=手动 tick） */
+/** 期限与逃逸窗口：策略是数据，watchdog 驱动归装配方（真实=定时器，测试=手动 tick）。
+ *  grace 判据为**无进展时长**（scheduler.touch 刷新——流事件/审批挂起都算进展；
+ *  2026-09-06 语义升级：在动的 run 永不逃逸，对齐「停止只因为完成/报错/用户」的体验）；
+ *  deadline 仍为总时长硬限（失控循环的终极兜底） */
 export interface RunPolicy {
-  /** watchdog 逃逸窗口：活跃超限后 settled 立即结算，底层标记 zombie 等回收 */
+  /** watchdog 逃逸窗口：**无进展**超限后 settled 立即结算（发送永不悬挂），底层标记 zombie 等回收 */
   graceMs: number
-  /** 硬期限：超限 abort，failed/RUN_DEADLINE */
+  /** 硬期限：启动起总时长超限 abort，failed/RUN_DEADLINE */
   deadlineMs: number
 }
 

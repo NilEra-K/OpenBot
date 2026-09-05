@@ -188,7 +188,57 @@ describe('AgentScheduler watchdog 与期限', () => {
     expect(o1.state).toBe('escaped')
     harness.gates[0]?.reject(new KernelError('TEST_ABORTED'))
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
-    expect(types(harness.events, 'v1.lifecycle.finished')).toEqual([])
+    // zombie 回收补发**真实终态** finished（2026-09-06：deadline abort → failed/RUN_DEADLINE）
+    const finished = harness.events.find((e) => e.type === 'v1.lifecycle.finished')
+    expect(finished).toBeTruthy()
+    expect(finished!.payload.state).toBe('failed')
+    expect((finished!.payload as { code?: string }).code).toBe('RUN_DEADLINE')
+    expect(harness.scheduler.isIdle).toBe(true)
+  })
+
+  it('进展驱动 grace：touch 保鲜——在动的 run 永不逃逸，停止进展后才超窗（2026-09-06 语义升级）', async () => {
+    const harness = makeHarness()
+    const r1 = harness.scheduler.enqueue({
+      lane: 'background',
+      kind: 'task',
+      policy: { graceMs: 1_000, deadlineMs: 60_000 },
+    })
+    // 持续进展：每推进 500ms（<grace 1000）touch 一次——3 秒后依然在跑
+    for (let t = 0; t < 6; t++) {
+      harness.advance(500)
+      harness.scheduler.tick()
+      const settled = await Promise.race([r1.settled.then(() => true), Promise.resolve(false)])
+      expect(settled, `第 ${t + 1} 步不应逃逸`).toBe(false)
+      expect(harness.scheduler.touch('run-1')).toBe(true)
+    }
+    harness.advance(500)
+    harness.scheduler.tick()
+    expect(harness.scheduler.activeRunId).toBe('run-1') // 有进展不逃逸
+    // 停止 touch：无进展超窗 → 逃逸（回执先行）
+    harness.advance(1_001)
+    expect((await r1.settled).state).toBe('escaped')
+    // touch 非活跃/不存在 runId：静默 false
+    expect(harness.scheduler.touch('run-1')).toBe(false) // 已逃逸——不再有意义
+    expect(harness.scheduler.touch('run-nope')).toBe(false)
+    harness.gates[0]?.resolve()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  })
+
+  it('zombie 真实终态补发：底层成功 → finished succeeded（呈现层不再停在「已回收」）', async () => {
+    const harness = makeHarness()
+    const r1 = harness.scheduler.enqueue({
+      lane: 'background',
+      kind: 'task',
+      policy: { graceMs: 1_000, deadlineMs: 60_000 },
+    })
+    harness.advance(1_001)
+    expect((await r1.settled).state).toBe('escaped') // 回执先行
+    harness.gates[0]?.resolve('late-answer') // 底层迟到成功
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(harness.events.some((e) => e.type === 'v1.lifecycle.reaped')).toBe(true)
+    const finished = harness.events.find((e) => e.type === 'v1.lifecycle.finished')
+    expect(finished).toBeTruthy()
+    expect(finished!.payload.state).toBe('succeeded') // 真实终态（不再沉默）
     expect(harness.scheduler.isIdle).toBe(true)
   })
 })

@@ -72,6 +72,8 @@ interface ActiveSlot {
   entry: QueueEntry
   controller: AbortController
   startedAt: number
+  /** 最近进展时刻（进展驱动 grace：touch 刷新——在动的 run 永不逃逸，2026-09-06 语义升级） */
+  lastProgressAt: number
   /** 已逃逸：settled 已先行结算，等底层 settle 后回收 */
   escaped: boolean
   /** 本侧主动 abort 的原因（结算时据此覆盖结局，execute 自报的 code 不作数） */
@@ -136,12 +138,28 @@ export class AgentScheduler {
     return { runId, agentId: this.agentId, acceptedAt: entry.enqueuedAt, settled }
   }
 
+  /**
+   * 进展信号（2026-09-06 语义升级——对齐 Claude Code 类 agent「在动就一直跑」的体验）：
+   * execute 侧的流事件（llm chunk / exec 起止与增量 / 审批挂起）经装配方转发到这里，
+   * 刷新活跃 run 的无进展计时。grace 判据从「启动后时长」改为「无进展时长」——
+   * 慢任务（弱模型长思考、多轮工具循环）不再被误杀，真死挂（无任何信号）仍被兜底。
+   * 不存在或不活跃的 runId 静默忽略（返回 false 供测试断言）。
+   */
+  touch(runId: string): boolean {
+    const active = this.#active
+    if (active === null || active.run.runId !== runId) return false
+    if (active.escaped) return false // 已逃逸（回执已先行）——保鲜无意义
+    active.lastProgressAt = this.#now()
+    return true
+  }
+
   /** watchdog/期限心跳：由装配方驱动（真实=定时器，测试=手动推进） */
   tick(): void {
     const active = this.#active
     if (!active) return
-    const elapsed = this.#now() - active.startedAt
-    if (!active.escaped && elapsed > active.entry.policy.graceMs) {
+    // grace 判据 = 无进展时长（touch 刷新）；deadline 判据 = 总时长（失控循环硬限，不从进展豁免）
+    const idleMs = this.#now() - active.lastProgressAt
+    if (!active.escaped && idleMs > active.entry.policy.graceMs) {
       active.escaped = true
       this.#bus?.emit('v1.lifecycle.escaped', {
         runId: active.run.runId,
@@ -150,7 +168,8 @@ export class AgentScheduler {
       })
       this.#settleEntry(active.entry, this.#outcome(active, 'escaped', ErrorCodes.RUN_GRACE_EXCEEDED))
     }
-    if (elapsed > active.entry.policy.deadlineMs && !active.controller.signal.aborted) {
+    const totalMs = this.#now() - active.startedAt
+    if (totalMs > active.entry.policy.deadlineMs && !active.controller.signal.aborted) {
       if (active.abortReason === null) active.abortReason = 'deadline'
       active.controller.abort()
     }
@@ -241,6 +260,7 @@ export class AgentScheduler {
       entry,
       controller,
       startedAt: this.#now(),
+      lastProgressAt: this.#now(),
       escaped: false,
       abortReason: null,
     }
@@ -268,8 +288,19 @@ export class AgentScheduler {
     if (this.#active !== slot) return
     this.#active = null
     if (slot.escaped) {
-      // zombie 回收：settled 早已以 escaped 结算，这里只报回收并继续排空
+      // zombie 回收：settled 早已以 escaped 结算（回执先行——ticket 结局不变），这里补发
+      // **真实终态** finished 事件（2026-09-06 用户报障：排程卡停在「已回收」且底层成功也
+      // 无人知晓）。终答消息本就由 execute 内部投递（v1.message.agent——迟到但到达），
+      // 此处只修呈现层的真实终态；二次 settleEntry 幂等跳过（settled 已置位）
       this.#bus?.emit('v1.lifecycle.reaped', { runId: slot.run.runId, agentId: this.agentId })
+      const outcome = this.#zombieOutcome(slot, result, err)
+      this.#bus?.emit('v1.lifecycle.finished', {
+        runId: slot.run.runId,
+        agentId: this.agentId,
+        state: outcome.state,
+        ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+        attempts: 1,
+      })
       this.#drain(true)
       return
     }
@@ -298,6 +329,18 @@ export class AgentScheduler {
       attempts: 1,
     })
     this.#drain(true)
+  }
+
+  /** zombie 底层终态（与正常分支同型，但**不二次 settle**——entry 已以 escaped 结算） */
+  #zombieOutcome(slot: ActiveSlot, result?: unknown, err?: unknown): { state: RunOutcomeState; code?: string } {
+    if (slot.abortReason === 'steer') return { state: 'aborted', code: ErrorCodes.RUN_STEER }
+    if (slot.abortReason === 'cancelled') return { state: 'aborted', code: ErrorCodes.RUN_CANCELLED }
+    if (slot.abortReason === 'deadline') return { state: 'failed', code: ErrorCodes.RUN_DEADLINE }
+    if (err !== undefined) {
+      const code = err instanceof KernelError ? err.code : ErrorCodes.RUN_INTERNAL
+      return { state: 'failed', code }
+    }
+    return { state: 'succeeded' }
   }
 
   #settleEntry(entry: QueueEntry, outcome: RunOutcome): void {

@@ -26,10 +26,12 @@ const stateChip = (run: RunCard): { cls: string; label: string } => {
       return { cls: 'chip-accent', label: '运行中' }
     case 'succeeded':
       return { cls: 'chip-success', label: '完成' }
+    // 进展驱动 grace（2026-09-06 语义升级）：escaped = 无进展超窗转后台（底层仍在跑，
+    // 终答迟到必达）；reaped = 后台已结束（真实终态由补发的 finished 事件翻转）
     case 'escaped':
-      return { cls: 'chip-danger', label: '已逃逸 · zombie' }
+      return { cls: 'chip-danger', label: '转后台', title: '超过无进展窗口未结算，已先行回执并转入后台继续——完成后结果仍会送达会话' }
     case 'reaped':
-      return { cls: 'chip-danger', label: '已回收' }
+      return { cls: 'chip-danger', label: '后台已结束', title: '转后台的执行已结束（终答若产出已送达会话）' }
     default:
       return { cls: 'chip-danger', label: run.state === 'failed' ? `失败${run.code ? ' · ' + run.code : ''}` : '已中止' }
   }
@@ -110,7 +112,7 @@ const successRate = computed(() => {
           <div class="run-top">
             <span class="stat-dot" :style="{ background: kernel.colorOf(run.agentId) }"></span>
             <span class="run-agent">{{ run.agentId }}</span>
-            <span class="chip" :class="stateChip(run).cls">{{ stateChip(run).label }}</span>
+            <span class="chip" :class="stateChip(run).cls" :title="stateChip(run).title">{{ stateChip(run).label }}</span>
             <button
               v-if="run.state === 'queued' || run.state === 'running'"
               class="run-stop"

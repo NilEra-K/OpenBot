@@ -5,6 +5,7 @@
  */
 import { AgentScheduler, EventBus, KernelError } from '@openbot/core'
 import type { LifecycleFinishedPayload, RunExecutor } from '@openbot/core'
+import type { ApprovalRequestedPayload, RunPolicy } from '@openbot/core'
 import { AgentStore, IdempotencyLedger, InMemoryFs, TranscriptStore, formatMemoryPrompt } from '@openbot/state'
 import type { FsAdapter, MemoryStore } from '@openbot/state'
 import { MockChatProvider } from '@openbot/llm'
@@ -53,6 +54,9 @@ export interface AssembleOptions {
    */
   computer?: { lock: Pick<GuiTakeoverLock, 'waitTurn'> }
   maxToolRounds?: number
+  /** run 策略覆盖（2026-09-06 进展驱动 grace 语义）：装配方按产品形态调——desktop 上调
+   *  （慢模型长轮次不被误杀），CLI/测试缺省 DEFAULT_RUN_POLICY */
+  runPolicy?: Partial<RunPolicy>
   /**
    * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
    * 默认每次启动随机；确定性冒烟（CLI）注入固定值。
@@ -185,6 +189,13 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     options.approvalGateFactory?.({ bus, ledger }) ??
     options.approvalGate ??
     new AutoApprovalGate({ bus, ledger, now, nextApprovalId })
+  // 审批挂起也是「有理由的停」：请求即保鲜一次（等待起点不计入无进展）；批准后 run 继续
+  // 产生流信号自然续鲜。等待超 graceMs 仍会逃逸（发送永不悬挂语义不变）——但结果迟到必达
+  // （终答由 execute 内部投递），且逃逸/终态经渲染层 toast 与排程卡全量透明
+  bus.on('v1.approval.requested', (event) => {
+    const { agentId, runId } = event.payload as ApprovalRequestedPayload
+    schedulers.get(agentId)?.touch(runId)
+  })
   // run 中止的审批善后（用户主权传导）：中止即否决该 run 的未决审批——gated() 的 signal race
   // 唤醒等待方，revokeRun 把账本按 denied 落定（resolved 事件让 UI 卡收敛，重启不重放孤儿审批）
   bus.on('v1.lifecycle.finished', (event) => {
@@ -216,7 +227,12 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     ...(options.stats?.warnBytes !== undefined ? { warnBytes: options.stats.warnBytes } : {}),
     ...(options.stats?.criticalBytes !== undefined ? { criticalBytes: options.stats.criticalBytes } : {}),
   })
-  const onStream = (event: Parameters<StreamHub['handle']>[0]): void => streamHub.handle(event)
+  // run 实况汇聚：llm 增量与 exec 输出同型汇入 hub（无 WS 订阅者时丢弃——turn 不受渲染层影响）
+  // 双职责：同一事件流刷新调度器的无进展计时（进展驱动 grace——在动的 run 永不逃逸）
+  const onStream = (event: Parameters<StreamHub['handle']>[0]): void => {
+    streamHub.handle(event)
+    schedulers.get(event.agentId)?.touch(event.runId)
+  }
   const tools = new ToolRegistry()
     .register(execTool({ backend, bus, onStream, transcript }))
     .register(sendMessageTool(messaging))
@@ -491,6 +507,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
         now,
         nextRunId: () => `${registration.agentId}-run-${bootPrefix}-${++runCounter}`,
         bus,
+        ...(options.runPolicy !== undefined ? { policy: options.runPolicy } : {}),
         execute: (run) => {
           if (!executeRef.current) {
             return Promise.reject(new AgentSchedulerMissingError(registration.agentId))

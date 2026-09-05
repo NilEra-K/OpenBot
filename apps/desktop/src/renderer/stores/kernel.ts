@@ -7,6 +7,7 @@ import { createGatewayClient } from '../lib/gateway'
 import { GatewayCommandError } from '../lib/gateway'
 import { connectRunStreams } from '../lib/stream'
 import { agentColor } from '../lib/agent-color'
+import { useToastStore } from './toast'
 import type { GatewayClient, GatewayEndpoint } from '../lib/gateway'
 import type { StreamClient } from '../lib/stream'
 import type { KernelEvent } from '@openbot/transport'
@@ -871,6 +872,17 @@ export const useKernelStore = defineStore('kernel', {
           if (run) {
             run.state = event.type === 'v1.lifecycle.escaped' ? 'escaped' : 'reaped'
             run.updatedAt = event.at
+          }
+          // 逃逸即时透明（2026-09-06 用户报障「思考半天静默回收」）：toast 说明原因与后果
+          // ——不再让用户去排程界面才发现。终答由内核 execute 内部投递（迟到但到达）
+          if (event.type === 'v1.lifecycle.escaped') {
+            const name = this.roster.find((a) => a.agentId === event.payload.agentId)?.name ?? event.payload.agentId
+            const graceSec = Math.round(event.payload.graceMs / 1000)
+            useToastStore().push(
+              `${name} 的执行超过 ${graceSec} 秒无进展，已转入后台——完成后结果仍会送达`,
+              'danger',
+              6_000,
+            )
           }
           return
         }

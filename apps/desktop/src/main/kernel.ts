@@ -379,6 +379,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     memory: memoryStore,
     // computer-use 工具族（plan-computer-use）：env 门开即注册（生产门记档待 GUI 真机）
     ...(computerEnabled ? { computer: { lock: guiLock } } : {}),
+    // run 策略上调（2026-09-06 进展驱动 grace 语义）：无进展 5 分钟才逃逸（慢模型长思考/
+    // 多轮工具循环在动就不算停滞）、总时长 15 分钟硬限兜底失控——CLI/测试保持内核缺省
+    runPolicy: { graceMs: 300_000, deadlineMs: 900_000 },
     // 真实时钟：确定性断言只存在于内核测试与 CLI（plan-p2 风险与地雷）
     approvalGateFactory: (deps) => {
       approvalGate = new ManualApprovalGate(deps)
