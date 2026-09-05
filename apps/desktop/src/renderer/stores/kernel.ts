@@ -234,7 +234,7 @@ type PtyListener = (ev: { type: 'open' | 'data' | 'end'; shellId: string; boxId:
 const ptyListeners = new Set<PtyListener>()
 /** gui 流事件订阅者（GuiScreen 挂载注册、卸载退订——实况只发给在看的眼睛） */
 export type GuiStreamListener = (
-  ev: { type: 'open' | 'data' | 'end'; boxId: string; streamId?: number; chunk?: Uint8Array; reason?: string },
+  ev: { type: 'open' | 'data' | 'end'; boxId: string; codec?: 'h264' | 'mjpeg'; streamId?: number; chunk?: Uint8Array; reason?: string },
 ) => void
 const guiListeners = new Set<GuiStreamListener>()
 /** 已拉取 transcript 历史的 agent（懒加载去重；内核不重启时 SSE 重放已覆盖） */
@@ -321,7 +321,7 @@ export const useKernelStore = defineStore('kernel', {
           onPtyOpen: (meta) => this.dispatchPty({ type: 'open', ...meta }),
           onPtyData: (meta, text) => this.dispatchPty({ type: 'data', ...meta, text }),
           onPtyEnd: (meta) => this.dispatchPty({ type: 'end', ...meta }),
-          onGuiOpen: (meta) => this.dispatchGui({ type: 'open', boxId: meta.boxId, streamId: meta.streamId }),
+          onGuiOpen: (meta) => this.dispatchGui({ type: 'open', boxId: meta.boxId, codec: meta.codec, streamId: meta.streamId }),
           onGuiData: (meta, chunk) => this.dispatchGui({ type: 'data', boxId: meta.boxId, streamId: meta.streamId, chunk }),
           onGuiEnd: (meta, reason) => this.dispatchGui({ type: 'end', boxId: meta.boxId, reason }),
         })
@@ -967,7 +967,7 @@ export const useKernelStore = defineStore('kernel', {
       this.guiTakeover = held
     },
 
-    dispatchGui(ev: { type: 'open' | 'data' | 'end'; boxId: string; streamId?: number; chunk?: Uint8Array; reason?: string }): void {
+    dispatchGui(ev: { type: 'open' | 'data' | 'end'; boxId: string; codec?: 'h264' | 'mjpeg'; streamId?: number; chunk?: Uint8Array; reason?: string }): void {
       // 孤儿纪律（渲染层侧）：流开着但没有任何观看组件（重载后无人接管）——立即停采集，
       // 不让 ffmpeg 白跑（主进程没有「零订阅者自动停」语义——重连回放依赖它）
       if (guiListeners.size === 0 && ev.type === 'open') {

@@ -46,6 +46,13 @@ export interface RunStreamChunk {
   ch?: 'stdout' | 'stderr'
 }
 
+/** gui 流（可选）：Box 桌面实况——h264 引擎 DATA 负载是 Annex B 字节流（AU 边界 renderer
+ *  解析），mjpeg 引擎是独立 JPEG 帧；codec 由 OPEN meta 协商（消费方选解码管线） */
+export interface GuiStreamMetaMeta {
+  boxId: string
+  codec: 'h264' | 'mjpeg'
+}
+
 export interface StreamClientHandlers {
   onOpen: (meta: RunStreamOpenMeta['meta']) => void
   onChunk: (meta: { agentId: string; runId: string; stream: 'llm' | 'exec' }, chunk: RunStreamChunk) => void
@@ -54,8 +61,8 @@ export interface StreamClientHandlers {
   onPtyOpen?: (meta: { shellId: string; boxId: string }) => void
   onPtyData?: (meta: { shellId: string; boxId: string }, text: string) => void
   onPtyEnd?: (meta: { shellId: string; boxId: string }) => void
-  /** gui 流（可选）：Box 桌面实况（mjpeg 原始字节——消费方用拆帧器按 SOI/EOI 重组） */
-  onGuiOpen?: (meta: { boxId: string; streamId: number }) => void
+  /** gui 流（可选）：Box 桌面实况（原始字节——消费方按 codec 选管线） */
+  onGuiOpen?: (meta: { boxId: string; codec: 'h264' | 'mjpeg'; streamId: number }) => void
   onGuiData?: (meta: { boxId: string; streamId: number }, chunk: Uint8Array) => void
   onGuiEnd?: (meta: { boxId: string }, reason?: string) => void
 }
@@ -83,6 +90,7 @@ interface PtyRecord {
 /** gui 流归属（OPEN 登记，END/ABORT 除名） */
 interface GuiRecord {
   boxId: string
+  codec: 'h264' | 'mjpeg'
 }
 
 /** 连接 WS /stream：断线自动重连（3s 退避）；返回关闭句柄 */
@@ -136,8 +144,9 @@ export function connectRunStreams(
       const meta = parseJson(frame.payload) as RunStreamOpenMeta
       const m = meta?.meta
       if (meta?.kind === 'gui' && m && typeof m.boxId === 'string') {
-        guis.set(frame.streamId, { boxId: m.boxId })
-        handlers.onGuiOpen?.({ boxId: m.boxId, streamId: frame.streamId })
+        const codec = m.codec === 'mjpeg' ? 'mjpeg' : 'h264'
+        guis.set(frame.streamId, { boxId: m.boxId, codec })
+        handlers.onGuiOpen?.({ boxId: m.boxId, codec, streamId: frame.streamId })
         return
       }
       if (meta?.kind === 'pty' && m && typeof m.shellId === 'string' && typeof m.boxId === 'string') {

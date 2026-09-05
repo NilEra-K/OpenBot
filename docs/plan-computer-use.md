@@ -219,6 +219,36 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 - **ffmpeg 包体**：GUI 栈 apt 增 ~100MB（镜像/发行版体积）——如实记档；
 - Windows 侧无 ffmpeg 依赖（帧在 Box 内编码，宿主只搬运字节）。
 
+### 三期：60fps H.264 + WebCodecs（2026-09-05 用户需求——已实施）
+
+用户需求「60+ FPS、不降画质、更跟手」——mjpeg 帧内编码路线三目标互斥（60fps 编码 CPU 爆 /
+画质到顶），按规划记档走 H.264+WebCodecs：
+
+- **采集**：`-c:v libx264 -preset ultrafast -tune zerolatency -crf 18 -g 30 -pix_fmt yuv420p
+  -framerate 60`——帧间压缩编码 CPU 反低于 mjpeg、CRF 18 视觉无损、码率降一个量级（真机
+  实测静止桌面 3s 152KB vs mjpeg 同场景 3.8MB）；`-pix_fmt yuv420p` 必带（x11grab 默认
+  bgra 会落 4:4:4 profile，主流 GPU 硬解不支持）；`-f h264` Annex B 裸流。
+- **帧语义反转**：H.264 帧间依赖不可丢帧——服务端无 latest 槽位/无跳帧（PAUSE 期
+  StreamSession 原生缓冲兜底），晚接入等 IDR（keyint 上限 30 帧≈0.5s，真机实测 IDR 间隔
+  有离散——keyint 是上限非周期，静止画面 x264 自适应延迟插入）；服务端纯字节搬运
+  （Annex B 解析全在 renderer）。
+- **renderer**：Annex B AU 解析器（first_mb_in_slice 判帧界）→ WebCodecs VideoDecoder
+  **硬解** → VideoFrame 直绘 canvas（GPU 链路）；解码器错误自动重建（下个 IDR 重同步）；
+  WebCodecs 缺席/配置失败如实降级提示。mousemove 合帧 33ms→16ms（60Hz）。
+- **双引擎**：env `OPENBOT_GUI_CODEC=mjpeg` 回退一期路径（拆帧/latest/背压降帧全保留）；
+  OPEN meta 协商 codec（renderer 按它选管线）；E2E 走 mjpeg 引擎（假流是 JPEG 字节）。
+- **真机坑链（实施中首证）**：sliced-threads——ultrafast 默认切片并行，每帧多 slice NALU，
+  「一 VCL 一 AU」简化实测 510 AU vs 预期 180 帧；AU 边界必须按 slice header 的
+  **first_mb_in_slice**（ue(v) exp-Golomb 位读）判定，0=新帧首 slice。实施中踩的位级坑：
+  ue 首位 1 参与数值（ue(0)='1'，漏算读成 -1）；first_mb 位流起点在 NALU 头后一字节
+  （off-by-one 全流粘死 1 AU）。真机实证修正后 168 AU/6 key（3s@60fps ≈180 帧内合理）。
+- **真机坑⑲（宿主环境）**：podman machine 重启硬停容器后文件系统残留 /tmp/.X0-lock——
+  重启容器的 Xvfb 起不来、xfce 误判「X server already running」全链崩；start.sh 开头幂等
+  清理根治（容器 /tmp 每次启动本该干净）。
+- **验证**：单测 405 全绿（+12：解析器 10 含多 slice/EP3/逐块遍历、argv/meta 2）；E2E 28/28
+  （mjpeg 引擎）；真机套件（OPENBOT_TEST_GUI_STREAM=1）真流 AU 切分实证；「AU→WebCodecs
+  解码→canvas」半链 Node 无 WebCodecs 无法自动断言——重启客户端人工目验（帧率/画质/跟手）。
+
 ### 实施记档（2026-09-03）
 
 - **采集引擎（裁定 A 按推荐）**：ffmpeg x11grab mjpeg 管道——零协议依赖拆帧即帧；x11vnc

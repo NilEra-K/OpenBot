@@ -198,9 +198,14 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const streamHub = new StreamHub()
   // 交互式 shell（PTY）：用户亲手操作，不经 run/审批/预算——与 agent exec 路线完全分离
   const shellService = new ShellService({ backend })
-  // GUI 桌面实况（二期 30fps）：采集在 Box 内 ffmpeg（backend.openPipe 二进制管道），
-  // 帧走 WS /stream 的 gui 帧型；显示地址 env OPENBOT_GUI_DISPLAY 与 computer 工具族同源
-  const guiStream = new GuiStreamService({ backend })
+  // GUI 桌面实况（三期双引擎）：采集在 Box 内 ffmpeg（backend.openPipe 二进制管道），
+  // 帧走 WS /stream 的 gui 帧型；编码引擎 env OPENBOT_GUI_CODEC 覆盖（缺省 h264——
+  // x264 zerolatency + WebCodecs 硬解；'mjpeg' 回退一期路径）；显示地址 env
+  // OPENBOT_GUI_DISPLAY 与 computer 工具族同源
+  const guiStream = new GuiStreamService({
+    backend,
+    ...(process.env.OPENBOT_GUI_CODEC === 'mjpeg' ? { codec: 'mjpeg' as const } : {}),
+  })
   // Box 统计轮询与宿主磁盘压力判定（Step 6）：盒清单读装配层映射——零子进程开销；
   // backend.list 的跨重启真相职责不变（两者分工：在册盒遥测 vs 全盘发现）
   const statsService = new StatsService({

@@ -1,18 +1,22 @@
 <script setup lang="ts">
 /**
- * GuiScreen（plan-computer-use Step 6 + 二期 30fps + 2026-09-04 优化轮）：Box 桌面旁观/接管视图。
+ * GuiScreen（plan-computer-use Step 6 + 二期 30fps + 三期 60fps 双引擎）：Box 桌面旁观/接管视图。
  * 两处挂载分野（2026-09-04 用户裁定——接管入口收进 BoxOps 大屏）：
  * - interactive=false（ctx 小屏，缺省）：**纯旁观**——1.5s 轮询帧源；点击冒泡到 ctx-screen 开
  *   BoxOps 大屏；不绑指针/键盘、不注入、不开流（接管态真值照实呈现，由 store 单源供给）；
- * - interactive=true（BoxOps 大屏）：全指针面注入（移动/点击/拖拽/右键/滚轮——30Hz 合帧转发
- *   mousemove）+ 键入（50ms 合批）+ watch 接管开 30fps 流、交还停流回落轮询。
- * 渲染管线（P1-1）：canvas + createImageBitmap——解码离主线程、rAF 对齐画帧（img.src 逐帧换
- * 的整帧解码抖动是「没有 30fps 观感」的根）；背压信号 = 解码队列深度（候补帧堆积 → PAUSE）。
- * 帧源唯一化：轮询 blob 与实况 blob 走同一解码泵，切流无黑屏。
+ * - interactive=true（BoxOps 大屏）：全指针面注入（移动 60Hz 合帧/点击/拖拽/右键/滚轮）+
+ *   键入（50ms 合批）+ watch 接管开实况流、交还停流回落轮询。
+ * 双引擎解码泵（三期，OPEN meta.codec 协商）：
+ * - h264（缺省）：Annex B 流 → lib/h264 解析 AU → WebCodecs VideoDecoder **硬解** →
+ *   VideoFrame 直绘 canvas（GPU 链路，零 JPEG 软解）——60fps/视觉无损/回显延迟最低；
+ *   解码器出错自动 reset 重建（服务端 -g 30 保证 ≤0.5s 内 IDR 重新同步）；不可丢帧（无 PAUSE）。
+ * - mjpeg（回退）：SOI/EOI 拆帧 → createImageBitmap → canvas；背压=解码队列深度 PAUSE。
+ * 帧源唯一化：轮询 blob 走 mjpeg 泵，切流无黑屏。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { createMjpegSplitter } from '../lib/mjpeg'
+import { createH264Parser } from '../lib/h264'
 
 const props = withDefaults(defineProps<{ boxId: string; interactive?: boolean }>(), { interactive: false })
 const kernel = useKernelStore()
@@ -28,57 +32,54 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 // ---- 流订阅态（高频非序列化态，普通变量不入 ref） ----
 let guiStreamId: number | null = null
+let guiCodec: 'h264' | 'mjpeg' = 'mjpeg'
 let splitter: ReturnType<typeof createMjpegSplitter> | null = null
+let h264parser: ReturnType<typeof createH264Parser> | null = null
 let unlisten: (() => void) | null = null
 
-// ---- 解码泵（P1-1）：createImageBitmap 离线程解码 + rAF 对齐画帧；候补帧只留最新 ----
+// ---- 解码泵共用态：rAF 对齐画帧；候补只留最新（mjpeg 实况语义） ----
 let decodeBusy = false
-let heldBlob: Blob | null = null // 解码中的候补帧（只留最新——实况语义）
-let unconfirmed = 0 // 已收未画的帧计数（> 上限 → PAUSE 服务端）
+let heldBlob: Blob | null = null
+let unconfirmed = 0 // mjpeg：已收未画帧计数（> 上限 → PAUSE 服务端）
 let paused = false
 const PAUSE_AT = 12
+/** h264：解码器时间戳基准（AU 计数 × 帧间隔）；decoder 句柄 */
+let h264Decoder: VideoDecoder | null = null
+let h264AuCount = 0
+let h264Broken = false // 解码器错误后置位——本流不再喂数据（等 END/重启）
 
 const maybePause = (): void => {
+  if (guiCodec !== 'mjpeg') return // h264 不可丢帧，无 PAUSE
   if (!paused && unconfirmed > PAUSE_AT && guiStreamId !== null) {
     paused = true
     kernel.guiStreamPause(guiStreamId)
   }
 }
 
-/** 帧入泵（轮询与实况共用）：解码忙时只留最新候补（旧帧丢弃——实况不排队） */
-const pumpFrame = (blob: Blob): void => {
+/** mjpeg 帧入泵：解码忙时只留最新候补（实况不排队） */
+const pumpMjpeg = (blob: Blob): void => {
   unconfirmed += 1
   if (decodeBusy) {
     heldBlob = blob
     maybePause()
     return
   }
-  void decodeAndDraw(blob)
+  void decodeMjpeg(blob)
 }
 
-const decodeAndDraw = (blob: Blob): void => {
+const decodeMjpeg = (blob: Blob): void => {
   decodeBusy = true
   createImageBitmap(blob)
     .then((bmp) => {
       requestAnimationFrame(() => {
         decodeBusy = false
         unconfirmed = 0
-        const canvas = canvasRef.value
-        if (canvas === null) {
-          bmp.close()
-        } else {
-          if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-            canvas.width = bmp.width
-            canvas.height = bmp.height
-          }
-          canvas.getContext('2d')?.drawImage(bmp, 0, 0)
-          bmp.close()
-          streamFrames.value += 1
-        }
+        drawSource(bmp.width, bmp.height, (ctx) => ctx.drawImage(bmp, 0, 0))
+        bmp.close()
         const held = heldBlob
         heldBlob = null
         if (held !== null) {
-          void decodeAndDraw(held)
+          void decodeMjpeg(held)
           return
         }
         if (paused && guiStreamId !== null) {
@@ -93,12 +94,101 @@ const decodeAndDraw = (blob: Blob): void => {
       unconfirmed = 0
       const held = heldBlob
       heldBlob = null
-      if (held !== null) void decodeAndDraw(held)
+      if (held !== null) void decodeMjpeg(held)
       else if (paused && guiStreamId !== null) {
         paused = false
         kernel.guiStreamResume(guiStreamId)
       }
     })
+}
+
+/** 画帧（两引擎共用的 rAF 落地点；canvas 尺寸随源分辨率自适应） */
+const drawSource = (width: number, height: number, paint: (ctx: CanvasRenderingContext2D) => void): void => {
+  const canvas = canvasRef.value
+  if (canvas === null) return
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width
+    canvas.height = height
+  }
+  const ctx = canvas.getContext('2d')
+  if (ctx !== null) {
+    paint(ctx)
+    streamFrames.value += 1
+  }
+}
+
+// ---- h264 引擎（WebCodecs 硬解）：惰性建解码器，AU 喂 decode，output 回调 rAF 直绘 ----
+
+const H264_CODEC_STRING = 'avc1.42E02A' // Constrained Baseline L4.2——zerolatency 无 B 帧 + 1080p60 的声明上限；流内 SPS 才是真值（Annex B 模式）
+
+const ensureH264Decoder = (): boolean => {
+  if (h264Broken) return false
+  if (h264Decoder !== null && h264Decoder.state === 'configured') return true
+  if (typeof VideoDecoder !== 'function') {
+    // WebCodecs 缺席（理论不达——Electron/Chromium 全量支持）：如实降级记录，本流放弃
+    if (!h264Broken) {
+      h264Broken = true
+      frameError.value = 'WebCodecs 不可用——h264 实况不可用（可用 OPENBOT_GUI_CODEC=mjpeg 回退）'
+    }
+    return false
+  }
+  h264Decoder = new VideoDecoder({
+    output: (frame: VideoFrame) => {
+      requestAnimationFrame(() => {
+        drawSource(frame.displayWidth, frame.displayHeight, (ctx) => ctx.drawImage(frame as unknown as CanvasImageSource, 0, 0))
+        frame.close()
+      })
+    },
+    error: () => {
+      // 解码器内部错误：弃用重建——下一个 IDR（≤0.5s）重新同步
+      try {
+        h264Decoder?.close()
+      } catch {
+        /* 已 closed */
+      }
+      h264Decoder = null
+      h264AuCount = 0
+    },
+  })
+  try {
+    h264Decoder.configure({ codec: H264_CODEC_STRING, optimizeForLatency: true })
+    return true
+  } catch {
+    h264Broken = true
+    frameError.value = 'WebCodecs h264 配置不支持——可用 OPENBOT_GUI_CODEC=mjpeg 回退'
+    return false
+  }
+}
+
+const pumpH264 = (chunk: Uint8Array): void => {
+  if (h264Broken || !ensureH264Decoder() || h264parser === null) return
+  for (const au of h264parser.push(chunk)) {
+    if (h264Decoder === null || h264Decoder.state !== 'configured') return
+    try {
+      h264AuCount += 1
+      h264Decoder.decode(
+        new EncodedVideoChunk({
+          type: au.type,
+          timestamp: Math.round((h264AuCount * 1_000_000) / 60), // 60fps 名义间隔（渲染按 output 到达节奏）
+          data: au.data as unknown as BufferSource,
+        }),
+      )
+    } catch {
+      // chunk 构造/解码拒绝（错位/不支持）：丢当前 AU 等下个 IDR 自愈，不炸解码器
+    }
+  }
+}
+
+const teardownH264 = (): void => {
+  try {
+    h264Decoder?.close()
+  } catch {
+    /* 已 closed */
+  }
+  h264Decoder = null
+  h264parser = null
+  h264AuCount = 0
+  h264Broken = false
 }
 
 // ---- 实况流生命周期（大屏 interactive 独占驱动） ----
@@ -132,6 +222,7 @@ const stopStream = (): void => {
 const resetStreamState = (): void => {
   guiStreamId = null
   splitter = null
+  teardownH264()
   decodeBusy = false
   heldBlob = null
   unconfirmed = 0
@@ -168,7 +259,7 @@ const queueType = (ch: string): void => {
   if (typeTimer === null) typeTimer = setTimeout(flushTypeBuffer, TYPE_WINDOW_MS)
 }
 
-// ---- 指针面（P0-2）：移动 30Hz 合帧转发 + 点击/拖拽/右键/滚轮补全 ----
+// ---- 指针面：移动 60Hz 合帧转发 + 点击/拖拽/右键/滚轮（三期 33ms→16ms 跟手再进一步） ----
 
 /** 显示坐标 → 帧内坐标（canvas 盒子=全视口，画面按 object-fit:contain 的子矩形呈现——
  *  换算须先求 contain 缩放与居中偏移；黑边区的点击钳回画面边缘。视口未布局返回 null） */
@@ -192,8 +283,8 @@ const toFrameCoords = (e: { clientX: number; clientY: number }): { x: number; y:
 /** xdotool 按钮号映射（PointerEvent.button → X 按钮） */
 const X_BUTTON: Record<number, number> = { 0: 1, 1: 2, 2: 3 }
 
-/** mousemove 合帧：pointermove 只记最新坐标，固定节拍转发（30Hz——连续移动跟手、通道不洪泛） */
-const MOVE_TICK_MS = 33
+/** mousemove 合帧：pointermove 只记最新坐标，固定节拍转发（60Hz——连续移动跟手、通道不洪泛） */
+const MOVE_TICK_MS = 16
 let latestMove: { x: number; y: number } | null = null
 let moveSentKey: string | null = null
 let moveTimer: ReturnType<typeof setInterval> | null = null
@@ -209,7 +300,7 @@ const flushMove = (): void => {
 
 const onPointerMove = (e: PointerEvent): void => {
   // 点击捕获语义（VMware 式）：未接管时悬停不注入也不接管（防路过挂起 agent）；
-  // 接管中移动即转发（30Hz 合帧）——跟手
+  // 接管中移动即转发（60Hz 合帧）——跟手
   if (!props.interactive || !takeover.value) return
   const p = toFrameCoords(e)
   if (p === null) return
@@ -313,7 +404,7 @@ const pull = (): void => {
     .then((r) => {
       if (r.image !== null) {
         const blob = b64ToBlob(r.image.base64, r.image.mime)
-        if (blob !== null) pumpFrame(blob)
+        if (blob !== null) pumpMjpeg(blob)
         frameError.value = null
       } else {
         frameError.value = r.reason ?? '截图不可用'
@@ -322,7 +413,7 @@ const pull = (): void => {
     .catch((err: unknown) => (frameError.value = err instanceof Error ? err.message : String(err)))
 }
 
-// 接管 ↔ 开流联动（裁定 B）：仅 interactive 实例驱动流（大屏开即 30fps、关/交还即停回落轮询）。
+// 接管 ↔ 开流联动（裁定 B）：仅 interactive 实例驱动流（大屏开即实况、关/交还即停回落轮询）。
 // immediate：大屏挂载时接管已在位（store 真值）——立即续流
 watch(
   takeover,
@@ -342,10 +433,17 @@ onMounted(() => {
     if (ev.boxId !== props.boxId) return
     if (ev.type === 'open') {
       guiStreamId = ev.streamId ?? null
-      if (splitter === null) splitter = createMjpegSplitter()
-    } else if (ev.type === 'data' && ev.streamId === guiStreamId && splitter !== null && ev.chunk !== undefined) {
-      for (const frame of splitter.push(ev.chunk)) {
-        pumpFrame(new Blob([frame], { type: 'image/jpeg' }))
+      guiCodec = ev.codec ?? 'mjpeg'
+      if (guiCodec === 'mjpeg') {
+        if (splitter === null) splitter = createMjpegSplitter()
+      } else {
+        h264parser = createH264Parser()
+      }
+    } else if (ev.type === 'data' && ev.streamId === guiStreamId && ev.chunk !== undefined) {
+      if (guiCodec === 'mjpeg' && splitter !== null) {
+        for (const frame of splitter.push(ev.chunk)) pumpMjpeg(new Blob([frame], { type: 'image/jpeg' }))
+      } else if (guiCodec === 'h264') {
+        pumpH264(ev.chunk)
       }
     } else if (ev.type === 'end' && (ev.streamId === undefined || ev.streamId === guiStreamId)) {
       // 流结束（停流/采集退出）：回落轮询——timer 常驻，下一拍自动接管画面
@@ -387,8 +485,8 @@ onBeforeUnmount(() => {
       @wheel="onWheel"
       @contextmenu="onContextMenu"
     >
-      <!-- canvas 只做渲染面（P1-1：createImageBitmap 解码 + rAF 画帧）；指针面挂视口 div——
-           mock 流首帧到达前 canvas 未定尺寸（默认 300x150），指针挂 canvas 会漏点击。
+      <!-- canvas 只做渲染面（两引擎共用落地点）；指针面挂视口 div——mock 流首帧到达前 canvas
+           未定尺寸（默认 300x150），指针挂 canvas 会漏点击。
            旁观模式 pointerdown 不注入（冒泡到 ctx-screen 开大屏由 CtxPanel 的 openOps 接） -->
       <canvas
         v-if="frameError === null"
@@ -401,7 +499,7 @@ onBeforeUnmount(() => {
     <div class="gui-bar">
       <span class="gui-state" :class="{ 'is-takeover': takeover }">
         <template v-if="interactive">
-          {{ takeover ? (streamActive ? '你已接管——实况 30fps' : '你已接管——agent 动作挂起') : '旁观中（agent 视角）——点击画面接管（接管后移动/键入直送）' }}
+          {{ takeover ? (streamActive ? (guiCodec === 'h264' ? '你已接管——实况 60fps' : '你已接管——实况 30fps') : '你已接管——agent 动作挂起') : '旁观中（agent 视角）——点击画面接管（接管后移动/键入直送）' }}
         </template>
         <template v-else>
           {{ takeover ? '接管中——在操作台大屏操作' : '旁观中（agent 视角）——点击打开操作台大屏' }}

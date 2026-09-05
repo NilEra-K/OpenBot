@@ -1440,6 +1440,7 @@ test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image
       OPENBOT_USER_DATA: userData,
       OPENBOT_SANDBOX: 'mock',
       OPENBOT_COMPUTER: '1', // 工具族注册门（E2E 显式开）
+      OPENBOT_GUI_CODEC: 'mjpeg', // E2E 假流是 JPEG 字节——走 mjpeg 回退引擎（h264 引擎真机验收）
     },
   })
   const page = await app.firstWindow()
@@ -1496,6 +1497,7 @@ test('GUI 实况流（plan-computer-use 二期）：大屏接管开流 → 30fps
       OPENBOT_USER_DATA: userData,
       OPENBOT_SANDBOX: 'mock',
       OPENBOT_COMPUTER: '1',
+      OPENBOT_GUI_CODEC: 'mjpeg', // E2E 假流是 JPEG 字节——走 mjpeg 回退引擎（h264 引擎真机验收）
     },
   })
   const page = await app.firstWindow()

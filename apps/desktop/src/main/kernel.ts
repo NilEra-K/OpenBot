@@ -538,7 +538,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     .register('v1.box.gui.frame', async (payload) => {
       const { boxId } = z.object({ boxId: z.string() }).parse(payload)
       const r = await backend.exec(boxId, {
-        command: ['sh', '-c', "scrot -o /tmp/.openbot-live.png && convert /tmp/.openbot-live.png -resize '960x>' -quality 75 /tmp/.openbot-live.jpg && base64 -w0 /tmp/.openbot-live.jpg"],
+        // 轮询兜底帧全尺寸（2026-09-04 用户反馈「初模糊后清晰」）：原 960 宽 q75 在大屏被
+        // 放大显糊，实况流（1920 原生）起流后落差肉眼可见——提到 1920x> q85 后两帧源无感
+        // 差异；UI 视图帧无 token 纪律（那是 LLM 回喂的约束），1.5s 单帧体量无谓
+        command: ['sh', '-c', "scrot -o /tmp/.openbot-live.png && convert /tmp/.openbot-live.png -resize '1920x>' -quality 85 /tmp/.openbot-live.jpg && base64 -w0 /tmp/.openbot-live.jpg"],
         timeoutMs: 15_000,
         env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' },
       })

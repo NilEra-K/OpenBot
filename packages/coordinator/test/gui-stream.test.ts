@@ -155,7 +155,7 @@ const frameOf = (byte: number, size: number): Uint8Array => {
 const eq = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((v, i) => v === b[i])
 
 describe('GuiStreamService', () => {
-  it('start：openPipe 收到采集 argv + DISPLAY env；WS 会话收到 OPEN（kind:gui + boxId）', async () => {
+  it('start：openPipe 收到采集 argv + DISPLAY env；WS 会话收到 OPEN（kind:gui + boxId + codec）', async () => {
     const { backend, calls } = fakeBackend()
     const service = new GuiStreamService(deps(backend))
     const { wire, streams } = makeReceiver()
@@ -168,7 +168,7 @@ describe('GuiStreamService', () => {
     expect(calls[0]!.spec.env).toEqual({ DISPLAY: '127.0.0.1:2' })
     const opened = [...streams.values()][0]!
     expect(opened.meta.kind).toBe('gui')
-    expect(opened.meta.meta).toEqual({ boxId: box })
+    expect(opened.meta.meta).toEqual({ boxId: box, codec: 'h264' }) // 缺省引擎（三期）
   })
 
   it('start 幂等：同 Box 二次开流不重复起管道', async () => {
@@ -193,9 +193,9 @@ describe('GuiStreamService', () => {
     expect(eq(streams.get(streamId)!.bytes, big)).toBe(true)
   })
 
-  it('晚接入回放：无订阅者时采集照跑（latest 有界）；attach 即补开流 + 立即回放最新帧', async () => {
+  it('晚接入回放（mjpeg）：无订阅者时采集照跑（latest 有界）；attach 即补开流 + 立即回放最新帧', async () => {
     const { backend, lastPipe } = fakeBackend()
-    const service = new GuiStreamService(deps(backend))
+    const service = new GuiStreamService({ ...deps(backend), codec: 'mjpeg', argvOf: () => ['ffmpeg-mock', 'pipe:1'] })
     await service.start('box-1') // 不 attach 任何会话
     const f1 = frameOf(0x01, 10)
     const f2 = frameOf(0x02, 10)
@@ -208,9 +208,9 @@ describe('GuiStreamService', () => {
     expect(eq(opened.bytes, f2)).toBe(true) // 回放的是最新帧，不是历史帧列
   })
 
-  it('背压即降帧：PAUSE 期间不堆积不排旧帧；RESUME 补发最新一帧', async () => {
+  it('背压即降帧（mjpeg）：PAUSE 期间不堆积不排旧帧；RESUME 补发最新一帧', async () => {
     const { backend, lastPipe } = fakeBackend()
-    const service = new GuiStreamService(deps(backend))
+    const service = new GuiStreamService({ ...deps(backend), codec: 'mjpeg', argvOf: () => ['ffmpeg-mock', 'pipe:1'] })
     const { wire, session: receiver, streams } = makeReceiver()
     // 发送侧会话（wire a）自建；onPauseChanged 接回 service = gateway onStreamPause 的等价接线
     const sender = new StreamSession(wire, {
@@ -295,7 +295,58 @@ describe('GuiStreamService', () => {
     expect(r.reason).toContain('常驻管道')
   })
 
-  it('缺省 argv：ffmpeg x11grab mjpeg 管道形状（-video_size 必填防 640x480 缺省）+ pidfile 包装', async () => {
+  it('h264 引擎：纯字节搬运不拆帧不丢帧（PAUSE 期 StreamSession 缓冲；无 latest 回放）', async () => {
+    const { backend, lastPipe } = fakeBackend()
+    const service = new GuiStreamService(deps(backend)) // 缺省 h264
+    const { wire, session: receiver, streams } = makeReceiver()
+    const sender = new StreamSession(wire, {
+      onPauseChanged: (sid, paused) => service.onRemotePause(sender, sid, paused),
+    })
+    service.attach(sender)
+    await service.start('box-1')
+    const streamId = [...streams.keys()][0]!
+
+    // 字节原样到达（不按帧边界重组——Annex B 解析在 renderer）
+    const c1 = Uint8Array.of(0x00, 0x00, 0x00, 0x01, 0x67)
+    const c2 = Uint8Array.of(0x00, 0x00, 0x01, 0x41)
+    lastPipe().emit(c1)
+    lastPipe().emit(c2)
+    expect(streams.get(streamId)!.bytes.length).toBe(c1.length + c2.length)
+
+    // PAUSE 期不丢帧（StreamSession 缓冲），RESUME 后补发（对照 mjpeg 的丢旧帧语义）
+    receiver.sendPause(streamId)
+    const c3 = Uint8Array.of(0x00, 0x00, 0x01, 0x41)
+    lastPipe().emit(c3)
+    expect(streams.get(streamId)!.bytes.length).toBe(c1.length + c2.length) // 未入线（缓冲中）
+    receiver.sendResume(streamId)
+    expect(streams.get(streamId)!.bytes.length).toBe(c1.length + c2.length + c3.length) // 按序补齐
+
+    // 晚接入：不回放（不可丢帧——观看端等下一个 IDR）
+    const late = makeReceiver()
+    service.attach(new StreamSession(late.wire, {}))
+    expect([...late.streams.values()][0]!.bytes.length).toBe(0)
+    expect([...late.streams.values()][0]!.meta.meta).toEqual({ boxId: 'box-1', codec: 'h264' })
+  })
+
+  it('mjpeg 引擎（env 回退路径）：OPEN meta codec=mjpeg + 拆帧 + latest 回放语义保留', async () => {
+    const { backend, calls, lastPipe } = fakeBackend()
+    const service = new GuiStreamService({ ...deps(backend), codec: 'mjpeg', argvOf: () => ['ffmpeg-mock', 'pipe:1'] })
+    const { wire, streams } = makeReceiver()
+    service.attach(new StreamSession(wire, {}))
+    await service.start('box-1')
+    expect(calls[0]!.spec.command).toEqual(['sh', '-c', 'echo $$ > /tmp/.openbot-gui-stream.pid; exec "$@"', 'sh', 'ffmpeg-mock', 'pipe:1'])
+    expect([...streams.values()][0]!.meta.meta).toEqual({ boxId: 'box-1', codec: 'mjpeg' })
+    const f1 = frameOf(0x01, 10)
+    lastPipe().emit(f1)
+    const streamId = [...streams.keys()][0]!
+    expect(streams.get(streamId)!.bytes.length).toBe(f1.length) // mjpeg 拆帧按 SOI/EOI 整帧
+    // 晚接入回放 latest（帧源唯一化——帧内编码可回放）
+    const late = makeReceiver()
+    service.attach(new StreamSession(late.wire, {}))
+    expect([...late.streams.values()][0]!.bytes.length).toBe(f1.length)
+  })
+
+  it('缺省 argv（h264 引擎）：x264 zerolatency/crf18 视觉无损 + yuv420p 硬解兼容 + pidfile 包装', async () => {
     const { backend, calls } = fakeBackend()
     const service = new GuiStreamService({ backend, geometryOf: async () => GEO, display: ':0' })
     await service.start('box-1')
@@ -303,11 +354,33 @@ describe('GuiStreamService', () => {
       'sh', '-c', 'echo $$ > /tmp/.openbot-gui-stream.pid; exec "$@"', 'sh',
       'ffmpeg', '-nostdin',
       '-f', 'x11grab',
-      '-framerate', '30',
+      '-framerate', '60',
+      '-video_size', '1280x800',
+      '-i', ':0',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-tune', 'zerolatency',
+      '-crf', '18',
+      '-g', '30',
+      '-pix_fmt', 'yuv420p',
+      '-f', 'h264',
+      'pipe:1',
+    ])
+  })
+
+  it('缺省 argv（mjpeg 引擎）：q:v 3 近优档 + pidfile 包装（一期回退路径）', async () => {
+    const { backend, calls } = fakeBackend()
+    const service = new GuiStreamService({ backend, geometryOf: async () => GEO, display: ':0', codec: 'mjpeg' })
+    await service.start('box-1')
+    expect(calls[0]!.spec.command).toEqual([
+      'sh', '-c', 'echo $$ > /tmp/.openbot-gui-stream.pid; exec "$@"', 'sh',
+      'ffmpeg', '-nostdin',
+      '-f', 'x11grab',
+      '-framerate', '60',
       '-video_size', '1280x800',
       '-i', ':0',
       '-f', 'mjpeg',
-      '-q:v', '5',
+      '-q:v', '3',
       'pipe:1',
     ])
   })

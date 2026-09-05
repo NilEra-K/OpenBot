@@ -48,7 +48,13 @@ u8 版本(=1) | u8 帧类型 | u32 流 ID | u32 帧序号 | u32 负载长度 | �
 
 - 流 ID 连接内单调分配不复用（0 保留连接级）；OPEN/DATA/END/ABORT 的 seq 从 0 起流内连续，接收方校验；PAUSE/RESUME/ACK 是带外信号不占序。
 - 协议违规（坏帧/序号跳跃/未知流）→ 接收方断连。P2 只回环自测，真实信号源 P3 接入。
-- gui 实况流（plan-computer-use 二期）：OPEN `kind:'gui'`、`meta:{boxId}`；DATA 负载是 mjpeg 原始字节流（ffmpeg `-f mjpeg pipe:1` 经 backend.openPipe 直出，**非 JSON**）——消费方按 SOI/EOI 标记拆帧；>256KB 帧由发送方切块、拆帧器跨块重组。生命周期随 GUI 视图开关（`v1.box.gui.stream.start/stop` 命令面驱动；晚接入会话补开流并立即回放最新帧——无黑屏间隙）。
+- gui 实况流（plan-computer-use 二期）：OPEN `kind:'gui'`、`meta:{boxId, codec:'h264'|'mjpeg'}`——
+  **h264 引擎**（缺省）：DATA 负载是 x264 Annex B 字节流直出（**非 JSON**，AU 边界 renderer 按
+  first_mb_in_slice 解析，WebCodecs 硬解）；帧间依赖不可丢帧——背压走 StreamSession 原生
+  缓冲，晚接入/错位等 IDR（keyint 上限 0.5s）。**mjpeg 引擎**（env 回退）：DATA 负载是独立
+  JPEG 帧流（SOI/EOI 拆帧），背压即降帧（PAUSE 期不入队，RESUME 补发最新帧）。>256KB 帧
+  两引擎均由发送方切块、接收方按流序重组。生命周期随 GUI 视图开关（`v1.box.gui.stream.start/stop`
+  命令面驱动）。
 
 ## wire 校验与错误 code
 
