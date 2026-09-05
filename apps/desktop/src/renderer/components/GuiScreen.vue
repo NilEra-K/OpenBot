@@ -348,13 +348,15 @@ const stopMoveTick = (): void => {
   latestMove = null
 }
 
-/** 滚轮：deltaY 量折算 click 次数（4=上 / 5=下；连击合一次 --repeat 省往返） */
+/** 滚轮：一格 deltaY≈100-120 = 一次 click（4=上 / 5=下）——不做人为放大（曾经的 /40 折算
+ *  让单格滚成 3 连击，xfce 桌面滚轮逐击响应工作区切换，「滞后一下跳过头」的主因）；
+ *  连续快速滚动天然是多事件，触发板小步进（|deltaY|<50）按 0 累积跳过 */
 const onWheel = (e: WheelEvent): void => {
   if (!props.interactive) return
   e.preventDefault()
+  if (Math.abs(e.deltaY) < 50) return // 触控板微步进不产生点击（桌面滚动由连续事件自然补齐）
   const button = e.deltaY < 0 ? 4 : 5
-  const repeat = Math.min(3, Math.max(1, Math.round(Math.abs(e.deltaY) / 40)))
-  sendInput(`xdotool click --repeat ${repeat} ${button}`)
+  sendInput(`xdotool click ${button}`)
   kernel.setGuiTakeover(true)
 }
 
