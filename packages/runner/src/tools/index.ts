@@ -123,15 +123,48 @@ export interface BoxToolDeps {
   transcript?: TranscriptStore
 }
 
-/** exec：Box 内执行命令（Box 内自由，不过闸）。输出增量经 onStream 实况上报（stdout/stderr 通道） */
+/** exec：Box 内执行命令（Box 内自由，不过闸）。输出增量经 onStream 实况上报（stdout/stderr 通道）。
+ *  argsSchema（v0.1.14，与 v0.1.8 computer_* 同族修法）：argv 结构进 wire——弱模型把自然语言
+ *  当 command 传（「用命令行打开新终端」）反复错撞穿工具轮预算 → watchdog zombie 逃逸（用户
+ *  实测报障）。schema + 自纠化错误反馈双管齐下 */
 export function execTool(deps: BoxToolDeps): Tool {
   return {
-    spec: { name: 'exec', description: '在沙箱 Box 内执行命令（安全，无需审批）' },
+    spec: {
+      name: 'exec',
+      // 工具选择指引（2026-09-05 用户问「模型怎么知道走终端还是 GUI」）：工具描述是模型
+      // 每轮都看的信号源——两族互指，不污染全局提示词；computer 不在场时这些字不占上下文
+      description:
+        '在沙箱 Box 内执行命令（安全，无需审批）。命令行能完成的操作（跑命令/装包/读写文件/git）' +
+        '优先用本工具——快且稳；必须看画面或点图形界面的操作才用 computer_* 族（如浏览器登录、GUI 应用）',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'argv 数组：程序名在前、参数在后，每项一个词。例 ["ls","-la","/work"]、["xdotool","key","Return"]。' +
+              '不收自然语言句子（「打开终端」✗）；管道/重定向等 shell 语法用 ["sh","-c","cat a | grep b"] 包裹；' +
+              '多条命令拆成多次调用',
+          },
+          cwd: { type: 'string', description: '工作目录（可选，缺省 /work）' },
+        },
+        required: ['command'],
+        additionalProperties: false,
+      },
+    },
     async execute(ctx, args) {
       const record = asRecord(args)
       const command = record['command']
       if (!Array.isArray(command) || command.length === 0 || !command.every((c) => typeof c === 'string')) {
-        throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, '参数 command 必须是非空字符串数组')
+        // 自纠化反馈（对齐 save_memory 的「收到：xxx」先例）：回显实际传入 + 正确示例 + sh -c 指路
+        // ——模型一轮自纠，不再盲猜重试（重试烧工具轮预算，撞穿即 RUN_TOOL_BUDGET_EXCEEDED）
+        const received = JSON.stringify(command ?? record['command'] ?? args)?.slice(0, 200) ?? '（无）'
+        throw new KernelError(
+          ToolErrorCodes.TOOL_ARGS_INVALID,
+          `参数 command 必须是非空字符串数组（argv 形如 ["ls","-la","/work"]；收到：${received}）。` +
+            `若是整串 shell 命令请改传 ["sh","-c","<原命令>"]；若是意图描述请先想出具体命令再调用`,
+        )
       }
       const boxId = requireBox(ctx)
       const cwd = typeof record['cwd'] === 'string' ? record['cwd'] : undefined
@@ -201,7 +234,19 @@ export function execTool(deps: BoxToolDeps): Tool {
 /** fs_write：Box 内写文件 */
 export function fsWriteTool(deps: BoxToolDeps): Tool {
   return {
-    spec: { name: 'fs_write', description: '在沙箱 Box 内写文件（安全，无需审批）' },
+    spec: {
+      name: 'fs_write',
+      description: '在沙箱 Box 内写文件（安全，无需审批）',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '绝对路径，如 /work/main.py' },
+          content: { type: 'string', description: '完整文件内容（整文件覆盖写）' },
+        },
+        required: ['path', 'content'],
+        additionalProperties: false,
+      },
+    },
     async execute(ctx, args) {
       const record = asRecord(args)
       const path = requireString(record, 'path')
@@ -216,7 +261,16 @@ export function fsWriteTool(deps: BoxToolDeps): Tool {
 /** fs_read：Box 内读文件 */
 export function fsReadTool(deps: BoxToolDeps): Tool {
   return {
-    spec: { name: 'fs_read', description: '在沙箱 Box 内读文件（安全，无需审批）' },
+    spec: {
+      name: 'fs_read',
+      description: '在沙箱 Box 内读文件（安全，无需审批）',
+      argsSchema: {
+        type: 'object',
+        properties: { path: { type: 'string', description: '绝对路径，如 /work/main.py' } },
+        required: ['path'],
+        additionalProperties: false,
+      },
+    },
     async execute(ctx, args) {
       const record = asRecord(args)
       const path = requireString(record, 'path')
@@ -233,7 +287,20 @@ export function fsReadTool(deps: BoxToolDeps): Tool {
 /** send_message：给其他 agent 发 A2A 私聊（priority 可选）。幂等键派生自 originMessageId+toolCallId */
 export function sendMessageTool(messaging: A2aService): Tool {
   return {
-    spec: { name: 'send_message', description: '给另一个 agent 发私聊消息（可设 priority 抢占对方非用户工作）' },
+    spec: {
+      name: 'send_message',
+      description: '给另一个 agent 发私聊消息（可设 priority 抢占对方非用户工作）',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          toAgentId: { type: 'string', description: '收件 agent id（名册中的 id，如 worker1）' },
+          text: { type: 'string', description: '消息正文（完整一句委托或答复）' },
+          priority: { type: 'boolean', description: '抢占对方当前非用户工作（可选，缺省 false）' },
+        },
+        required: ['toAgentId', 'text'],
+        additionalProperties: false,
+      },
+    },
     async execute(ctx, args) {
       const record = asRecord(args)
       const toAgentId = requireString(record, 'toAgentId')
@@ -260,6 +327,19 @@ export function sendBroadcastTool(broadcast: Pick<import('@openbot/messaging').B
     spec: {
       name: 'send_broadcast',
       description: '向多个 agent 广播消息（扇出调度，仅管家可用；toAgentIds 传收件列表）',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          toAgentIds: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '收件 agent id 列表，如 ["worker1","worker2"]',
+          },
+          text: { type: 'string', description: '广播正文' },
+        },
+        required: ['toAgentIds', 'text'],
+        additionalProperties: false,
+      },
     },
     async execute(ctx, args) {
       const record = asRecord(args)
@@ -281,7 +361,16 @@ export function sendBroadcastTool(broadcast: Pick<import('@openbot/messaging').B
 /** host_fetch：宿主网络访问桩——出 Box 操作，必须过闸（gated 包装后注册） */
 export function hostFetchTool(): Tool {
   return {
-    spec: { name: 'host_fetch', description: '从宿主机访问网络（需要用户审批）' },
+    spec: {
+      name: 'host_fetch',
+      description: '从宿主机访问网络（需要用户审批）',
+      argsSchema: {
+        type: 'object',
+        properties: { url: { type: 'string', description: '完整 URL，含协议（https://…）' } },
+        required: ['url'],
+        additionalProperties: false,
+      },
+    },
     async execute(_ctx, args) {
       const record = asRecord(args)
       const url = requireString(record, 'url')
@@ -306,6 +395,15 @@ export function saveMemoryTool(deps: MemoryToolDeps): Tool {
       name: 'save_memory',
       description:
         '保存一条跨会话记忆（重要事实才存：每条一句自然语言，重复保存无害但不鼓励）。kind 三选一：事实/偏好/技能（缺省=事实）',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '记忆正文（一句话）' },
+          kind: { type: 'string', enum: ['事实', '偏好', '技能'], description: '记忆类型（可选，缺省=事实）' },
+        },
+        required: ['text'],
+        additionalProperties: false,
+      },
     },
     async execute(ctx, args) {
       const record = asRecord(args)
@@ -326,6 +424,11 @@ export function recallMemoryTool(deps: MemoryToolDeps): Tool {
     spec: {
       name: 'recall_memory',
       description: '回忆你此前保存的记忆（可带 query 过滤；无记忆时返回空提示）',
+      argsSchema: {
+        type: 'object',
+        properties: { query: { type: 'string', description: '子串过滤（可选，缺省返回全部）' } },
+        additionalProperties: false,
+      },
     },
     async execute(ctx, args) {
       const record = asRecord(args)
@@ -410,7 +513,12 @@ export function computerScreenshotTool(deps: ComputerToolDeps): Tool {
   return {
     spec: {
       name: 'computer_screenshot',
-      description: '截取沙箱桌面全屏（返回图像）。坐标语义：截图分辨率即点击坐标系。初次看屏或核实状态时用。',
+      // 选择指引 + 接管指引（plan Step 4 的「认证/登录场景请用户接管」在此落地）：
+      // 命令行优先的反向指引 + 登录/认证类主动引导用户去 GUI 视图接管（不瞎点密码框）
+      description:
+        '截取沙箱桌面全屏（返回图像）。坐标语义：截图分辨率即点击坐标系。初次看屏或核实状态时用。' +
+        '命令行可完成的操作优先用 exec 工具——本族留给必须看画面/点界面的场景；' +
+        '遇到登录/认证/验证码页面，回复引导用户在 GUI 视图接管手动完成，不要代输凭据',
       argsSchema: { type: 'object', properties: {}, additionalProperties: false },
     },
     async execute(ctx) {

@@ -219,6 +219,28 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 - **ffmpeg 包体**：GUI 栈 apt 增 ~100MB（镜像/发行版体积）——如实记档；
 - Windows 侧无 ffmpeg 依赖（帧在 Box 内编码，宿主只搬运字节）。
 
+### 工具参数面补齐（2026-09-05 用户报障——v0.1.14）
+
+用户实测：agent 操作容器反复出现「传参格式有误，重新正确调用」（模型把自然语言当 command 传，
+如「我用命令行方式打开新终端」）→ 反复错撞穿 8 轮工具预算（RUN_TOOL_BUDGET_EXCEEDED）→
+watchdog zombie 逃逸——与 v0.1.8 computer_click 参数循环同族，但这次是 **exec**：v0.1.8 时
+判定「exec 描述恰好可猜」而跳过 schema，弱模型面前该假设不成立。
+
+- **修法**：全仓 8 个裸描述工具（exec/fs_write/fs_read/send_message/send_broadcast/
+  host_fetch/save_memory/recall_memory）补齐 argsSchema（参数结构进 wire 的 parameters/
+  input_schema——v0.1.8 起两协议 wire 层本就映射，零 wire 改动）；exec 校验错误自纠化
+  （回显收到的东西 + 正确 argv 示例 + `["sh","-c",…]` 指路——对齐 save_memory 的
+  「收到：xxx」先例，模型一轮自纠不再盲猜烧预算）。
+- **预算语义不动**：8 轮是失控循环防护；schema 补齐后错参源头消失，预算压力自然消解。
+  若弱模型仍撞预算，后续可议「错参轮不计预算/独立小预算」——记档不实施。
+- **验证**：单测 411 全绿（+6：schema 全覆盖断言/exec schema 形状/wire 断言/自纠反馈文本
+  ×3/合法 argv 不拦）。
+- **工具选择指引（2026-09-05 用户问「模型怎么知道走终端还是 GUI」）**：工具描述是模型每轮
+  都看的信号源——exec 与 computer_screenshot 描述互指（命令行能完成的优先 exec；必须看画面
+  /点界面才用 computer 族），不污染全局提示词（computer 不在场时这些字不占上下文）；
+  plan Step 4 的「认证/登录场景请用户接管」指引同期落地 computer_screenshot 描述（遇到登录
+  /验证码引导用户 GUI 接管，不代输凭据）。
+
 ### 三期：60fps H.264 + WebCodecs（2026-09-05 用户需求——已实施）
 
 用户需求「60+ FPS、不降画质、更跟手」——mjpeg 帧内编码路线三目标互斥（60fps 编码 CPU 爆 /
