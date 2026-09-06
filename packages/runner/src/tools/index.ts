@@ -44,7 +44,16 @@ export interface ToolContext {
  *  TurnRunner 组装 content parts 回喂多模态模型 */
 export interface ToolResult {
   text: string
-  image?: { base64: string; mime: string }
+  image?: {
+    base64: string
+    mime: string
+    /** 截图坐标空间（缩放后尺寸）——computer 坐标换算的「模型侧」依据；缺席=未缩放（比例 1） */
+    width?: number
+    height?: number
+    /** 真实屏幕尺寸——换算的「注入侧」目标空间 */
+    screenWidth?: number
+    screenHeight?: number
+  }
 }
 
 export interface Tool {
@@ -477,21 +486,63 @@ export interface ComputerToolDeps extends BoxToolDeps {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** 默认截图：scrot 全屏 → convert 缩放 1280 宽 jpg（token 纪律：jpg 比省一个量级） */
-async function captureScreen(backend: BoxToolDeps['backend'], boxId: string): Promise<ToolResult['image']> {
+/** 屏幕几何缓存（per boxId——桌面尺寸会话内不变；2026-09-06 坐标换算引入） */
+const screenGeoCache = new Map<string, { width: number; height: number }>()
+
+const guiDisplay = (): string => process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2'
+
+/** 查询 Box 桌面屏幕几何（xdotool getdisplaygeometry → "W H"）；失败 null（如实，换算跳过） */
+async function screenGeometryOf(backend: BoxToolDeps['backend'], boxId: string): Promise<{ width: number; height: number } | null> {
+  const hit = screenGeoCache.get(boxId)
+  if (hit) return hit
+  try {
+    const r = await backend.exec(boxId, { command: ['xdotool', 'getdisplaygeometry'], timeoutMs: 5_000, env: { DISPLAY: guiDisplay() } })
+    if (r.exitCode !== 0) return null
+    const m = /^(\d+)\s+(\d+)$/.exec(r.stdout.trim())
+    if (m === null) return null
+    const width = Number(m[1])
+    const height = Number(m[2])
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 16 || height < 16) return null
+    const geo = { width, height }
+    screenGeoCache.set(boxId, geo)
+    return geo
+  } catch {
+    return null
+  }
+}
+
+/** 坐标换算比（v0.1.17 根治「视觉模型点不准」）：截图缩到 1280 宽（token 纪律）而屏幕是
+ *  1080p——模型按它看到的 1280×720 图报坐标，注入必须乘 屏幕/截图 比例（1920/1280=1.5），
+ *  否则系统性偏左上 1/3（v0.1.10 屏幕升 1080p 后隐含「截图=屏幕坐标同源」假设破裂，用户实测
+ *  「总是无法正确点击位置」的根因）。屏幕宽 ≤1280 时不缩放（比例 1，一期行为）；
+ *  几何查不到（DISPLAY 未就绪等）null——降级不换算（同现状，不更糟） */
+async function coordScaleOf(backend: BoxToolDeps['backend'], boxId: string): Promise<number | null> {
+  const geo = await screenGeometryOf(backend, boxId)
+  if (geo === null || geo.width <= 1280) return null
+  return geo.width / 1280
+}
+
+/** 默认截图：scrot 全屏 → convert 缩 1280 宽 jpg（token 纪律）；返回截图坐标空间与屏幕
+ *  真实尺寸（回喂文本标注坐标系语义——模型知道自己工作在缩放坐标系） */
+async function captureScreen(backend: BoxToolDeps['backend'], boxId: string): Promise<NonNullable<ToolResult['image']>> {
   const shot = '/tmp/.openbot-shot.jpg'
+  const geo = await screenGeometryOf(backend, boxId).catch(() => null)
   const r = await backend.exec(boxId, {
     command: [
       'sh', '-c',
       `scrot -o /tmp/.openbot-shot.png && convert /tmp/.openbot-shot.png -resize '1280x>' -quality 80 ${shot} && base64 -w0 ${shot}`,
     ],
     timeoutMs: 15_000,
-    env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' },
+    env: { DISPLAY: guiDisplay() },
   })
   if (r.exitCode !== 0) throw new KernelError('COMPUTER_CAPTURE_FAILED', `截图失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
   const b64 = r.stdout.trim()
   if (b64 === '') throw new KernelError('COMPUTER_CAPTURE_FAILED', '截图输出为空（DISPLAY 未就绪或 scrot 不在场）')
-  return { base64: b64, mime: 'image/jpeg' }
+  if (geo === null || geo.width <= 1280) return { base64: b64, mime: 'image/jpeg' }
+  // '1280x>' 缩放规则：仅宽 >1280 时缩，纵横比保持——缩后尺寸纯计算（零额外 exec）
+  const width = 1280
+  const height = Math.round((geo.height * width) / geo.width)
+  return { base64: b64, mime: 'image/jpeg', width, height, screenWidth: geo.width, screenHeight: geo.height }
 }
 
 /** 默认动作：xdotool 经 sh -c（组合键等 shell 语义）；命令由本层构造（非用户输入拼 shell——
@@ -508,7 +559,8 @@ function shQuote(s: string): string {
   return `'${s.replaceAll("'", esc)}'`
 }
 
-/** computer_screenshot：看屏（初见/核实；坐标空间即截图分辨率——模型所见即可点） */
+/** computer_screenshot：看屏（初见/核实）。坐标语义（2026-09-06 换算修复）：截图缩到 1280 宽时
+ *  回喂文本标注两端尺寸——模型按截图坐标给点击位置，注入侧自动换算到真实屏幕 */
 export function computerScreenshotTool(deps: ComputerToolDeps): Tool {
   return {
     spec: {
@@ -516,24 +568,30 @@ export function computerScreenshotTool(deps: ComputerToolDeps): Tool {
       // 选择指引 + 接管指引（plan Step 4 的「认证/登录场景请用户接管」在此落地）：
       // 命令行优先的反向指引 + 登录/认证类主动引导用户去 GUI 视图接管（不瞎点密码框）
       description:
-        '截取沙箱桌面全屏（返回图像）。坐标语义：截图分辨率即点击坐标系。初次看屏或核实状态时用。' +
+        '截取沙箱桌面全屏（返回图像）。坐标语义：按**截图分辨率**给出点击坐标（回喂文本会标注是否缩放，系统自动换算到真实屏幕）。初次看屏或核实状态时用。' +
         '命令行可完成的操作优先用 exec 工具——本族留给必须看画面/点界面的场景；' +
         '遇到登录/认证/验证码页面，回复引导用户在 GUI 视图接管手动完成，不要代输凭据',
       argsSchema: { type: 'object', properties: {}, additionalProperties: false },
     },
     async execute(ctx) {
       const boxId = requireBox(ctx)
-      const image = await (deps.capture?.(boxId) ?? captureScreen(deps.backend, boxId))
-      return { text: '已截图（见图像）', image }
+      const image = (await (deps.capture?.(boxId) ?? captureScreen(deps.backend, boxId)))!
+      const note =
+        image.width !== undefined && image.screenWidth !== undefined
+          ? `截图 ${image.width}×${image.height}（真实屏幕 ${image.screenWidth}×${image.screenHeight}）——点击坐标按截图给出即可，系统自动换算`
+          : '截图 1:1（坐标即屏幕坐标）'
+      return { text: `已截图。${note}`, image }
     },
   }
 }
 
-/** 动作工具工厂：等待接管锁 → xdotool 动作 → 静置 → 附动作后截图（裁定 D） */
+/** 动作工具工厂：等待接管锁 → xdotool 动作（坐标类按 scale 换算到真实屏幕）→ 静置 →
+ *  附动作后截图（裁定 D）。buildScript 第二参 = 坐标换算比（null=不缩放或几何查询失败降级）
+ *  ——只坐标类动作消费它（type/key/scroll 无坐标语义） */
 function computerActionTool(
   deps: ComputerToolDeps,
   spec: ToolSpec,
-  buildScript: (args: Record<string, unknown>) => string,
+  buildScript: (args: Record<string, unknown>, scale: number | null) => string,
 ): Tool {
   return {
     spec,
@@ -542,8 +600,10 @@ function computerActionTool(
       const record = asRecord(args)
       // 接管锁（Step 5）：用户接管中挂起在此——「交还 agent」放行后继续
       await deps.lock?.waitTurn()
+      // 坐标换算（2026-09-06）：截图 1280 宽 / 屏幕 1080p 的 1.5 倍映射在此落地
+      const scale = await coordScaleOf(deps.backend, boxId)
       const act = deps.act ?? ((id, argv) => actXdotool(deps.backend, id, argv.join(' ')))
-      await act(boxId, [buildScript(record)])
+      await act(boxId, [buildScript(record, scale)])
       await sleep(deps.settleMs ?? 500)
       // 动作后截图附回喂（960 宽降一档——多轮循环 token 纪律）
       const image = await (deps.capture?.(boxId) ?? captureScreen(deps.backend, boxId))
@@ -561,11 +621,11 @@ export function computerTools(deps: ComputerToolDeps): Tool[] {
   }
   return [
     computerScreenshotTool(deps),
-    computerActionTool(deps, { name: 'computer_click', description: '点击沙箱桌面坐标 (x, y)——左键单击', argsSchema: { type: 'object', properties: { x: { type: 'number', description: '横坐标（像素，截图分辨率坐标系）' }, y: { type: 'number', description: '纵坐标（像素）' } }, required: ['x', 'y'], additionalProperties: false } }, (a) =>
-      `xdotool mousemove ${num(a['x'])} ${num(a['y'])} click 1`,
+    computerActionTool(deps, { name: 'computer_click', description: '点击沙箱桌面坐标 (x, y)——左键单击', argsSchema: { type: 'object', properties: { x: { type: 'number', description: '横坐标（像素，截图分辨率坐标系）' }, y: { type: 'number', description: '纵坐标（像素）' } }, required: ['x', 'y'], additionalProperties: false } }, (a, scale) =>
+      `xdotool mousemove ${Math.round(num(a['x']) * (scale ?? 1))} ${Math.round(num(a['y']) * (scale ?? 1))} click 1`,
     ),
-    computerActionTool(deps, { name: 'computer_double_click', description: '双击坐标 (x, y)', argsSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'], additionalProperties: false } }, (a) =>
-      `xdotool mousemove ${num(a['x'])} ${num(a['y'])} click --repeat 2 --delay 150 1`,
+    computerActionTool(deps, { name: 'computer_double_click', description: '双击坐标 (x, y)', argsSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'], additionalProperties: false } }, (a, scale) =>
+      `xdotool mousemove ${Math.round(num(a['x']) * (scale ?? 1))} ${Math.round(num(a['y']) * (scale ?? 1))} click --repeat 2 --delay 150 1`,
     ),
     computerActionTool(deps, { name: 'computer_type', description: '在焦点元素键入文本（先 click 定位输入框）', argsSchema: { type: 'object', properties: { text: { type: 'string', description: '要键入的文本' } }, required: ['text'], additionalProperties: false } }, (a) => {
       const text = requireText(a['text'])

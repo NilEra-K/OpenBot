@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { computerTools, ToolRegistry } from '../src/tools/index.js'
-import type { GuiTakeoverLock, ToolContext } from '../src/tools/index.js'
+import type { BoxToolDeps, GuiTakeoverLock, ToolContext } from '../src/tools/index.js'
 
 const ctx = (boxId = 'box-1'): ToolContext => ({
   agentId: 'a1',
@@ -38,7 +38,8 @@ describe('computerTools（替身）', () => {
     })
     const shot = tools.find((t) => t.spec.name === 'computer_screenshot')!
     const r = await shot.execute(ctx(), {})
-    expect(r).toEqual({ text: '已截图（见图像）', image: IMG })
+    expect(r.text).toContain(`已截图。截图 1:1`)
+    expect(r.image).toEqual(IMG)
     expect(lockWaits).toBe(0)
   })
 
@@ -95,5 +96,79 @@ describe('computerTools（替身）', () => {
     await reg.execute(ctx(), { id: 'c1', name: 'computer_click', args: { x: 1, y: 2 } })
     expect(reg.lastImageOf('computer_click')).toEqual(IMG)
     expect(reg.lastImageOf('computer_type')).toBeUndefined()
+  })
+})
+
+describe('computerTools 坐标换算（2026-09-06 根治视觉模型点不准——截图 1280 宽/屏幕 1080p 的 1.5 倍映射）', () => {
+  /** backend 替身：响应 getdisplaygeometry（1920 1080）——换算比的来源 */
+  const geoBackend = (): BoxToolDeps['backend'] =>
+    ({
+      exec: async (_box, spec) => {
+        if (spec.command[1] === 'getdisplaygeometry' || spec.command.includes('getdisplaygeometry')) {
+          return { exitCode: 0, stdout: '1920 1080', stderr: '' }
+        }
+        return { exitCode: 0, stdout: 'mock', stderr: '' }
+      },
+    }) as unknown as BoxToolDeps['backend']
+
+  it('1080p 屏幕：click 坐标按 1.5 倍换算注入（模型按 1280×720 截图报坐标）', async () => {
+    const acts: string[] = []
+    const tools = computerTools({
+      backend: geoBackend(),
+      bus: null as never,
+      capture: async () => ({ base64: 'aW1n', mime: 'image/jpeg', width: 1280, height: 720, screenWidth: 1920, screenHeight: 1080 }),
+      act: async (_id, argv) => acts.push(argv.join(' ')),
+      settleMs: 0,
+    })
+    const click = tools.find((t) => t.spec.name === 'computer_click')!
+    await click.execute(ctx('box-big'), { x: 640, y: 360 })
+    expect(acts[0]).toContain('mousemove 960 540') // 640/720 × 1.5 → 真实屏幕中心
+  })
+
+  it('截屏回喂标注两端尺寸：模型知道自己工作在缩放坐标系', async () => {
+    const tools = computerTools({
+      backend: geoBackend(),
+      bus: null as never,
+      capture: async () => ({ base64: 'aW1n', mime: 'image/jpeg', width: 1280, height: 720, screenWidth: 1920, screenHeight: 1080 }),
+      settleMs: 0,
+    })
+    const shot = tools.find((t) => t.spec.name === 'computer_screenshot')!
+    const r = (await shot.execute(ctx(), {})) as { text: string }
+    expect(r.text).toContain('1280×720')
+    expect(r.text).toContain('1920×1080')
+    expect(r.text).toContain('自动换算')
+  })
+
+  it('屏幕 ≤1280（比例 1）与几何查询失败：均降级不换算（坐标原样注入）', async () => {
+    const small = computerTools({
+      backend: {
+        exec: async (_b, spec) =>
+          spec.command.includes('getdisplaygeometry')
+            ? { exitCode: 0, stdout: '1280 800', stderr: '' }
+            : { exitCode: 0, stdout: 'mock', stderr: '' },
+      } as unknown as BoxToolDeps['backend'],
+      bus: null as never,
+      capture: async () => ({ base64: 'aW1n', mime: 'image/jpeg' }),
+      act: async (_id, argv) => actsSmall.push(argv.join(' ')),
+      settleMs: 0,
+    })
+    const actsSmall: string[] = []
+    const click = small.find((t) => t.spec.name === 'computer_click')!
+    await click.execute(ctx('box-small'), { x: 640, y: 360 })
+    expect(actsSmall[0]).toContain('mousemove 640 360') // ≤1280 不缩放——比例 1
+
+    const actsBroken: string[] = []
+    const broken = computerTools({
+      backend: {
+        exec: async () => ({ exitCode: 1, stdout: '', stderr: 'display not ready' }),
+      } as unknown as BoxToolDeps['backend'],
+      bus: null as never,
+      capture: async () => ({ base64: 'aW1n', mime: 'image/jpeg' }),
+      act: async (_id, argv) => actsBroken.push(argv.join(' ')),
+      settleMs: 0,
+    })
+    const clickBroken = broken.find((t) => t.spec.name === 'computer_click')!
+    await clickBroken.execute(ctx('box-broken'), { x: 640, y: 360 })
+    expect(actsBroken[0]).toContain('mousemove 640 360') // 几何查不到——降级不换算
   })
 })
