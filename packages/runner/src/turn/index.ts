@@ -10,7 +10,7 @@ import type { TranscriptStore } from '@openbot/state'
 import type { A2aRunPayload, GroupTurnPayload, UserChatRunPayload } from '@openbot/messaging'
 import { GROUP_PASS_TOKEN } from '@openbot/messaging'
 import { LlmError } from '@openbot/llm'
-import type { ChatMessage, ChatProvider } from '@openbot/llm'
+import type { ChatMessage, ChatProvider, ToolSpec } from '@openbot/llm'
 import type { RunStreamEvent } from '../stream/index.js'
 import type { ToolContext, ToolRegistry } from '../tools/index.js'
 import { MAX_THINKING_CHARS, truncateForTranscript } from '../tools/index.js'
@@ -38,6 +38,12 @@ export interface TurnRunnerDeps {
   nextMessageId: () => string
   systemPrompt?: string | ((agentId: string) => string)
   maxToolRounds?: number
+  /**
+   * 审批闸门（可选——2026-09-06 预算打穿问用户）：在场时工具轮预算打穿**不再自作主张终止**，
+   * 经闸门发起「预算续期」授权请求（tool='tool_budget'，弹窗/自动批准按装配方实现）——
+   * 批准=预算续期原地继续（上下文零损失）；拒绝=走收尾轮交代后结束。缺席时维持收尾轮直接结束。
+   */
+  gate?: import('../approval/index.js').ApprovalGate
   /**
    * run 实况上报（装配注入，接 WS /stream；不进事件总线）：
    * llm 轮次 open/chunk/end（onText 增量）；exec 流由工具层（BoxToolDeps.onStream）同型上报。
@@ -145,6 +151,8 @@ export class TurnRunner {
       emitStream?.({ ...event, agentId, runId: run.runId })
     }
     let round = 0 // 工具轮计数（预算判据，语义不变）
+    let roundsBudget = maxRounds // 可续期预算（2026-09-06：打穿先问用户，批准=续期原地继续）
+    let budgetRenewals = 0
     let chatRound = 0 // chat 序号（llm 流事件标注，含终答轮）
     for (;;) {
       // 轮间中止检查点：工具已返回但 run 已被取消/抢占时立即终止——不再发起下一轮 llm
@@ -209,11 +217,30 @@ export class TurnRunner {
         return { text }
       }
       round += 1
-      if (round > maxRounds) {
-        throw new KernelError(
-          RunnerErrorCodes.RUN_TOOL_BUDGET_EXCEEDED,
-          `工具轮次超过预算 ${maxRounds}（run ${run.runId}）`,
-        )
+      if (round > roundsBudget) {
+        // 预算打穿：**先问用户**（2026-09-06 用户质疑「为什么不问问用户而是自作主张」）——
+        // 复用审批闸门发起「预算续期」授权（弹窗按装配方：desktop 手动/CLI 自动批准）。
+        // 批准 = 预算续期原地继续（上下文零损失）；拒绝 = 走收尾轮交代后结束。
+        // 无 gate（极简装配）退化为直接收尾轮。等待期间 run 信号中止 → 收尾轮 chat 自然抛中止
+        if (this.#deps.gate !== undefined && !run.signal.aborted) {
+          budgetRenewals += 1
+          const approved = await this.#deps.gate.request({
+            runId: run.runId,
+            agentId,
+            tool: 'tool_budget',
+            reason:
+              `工具轮次已达上限 ${maxRounds}${budgetRenewals > 1 ? `（本次是第 ${budgetRenewals} 次续期）` : ''}，` +
+              `任务尚未完成。批准=继续执行（再给 ${maxRounds} 轮）；拒绝=结束并由 Agent 交代进展`,
+            nonce: `${input.originMessageId}:${run.runId}:budget-${budgetRenewals}`,
+          })
+          if (approved) {
+            roundsBudget += maxRounds // 续期：再给一轮额度（当前轮计入新窗口）
+          } else {
+            await this.#wrapupAndThrow(agentId, input, run, messages, chatRound, maxRounds, emit)
+          }
+        } else {
+          await this.#wrapupAndThrow(agentId, input, run, messages, chatRound, maxRounds, emit)
+        }
       }
       messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: response.toolCalls })
       const boxId = this.#deps.boxOf(agentId)
@@ -241,20 +268,104 @@ export class TurnRunner {
           toolCallId: call.id,
         })
       }
+      if (round === maxRounds) {
+        // 预算预警（软着陆）：这是最后可用轮的工具结果——附提示引导模型下一轮收尾总结，
+        // 而不是被硬掐断。user 角色进 messages（system 中段插入 anthropic 不接受）；
+        // 位置在 assistant/toolCalls 与 tool 结果之后——协议序不破坏
+        messages.push({
+          role: 'user',
+          content: `（系统提示：工具预算已用到最后 1 轮。下一步请只做最必要的一个操作，或直接向用户总结进展与未尽事项。）`,
+        })
+      }
     }
   }
 
-  /** 边界转换：LlmError → 同 code 的 KernelError；未知异常归类 LLM_FAILED */
-  async #chat(agentId: string, messages: ChatMessage[], signal: AbortSignal, onText?: (delta: string) => void) {
+  /** 预算打穿的收尾轮：注入收尾指令、**禁用工具**（tools=[] 进 wire——物理上无法继续调）
+   *  做最后一次 LLM 调用，模型向用户交代「做了什么/卡在哪/如何继续」，终答照常投递；
+   *  然后按 RUN_TOOL_BUDGET_EXCEEDED 结算（诚实：任务未完成）。收尾轮自身失败（如网络断）
+   *  按原预算错误语义抛出 */
+  async #wrapupAndThrow(
+    agentId: string,
+    input: TurnInput,
+    run: ActiveRun,
+    messages: ChatMessage[],
+    chatRound: number,
+    maxRounds: number,
+    emit: (event: Omit<RunStreamEvent, 'agentId' | 'runId'>) => void,
+  ): Promise<never> {
+    const nextChatRound = chatRound + 1
+    messages.push({
+      role: 'user',
+      content:
+        `（系统提示：工具调用预算 ${maxRounds} 轮已用完，用户选择结束任务，不能再执行任何工具。` +
+        `请用一小段话向用户交代：已完成了什么、卡在哪里、建议用户如何继续。不要说抱歉套话，直接说事实。）`,
+    })
+    emit({ type: 'open', stream: 'llm', meta: { round: nextChatRound } })
+    let wrapupText: string
+    try {
+      const wrapup = await this.#chat(
+        agentId,
+        messages,
+        run.signal,
+        (delta) => emit({ type: 'chunk', stream: 'llm', text: delta }),
+        [],
+      )
+      wrapupText = wrapup.text ?? ''
+      emit({ type: 'end', stream: 'llm' })
+    } catch (err) {
+      emit({ type: 'abort', stream: 'llm', reason: err instanceof Error ? err.message : String(err) })
+      throw err
+    }
+    await this.#deps.transcript.append(agentId, 'thinking', {
+      runId: run.runId,
+      round: nextChatRound,
+      text: truncateForTranscript(wrapupText, MAX_THINKING_CHARS),
+      final: false,
+    })
+    await this.#deliverFinal(agentId, input, run, wrapupText)
+    throw new KernelError(
+      RunnerErrorCodes.RUN_TOOL_BUDGET_EXCEEDED,
+      `工具轮次超过预算 ${maxRounds}（run ${run.runId}）——已向用户交代进展`,
+    )
+  }
+
+  /** 边界转换：LlmError → 同 code 的 KernelError；未知异常归类 LLM_FAILED。
+   *  toolSpecs 可选覆盖（缺省全量注册工具；预算收尾轮传 [] ——禁用工具强制文本总结） */
+  async #chat(agentId: string, messages: ChatMessage[], signal: AbortSignal, onText?: (delta: string) => void, toolSpecs?: ToolSpec[]) {
     try {
       return await this.#deps.llmOf(agentId).chat(
-        { messages, tools: this.#deps.tools.specs(), ...(onText ? { onText } : {}) },
+        { messages, tools: toolSpecs ?? this.#deps.tools.specs(), ...(onText ? { onText } : {}) },
         signal,
       )
     } catch (err) {
       if (err instanceof KernelError) throw err
       if (err instanceof LlmError) throw new KernelError(err.code, err.message)
       throw new KernelError(RunnerErrorCodes.LLM_FAILED, err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  /** 终答投递（正常终轮与预算收尾轮共用）：transcript 落档 + 事件出（群/私聊分流同构） */
+  async #deliverFinal(agentId: string, input: TurnInput, run: { runId: string }, text: string): Promise<void> {
+    const messageId = this.#deps.nextMessageId()
+    if (input.session) {
+      // supersede：旧轮终答静默丢弃（收尾轮同判——旧轮不该在被打断后还往群流说话）
+      if (input.session.stale?.()) return
+      await this.#deps.transcript.append(input.session.groupId, 'group-agent', {
+        messageId,
+        from: agentId,
+        text,
+        replyTo: input.originMessageId,
+        runId: run.runId,
+      })
+      input.session.emitFinal(messageId, text, run.runId)
+    } else {
+      await this.#deps.transcript.append(agentId, 'agent', {
+        messageId,
+        text,
+        replyTo: input.originMessageId,
+        runId: run.runId,
+      })
+      this.#deps.bus.emit('v1.message.agent', { messageId, agentId, text, runId: run.runId })
     }
   }
 }

@@ -14,6 +14,7 @@ import {
   hostFetchTool,
   sendMessageTool,
   sendBroadcastTool,
+  StaticApprovalGate,
   ToolRegistry,
   TurnRunner,
 } from '../src/index.js'
@@ -25,6 +26,8 @@ interface HarnessOptions {
   onStream?: (event: RunStreamEvent) => void
   /** mock 后端 exec 行为注入（慢 exec 模拟子进程长跑——中止传导的编排位） */
   exec?: (boxId: string, spec: ExecSpec) => ExecResult | Promise<ExecResult>
+  /** 审批闸门注入（预算打穿问用户——批准续期/拒绝收尾的编排位） */
+  gate?: import('../src/index.js').ApprovalGate
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -115,6 +118,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     nextMessageId: () => `msg-${++msgCounter}`,
     systemPrompt: '你是 OpenBot 测试 agent',
     maxToolRounds: options.maxToolRounds,
+    gate: options.gate,
     onStream: options.onStream,
     // 与 assemble 同构（P5 Step 4 修复）：supersede 旧轮终答写入前拦截
     isGroupTurnStale: (p) => groups.isStale(p),
@@ -258,16 +262,27 @@ describe('TurnRunner chat（工具循环）', () => {
     expect(h.backend.calls.length).toBe(0)
   })
 
-  it('工具轮次预算耗尽：run 以 RUN_TOOL_BUDGET_EXCEEDED 失败', async () => {
+  it('工具轮次预算耗尽：收尾轮强制文本交代（终答投递）+ run 仍 failed/RUN_TOOL_BUDGET_EXCEEDED', async () => {
     const loopStep: MockStep = { toolCalls: [{ id: 'c', name: 'exec', args: { command: ['ls'] } }] }
-    const h = makeHarness({ a1: [loopStep, loopStep, loopStep] }, { maxToolRounds: 2 })
+    // 4 步剧本：前 3 次 chat 全要工具（round 1..3，预算 2 在 round 3 打穿）→ 第 4 次 chat 是收尾轮
+    const h = makeHarness(
+      { a1: [loopStep, loopStep, loopStep, { text: '已列出目录但任务未完成：预算用完了' }] },
+      { maxToolRounds: 2 },
+    )
     const a1 = await h.register('a1')
     await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '循环', nonce: 'n1' })
     await new Promise<void>((resolve) => setTimeout(resolve, 20))
     expect(a1.isIdle).toBe(true)
     const finished = h.events.find((e) => e.type === 'v1.lifecycle.finished')
     expect(finished?.payload).toMatchObject({ state: 'failed', code: 'RUN_TOOL_BUDGET_EXCEEDED' })
-    // 没有终答消息；过程记录保留至预算爆点（轮 3 的 thinking 已写、工具未执行）
+    // 收尾终答进会话（用户拿到解释——2026-09-06 报障的根治）
+    const finalMsg = h.events.find((e) => e.type === 'v1.message.agent')
+    expect(finalMsg?.payload).toMatchObject({ agentId: 'a1', text: '已列出目录但任务未完成：预算用完了' })
+    // 收尾轮禁用工具（tools 空数组进 wire——模型物理上无法继续调工具）
+    const wrapupReq = h.llms.get('a1')!.requests.at(-1)!
+    expect(wrapupReq.tools).toEqual([])
+    expect(JSON.stringify(wrapupReq.messages)).toContain('预算')
+    // transcript：轮 3 的工具未执行（预算检查在执行前）——爆点后追加收尾 thinking + agent 终答
     expect((await h.transcript.readAll('a1')).map((r) => r.kind)).toEqual([
       'user',
       'thinking',
@@ -275,7 +290,91 @@ describe('TurnRunner chat（工具循环）', () => {
       'thinking',
       'exec',
       'thinking',
+      'thinking',
+      'agent',
     ])
+  })
+
+  it('预算预警：最后可用轮的工具结果后注入收尾提示（软着陆——引导模型主动总结）', async () => {
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['ls'] } }] },
+          { text: '只做了一步，直接总结' },
+        ],
+      },
+      { maxToolRounds: 1 },
+    )
+    await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '干活', nonce: 'n2' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    // 第 2 次 chat（工具结果回喂后）应带预警 user 消息——引导模型在第 1 轮预算内收尾
+    const secondReq = h.llms.get('a1')!.requests[1]!
+    expect(secondReq.messages.some((m) => m.role === 'user' && m.content.includes('用到最后 1 轮'))).toBe(true)
+  })
+
+  it('预算打穿先问用户：批准 = 续期原地继续（上下文零损失，工具照常执行）', async () => {
+    const loopStep: MockStep = { toolCalls: [{ id: 'c', name: 'exec', args: { command: ['ls'] } }] }
+    // 3 步工具 + 第 4 步文本终答（预算 2——第 3 轮打穿 → 审批批准续期 → 继续执行 → 4 步终答）
+    const h = makeHarness(
+      { a1: [loopStep, loopStep, loopStep, { text: '续期后完成：目录已全部列出' }] },
+      { maxToolRounds: 2, gate: new StaticApprovalGate(true) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '多列几轮', nonce: 'n3' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    expect(a1.isIdle).toBe(true)
+    // run 成功 + 终答投递（原地继续——不是收尾交代）
+    const finished = h.events.find((e) => e.type === 'v1.lifecycle.finished')
+    expect(finished?.payload).toMatchObject({ state: 'succeeded' })
+    expect(h.events.find((e) => e.type === 'v1.message.agent')?.payload).toMatchObject({
+      text: '续期后完成：目录已全部列出',
+    })
+    // 3 轮工具全部执行（批准前 1 轮 + 续期后 2 轮——上下文零损失的续期语义）
+    expect((await h.transcript.readAll('a1')).filter((r) => r.kind === 'exec')).toHaveLength(3)
+  })
+
+  it('预算打穿先问用户：拒绝 = 收尾轮交代（failed + 终答解释进会话）', async () => {
+    const loopStep: MockStep = { toolCalls: [{ id: 'c', name: 'exec', args: { command: ['ls'] } }] }
+    const h = makeHarness(
+      { a1: [loopStep, loopStep, loopStep, { text: '交代：列了两轮目录，还差统计没做' }] },
+      { maxToolRounds: 2, gate: new StaticApprovalGate(false) },
+    )
+    await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '循环', nonce: 'n4' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    const finished = h.events.find((e) => e.type === 'v1.lifecycle.finished')
+    expect(finished?.payload).toMatchObject({ state: 'failed', code: 'RUN_TOOL_BUDGET_EXCEEDED' })
+    // 拒绝 → 收尾终答照常投递（用户知道卡在哪）
+    expect(h.events.find((e) => e.type === 'v1.message.agent')?.payload).toMatchObject({
+      text: '交代：列了两轮目录，还差统计没做',
+    })
+    // 收尾轮禁用工具（tools=[] 进 wire）
+    const wrapupReq = h.llms.get('a1')!.requests.at(-1)!
+    expect(wrapupReq.tools).toEqual([])
+  })
+
+  it('AutoApprovalGate（CLI 缺省）：预算打穿自动续期继续（总时长 deadline 兜底失控）', async () => {
+    const loopStep: MockStep = { toolCalls: [{ id: 'c', name: 'exec', args: { command: ['ls'] } }] }
+    const h = makeHarness(
+      {
+        a1: [loopStep, loopStep, loopStep, loopStep, { text: '自动续期后完成' }],
+      },
+      {
+        maxToolRounds: 2,
+        gate: new AutoApprovalGate({
+          bus: new EventBus({ now: () => 0 }),
+          ledger: new IdempotencyLedger({ fs: new InMemoryFs(), root: 'data-auto', now: () => 0 }),
+          now: () => 0,
+          nextApprovalId: () => 'appr-auto-1',
+        }),
+      },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '连续干活', nonce: 'n5' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    expect(h.events.find((e) => e.type === 'v1.lifecycle.finished')?.payload).toMatchObject({ state: 'succeeded' })
+    expect((await h.transcript.readAll('a1')).filter((r) => r.kind === 'exec')).toHaveLength(4)
   })
 
   it('exec 进行中取消：后端杀命令、aborted 事实落盘、run 以 aborted/RUN_CANCELLED 结算', async () => {

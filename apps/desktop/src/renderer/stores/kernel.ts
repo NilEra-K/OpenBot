@@ -864,6 +864,13 @@ export const useKernelStore = defineStore('kernel', {
             if (event.payload.code !== undefined) run.code = event.payload.code
             run.updatedAt = event.at
           }
+          // 失败即时透明（2026-09-06 用户建议「错误时让 Agent 回复具体原因」的兜底层）：
+          // 预算耗尽类失败已有收尾终答（模型交代进展）进会话；此处补其余失败类型的可见性
+          // （网络错误等无终答场景——code 至少让用户知道哪类问题）
+          if (event.payload.state === 'failed') {
+            const name = this.roster.find((a) => a.agentId === event.payload.agentId)?.name ?? event.payload.agentId
+            useToastStore().push(`${name} 的执行失败（${event.payload.code ?? '未知原因'}）`, 'danger', 6_000)
+          }
           return
         }
         case 'v1.lifecycle.escaped':

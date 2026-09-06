@@ -272,6 +272,9 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     nextMessageId,
     systemPrompt,
     maxToolRounds: options.maxToolRounds,
+    // 审批闸门（2026-09-06 预算打穿问用户）：复用同一授权通道——desktop 弹窗询问 /
+    // CLI AutoApprovalGate 自动续期（总时长 deadline 兜底失控）
+    gate,
     onStream,
     // 群轮转代际过期判定（P5 Step 4 修复）：supersede 后旧轮终答写入前拦截（GroupService 同判兜底）
     isGroupTurnStale: (p) => groups.isStale(p),
