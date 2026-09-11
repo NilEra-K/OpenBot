@@ -29,6 +29,7 @@ const streamActive = ref(false)
 /** 已画帧数（E2E 断言锚点：data-frames） */
 const streamFrames = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
+let pullChainTimer: ReturnType<typeof setTimeout> | null = null
 
 // ---- 流订阅态（高频非序列化态，普通变量不入 ref） ----
 let guiStreamId: number | null = null
@@ -415,6 +416,25 @@ const pull = (): void => {
     .catch((err: unknown) => (frameError.value = err instanceof Error ? err.message : String(err)))
 }
 
+/** 轮询串行化 + 固定周期（2026-09-06 两轮迭代）：竞态修复要求不并发（上轮 scrot+convert 未
+ *  完成时下轮 exec 会交叠写文件——已由服务端唯一临时文件根治，客户端仍保持串行双保险），
+ *  但「完成后+1.5s」的串行链把帧率从 1/1.5s 腰斩到 1/(耗时+1.5s)（用户实测「不顺手」）——
+ *  改为**从上轮开始计时**的固定周期：到期且上轮已完成 → 立即发；到期未完成 → 等完成那一刻
+ *  发（不额外加间隔）。节奏恢复 1/1.5s，并发仍为零 */
+let lastPullStart = 0
+
+const schedulePull = (): void => {
+  if (pullChainTimer !== null) return
+  const tick = (): void => {
+    pullChainTimer = null
+    lastPullStart = Date.now()
+    pull()
+    schedulePull()
+  }
+  const elapsed = Date.now() - lastPullStart
+  pullChainTimer = setTimeout(tick, Math.max(0, 1_500 - elapsed))
+}
+
 // 接管 ↔ 开流联动（裁定 B）：仅 interactive 实例驱动流（大屏开即实况、关/交还即停回落轮询）。
 // immediate：大屏挂载时接管已在位（store 真值）——立即续流
 watch(
@@ -429,7 +449,8 @@ watch(
 
 onMounted(() => {
   pull()
-  timer = setInterval(pull, 1_500)
+  lastPullStart = Date.now() // 首帧刚发——固定周期从现在起算（防链式立即重发）
+  schedulePull()
   if (props.interactive) window.addEventListener('keydown', onKey)
   unlisten = kernel.onGuiStreamEvent((ev) => {
     if (ev.boxId !== props.boxId) return
@@ -464,6 +485,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (timer !== null) clearInterval(timer)
+  if (pullChainTimer !== null) clearTimeout(pullChainTimer)
   stopMoveTick()
   if (props.interactive) {
     window.removeEventListener('keydown', onKey)

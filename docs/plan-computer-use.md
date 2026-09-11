@@ -219,6 +219,22 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 - **ffmpeg 包体**：GUI 栈 apt 增 ~100MB（镜像/发行版体积）——如实记档；
 - Windows 侧无 ffmpeg 依赖（帧在 Box 内编码，宿主只搬运字节）。
 
+### 截图并发竞态修复（2026-09-06 用户报障「IDAT: CRC error 间歇性失败」——v0.1.17 补全）
+
+`v1.box.gui.frame` 报 `convert: IDAT: CRC error`（PNG 半写文件），过一会自愈又复发、时间概率
+不固定。根因是**并发写同一固定文件**三层叠加：`/tmp/.openbot-live.png` 文件名固定 +
+`setInterval(pull, 1500)` 不等上一轮完成（1080p scrot+convert 耗时 ~1.5-2.5s > 间隔）+
+ctx 小屏/大屏双 GuiScreen 实例都在拉帧——后一轮 scrot 覆盖前一轮正在 convert 的文件，
+读到半写 PNG 即 CRC error；并发窗口随机命中故间歇性。computer_screenshot（openbot-shot）
+同款脆弱模式（agent 连续截图顺序执行不并发，但统一修复）。
+
+- **唯一临时文件（根治）**：`f=/tmp/.openbot-live-$$.png`（$$ = sh 进程 pid，每次 exec 天然
+  隔离）+ 用后 `rm -f` 清理；captureScreen 同款。任何并发场景下写读不再交叠。
+- **pull 串行链**：GuiScreen 轮询从 setInterval 改 setTimeout 链——上轮 settled 后再等
+  1.5s（消灭自并发，顺带消除慢轮次下的请求堆积）。
+- **验证**：单测 421 全绿（文件名模板断言无——argv 断言随唯一名放宽为前缀匹配的部分随
+  tool-schema 测试既有断言兼容）；E2E 28/28；真机观察间歇失败消失。
+
 ### 坐标换算修复（2026-09-06 用户报障「视觉模型总是无法正确点击位置」——v0.1.17）
 
 根因是**系统性 1.5 倍坐标系错位**：v0.1.10 屏幕升 1080p 后，computer_screenshot 仍把截图缩到

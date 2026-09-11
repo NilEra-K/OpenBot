@@ -547,7 +547,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         // 轮询兜底帧全尺寸（2026-09-04 用户反馈「初模糊后清晰」）：原 960 宽 q75 在大屏被
         // 放大显糊，实况流（1920 原生）起流后落差肉眼可见——提到 1920x> q85 后两帧源无感
         // 差异；UI 视图帧无 token 纪律（那是 LLM 回喂的约束），1.5s 单帧体量无谓
-        command: ['sh', '-c', "scrot -o /tmp/.openbot-live.png && convert /tmp/.openbot-live.png -resize '1920x>' -quality 85 /tmp/.openbot-live.jpg && base64 -w0 /tmp/.openbot-live.jpg"],
+      // 唯一临时文件（2026-09-06 用户报障 convert IDAT CRC error 间歇性失败）：固定文件名下
+      // 多路 pull（ctx 小屏/大屏双实例 1.5s 轮询）与慢 convert（1080p ~1.5-2.5s > 间隔）交叠——
+      // 后一轮 scrot 覆盖前一轮正在读的文件 → 半写 PNG。$$ = sh 进程 pid，每次 exec 天然隔离；
+      // 用后清理不留残骸。computer_screenshot（openbot-shot）同款修复
+      command: ['sh', '-c', "f=/tmp/.openbot-live-$$.png; g=/tmp/.openbot-live-$$.jpg; scrot -o \"$f\" && convert \"$f\" -resize '1920x>' -quality 85 \"$g\" && base64 -w0 \"$g\"; rm -f \"$f\" \"$g\""],
         timeoutMs: 15_000,
         env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' },
       })

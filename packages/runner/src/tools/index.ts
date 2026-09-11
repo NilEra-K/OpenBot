@@ -525,12 +525,14 @@ async function coordScaleOf(backend: BoxToolDeps['backend'], boxId: string): Pro
 /** 默认截图：scrot 全屏 → convert 缩 1280 宽 jpg（token 纪律）；返回截图坐标空间与屏幕
  *  真实尺寸（回喂文本标注坐标系语义——模型知道自己工作在缩放坐标系） */
 async function captureScreen(backend: BoxToolDeps['backend'], boxId: string): Promise<NonNullable<ToolResult['image']>> {
-  const shot = '/tmp/.openbot-shot.jpg'
+  // 唯一临时文件（2026-09-06 用户报障 convert IDAT CRC error——固定文件名下并发 scrot 覆盖
+  // 正在读的文件 → 半写 PNG；$$ = sh 进程 pid 每次 exec 天然隔离，用后清理）
   const geo = await screenGeometryOf(backend, boxId).catch(() => null)
   const r = await backend.exec(boxId, {
     command: [
       'sh', '-c',
-      `scrot -o /tmp/.openbot-shot.png && convert /tmp/.openbot-shot.png -resize '1280x>' -quality 80 ${shot} && base64 -w0 ${shot}`,
+      `f=/tmp/.openbot-shot-$$.png; g=/tmp/.openbot-shot-$$.jpg; ` +
+        `scrot -o "$f" && convert "$f" -resize '1280x>' -quality 80 "$g" && base64 -w0 "$g"; rm -f "$f" "$g"`,
     ],
     timeoutMs: 15_000,
     env: { DISPLAY: guiDisplay() },
