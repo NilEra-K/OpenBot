@@ -219,6 +219,21 @@ scrot(容器内) --exec--> 工具回喂 {image base64} --TurnRunner--> tool cont
 - **ffmpeg 包体**：GUI 栈 apt 增 ~100MB（镜像/发行版体积）——如实记档；
 - Windows 侧无 ffmpeg 依赖（帧在 Box 内编码，宿主只搬运字节）。
 
+### 光标可见（2026-09-06 用户问「为什么看不到鼠标光标」——v0.1.17 补全）
+
+用户发现 Agent 点击后界面看不到光标。诊断：**mousemove 真实在动**（X 全局指针），但三个采集
+通道的光标处理各异——scrot 默认**不含光标**（模型看的截图/旁观轮询帧都没有）；ffmpeg x11grab
+`-draw_mouse` 默认开（实况有）。后果不只是观感：模型失去最重要的空间校准反馈（报坐标 → 看光标
+落点 → 校正的闭环断了）。
+
+- **三处修复**：captureScreen 与 gui.frame 的 scrot 加 `--pointer`（光标画进截图——模型与
+  旁观用户都可见）；实况流两引擎 argv 显式 `-draw_mouse 1`（防版本默认差异）。
+- **真机验证**：容器 scrot 1.10 支持 `--pointer`；有/无参数截图中心像素对比确认光标入画；
+  h264 采集 draw_mouse 3s 632KB 零错误。
+- **运维坑链（同日）**：podman machine 重启 → 容器 start 用的是**容器自己的 rootfs**（镜像
+  更新不影响已存在容器）——start.sh 的 lock 清理修复未生效，需 `podman cp` 拷入 + restart
+  （数据保留）；Git Bash 的容器内路径被 MSYS 转换，需 `//usr/...` 双斜杠防转换。
+
 ### 截图并发竞态修复（2026-09-06 用户报障「IDAT: CRC error 间歇性失败」——v0.1.17 补全）
 
 `v1.box.gui.frame` 报 `convert: IDAT: CRC error`（PNG 半写文件），过一会自愈又复发、时间概率

@@ -551,7 +551,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       // 多路 pull（ctx 小屏/大屏双实例 1.5s 轮询）与慢 convert（1080p ~1.5-2.5s > 间隔）交叠——
       // 后一轮 scrot 覆盖前一轮正在读的文件 → 半写 PNG。$$ = sh 进程 pid，每次 exec 天然隔离；
       // 用后清理不留残骸。computer_screenshot（openbot-shot）同款修复
-      command: ['sh', '-c', "f=/tmp/.openbot-live-$$.png; g=/tmp/.openbot-live-$$.jpg; scrot -o \"$f\" && convert \"$f\" -resize '1920x>' -quality 85 \"$g\" && base64 -w0 \"$g\"; rm -f \"$f\" \"$g\""],
+      command: ['sh', '-c', "f=/tmp/.openbot-live-$$.png; g=/tmp/.openbot-live-$$.jpg; scrot --pointer -o \"$f\" && convert \"$f\" -resize '1920x>' -quality 85 \"$g\" && base64 -w0 \"$g\"; rm -f \"$f\" \"$g\""],
         timeoutMs: 15_000,
         env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' },
       })

@@ -532,7 +532,7 @@ async function captureScreen(backend: BoxToolDeps['backend'], boxId: string): Pr
     command: [
       'sh', '-c',
       `f=/tmp/.openbot-shot-$$.png; g=/tmp/.openbot-shot-$$.jpg; ` +
-        `scrot -o "$f" && convert "$f" -resize '1280x>' -quality 80 "$g" && base64 -w0 "$g"; rm -f "$f" "$g"`,
+        `scrot --pointer -o "$f" && convert "$f" -resize '1280x>' -quality 80 "$g" && base64 -w0 "$g"; rm -f "$f" "$g"`,
     ],
     timeoutMs: 15_000,
     env: { DISPLAY: guiDisplay() },

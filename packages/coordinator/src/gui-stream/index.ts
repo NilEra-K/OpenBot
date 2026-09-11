@@ -281,11 +281,13 @@ export class GuiStreamService {
 
 // ---- 缺省实现：ffmpeg x11grab 管道 ----
 
-/** mjpeg 引擎 argv（一期路径，回退/对照保留）：-q:v 3 近优档（桌面文本边缘更锐利） */
+/** mjpeg 引擎 argv（一期路径，回退/对照保留）：-q:v 3 近优档（桌面文本边缘更锐利）；
+ *  -draw_mouse 1 显式声明光标入画（2026-09-06——模型/用户靠光标位置做点击校准） */
 export function ffmpegX11grabArgv(geo: ScreenSize, display: string, fps: number): string[] {
   return [
     'ffmpeg', '-nostdin',
     '-f', 'x11grab',
+    '-draw_mouse', '1',
     '-framerate', String(fps),
     '-video_size', `${geo.width}x${geo.height}`,
     '-i', display,
@@ -304,6 +306,7 @@ export function h264X11grabArgv(geo: ScreenSize, display: string, fps: number): 
   return [
     'ffmpeg', '-nostdin',
     '-f', 'x11grab',
+    '-draw_mouse', '1',
     '-framerate', String(fps),
     '-video_size', `${geo.width}x${geo.height}`,
     '-i', display,

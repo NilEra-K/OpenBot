@@ -7,7 +7,7 @@
  * 按时间序聚合在对话流，右栏 ctx 纯化为一块显示器。
  * 空缺态：管家缺失 / provider 未配置，均给出去向提示（协议纯度：只呈现事实与引导，不发 UI 指令）。
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { GroupEntry } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
@@ -288,10 +288,18 @@ const thinkSummary = (block: LiveStreamBlock): string => {
   return plain.length > 60 ? `${plain.slice(0, 60)}…` : plain
 }
 
-/** 流滚动到底（新消息/切换会话时——硬事件直接贴底） */
+/** 流滚动到底（会话切换/历史加载——双 rAF 保险：等图片/流卡撑高 DOM 后再定一次，否则
+ *  滚底时高度未稳定会停在中间——「开会在顶部」的主因之一） */
 const scrollToBottom = (): void => {
   void nextTick(() => {
-    if (streamEl.value) streamEl.value.scrollTop = streamEl.value.scrollHeight
+    const el = streamEl.value
+    if (el === null) return
+    el.scrollTop = el.scrollHeight
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight
+      }),
+    )
   })
 }
 /** 视口是否已在底部附近（贴底跟随的前置判定：用户上翻查看历史时不打扰） */
@@ -303,14 +311,186 @@ const isNearBottom = (): boolean => {
 const followIfNearBottom = (): void => {
   if (isNearBottom()) scrollToBottom()
 }
-watch(() => kernel.messages.length, scrollToBottom)
-watch(() => ui.activeAgentId, scrollToBottom)
+
+// ---- 滚动定位交互（2026-09-06 用户报障「开会在顶部」）：会话切换/历史批量填充强制定底；
+// 新消息贴底跟随、上翻不打扰但计数浮钮提示；非底部常驻「回到底部」、离顶显示「回顶部」 ----
+const atBottom = ref(true)
+const atTop = ref(true)
+const newCount = ref(0)
+const onStreamScroll = (): void => {
+  const el = streamEl.value
+  if (el === null) return
+  atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  atTop.value = el.scrollTop < 40
+  if (atBottom.value) newCount.value = 0
+  measureRail() // 视口/轮锚随滚动重测（轻量 DOM 读）
+  // 当前阅读位置联动高亮（2026-09-06 用户需求两轮修正后的语义）：
+  // - 贴底 → 最后一轮（「读到了最新」，即使最后轮只有发送未回复）
+  // - 非贴底 → 视口顶部往下**第一个可见的轮锚**（滚到最顶 = 第一个；滚到某轮顶部 = 该轮）
+  const turns = railTurns.value
+  if (turns.length > 0) {
+    if (atBottom.value) {
+      currentTurnIdx.value = turns.length - 1
+    } else {
+      const viewTop = el.scrollTop
+      let idx = -1
+      turns.forEach((t, i) => {
+        if (idx >= 0) return
+        const y = turnAnchors.value.get(t.key)
+        if (y !== undefined && y >= viewTop) idx = i
+      })
+      currentTurnIdx.value = idx
+    }
+  }
+}
+const scrollToTop = (): void => {
+  const el = streamEl.value
+  if (el !== null) el.scrollTop = 0
+}
+
+// ---- 滚动位置映射条 v2（2026-09-06 用户对照 Claude Code 图例重做）：**按轮次等距排布**
+// （用户问+Agent 答为一轮），hover 显示该轮问答摘要（两/三行省略），鼠标邻域标记波浪放大；
+// 点击跳到该轮位置。视口高亮段按轮域映射（与等距标记对齐）。修复：轨道盒子动态测量
+// （初版硬编码高度遮住 stream-head） ----
+interface RailTurn {
+  key: string // 轮首消息 id（跳转锚 data-mid）
+  question: string
+  answer: string
+}
+const railEl = ref<HTMLElement | null>(null)
+const railHoverPx = ref<number | null>(null) // 鼠标在轨道内的 y（px；null=离开）
+/** 轮分组（当前会话可见消息：user 开轮，后续首个 agent 回复为该轮回答） */
+const railTurns = computed<RailTurn[]>(() => {
+  const gid = ui.activeGroupId
+  const agentId = ui.activeAgentId
+  const turns: RailTurn[] = []
+  kernel.messages.forEach((m) => {
+    const isTurnStart = gid !== null ? m.kind === 'group-user' : m.kind === 'user' && m.to === agentId
+    const isReply = gid !== null ? m.kind === 'group-agent' : m.kind === 'agent' && m.from === agentId
+    if (isTurnStart) {
+      turns.push({ key: m.messageId, question: m.text, answer: '' })
+    } else if (isReply && turns.length > 0 && turns[turns.length - 1]!.answer === '') {
+      turns[turns.length - 1]!.answer = m.text
+    }
+  })
+  return turns
+})
+/** 每轮在内容流中的像素锚（data-mid 元素 offsetTop——视口段按轮域映射用） */
+const turnAnchors = ref<Map<string, number>>(new Map())
+const railBox = ref({ top: 52, bottom: 92 })
+const trackHeight = computed(() => Math.max(60, streamEl.value?.clientHeight ?? 300))
+
+const measureRail = (): void => {
+  const el = streamEl.value
+  const col = el?.parentElement ?? null
+  if (el === null || col === null) return
+  railBox.value = { top: el.offsetTop, bottom: Math.max(0, col.clientHeight - el.offsetTop - el.offsetHeight) }
+  // 轮锚像素位（相对 .stream-inner 顶）
+  const inner = el.querySelector('.stream-inner')
+  const map = new Map<string, number>()
+  if (inner !== null) {
+    const innerTop = inner.getBoundingClientRect().top
+    for (const node of Array.from(inner.querySelectorAll('[data-mid]'))) {
+      const mid = (node as HTMLElement).dataset.mid
+      if (mid !== undefined && !map.has(mid)) {
+        map.set(mid, (node as HTMLElement).getBoundingClientRect().top - innerTop)
+      }
+    }
+  }
+  turnAnchors.value = map
+}
+
+/** 标记等距中心 y（px，轨道内）：间距收敛（上限 10px——2026-09-06 用户反馈「间隔还是大」），
+ *  整体在轨道内垂直居中 */
+const markSpacing = computed(() => Math.min(10, Math.max(5, trackHeight.value / Math.max(railTurns.value.length, 1))))
+const markOffset = computed(() => (trackHeight.value - markSpacing.value * Math.max(railTurns.value.length - 1, 0)) / 2)
+const markCenterY = (i: number): number => markOffset.value + i * markSpacing.value
+/** 波浪缩放（高斯邻域）：只作用于**长度**（width × scale），粗细恒定 3px（2026-09-06 用户反馈） */
+const markScale = (i: number): number => {
+  if (railTurns.value.length === 0 || railHoverPx.value === null) return 1
+  const d = railHoverPx.value - markCenterY(i)
+  const sigma = Math.max(16, markSpacing.value / 1.2)
+  return 1 + 1.2 * Math.exp(-(d * d) / (2 * sigma * sigma))
+}
+
+/** hover 命中的轮（最近标记）+ tooltip 位置 */
+const hoveredTurn = computed<RailTurn | null>(() => {
+  const n = railTurns.value.length
+  if (n === 0 || railHoverPx.value === null) return null
+  const idx = Math.min(n - 1, Math.max(0, Math.floor((railHoverPx.value / trackHeight.value) * n)))
+  return railTurns.value[idx] ?? null
+})
+const railTipTop = computed(() => {
+  const n = railTurns.value.length
+  if (n === 0 || railHoverPx.value === null) return 0
+  return Math.min(Math.max(railHoverPx.value - 40, 0), Math.max(0, trackHeight.value - 110))
+})
+
+const railHoverSet = (e: MouseEvent): void => {
+  const rail = railEl.value
+  if (rail === null) return
+  railHoverPx.value = e.clientY - rail.getBoundingClientRect().top
+}
+const railHoverClear = (): void => {
+  railHoverPx.value = null
+}
+/** 当前阅读位置的轮（视口顶部联动——滚动时对应标记高亮，2026-09-06 用户需求） */
+const currentTurnIdx = ref(-1)
+
+/** 点击轮标记：滚到该轮位置（锚居中偏上） */
+const railJumpToTurn = (turn: RailTurn): void => {
+  const el = streamEl.value
+  if (el === null) return
+  const anchor = el.querySelector(`[data-mid="${turn.key}"]`) as HTMLElement | null
+  if (anchor === null) return
+  el.scrollTo({ top: Math.max(0, anchor.offsetTop - el.clientHeight / 3), behavior: 'smooth' })
+}
+
+let lastMsgCount = 0
+watch(
+  () => kernel.messages.length,
+  (len) => {
+    const delta = len - lastMsgCount
+    lastMsgCount = len
+    if (delta >= 3) {
+      // 历史批量填充（懒加载一次性灌入）：强制定底——「开会在顶部」的主因
+      scrollToBottom()
+      newCount.value = 0
+    } else if (delta > 0) {
+      // 普通新消息：贴底跟随；上翻阅读不打扰但计数提示
+      followIfNearBottom()
+      if (!isNearBottom()) newCount.value += delta
+    }
+    void nextTick(measureRail)
+  },
+)
+watch(
+  () => [ui.activeAgentId, ui.activeGroupId],
+  () => {
+    // 会话切换：清计数 + 强制定底（历史异步填充期间由上面的批量分支接续保障）
+    newCount.value = 0
+    lastMsgCount = kernel.messages.length
+    scrollToBottom()
+  },
+)
 // 实况增长（思考增量 / 执行输出 / 流块新增与状态迁移）与进行中单元出现：贴底跟随
 watch(
   () => kernel.streams.map((s) => `${s.key}:${s.stdout.length}:${s.stderr.length}:${s.state}`).join('|'),
   followIfNearBottom,
 )
 watch(() => kernel.runs.length, followIfNearBottom)
+// 流块批量出现（历史加载的伪 exec/思考块投影）：与 messages 批量同判——强制定底
+let lastStreamCount = kernel.streams.length
+watch(
+  () => kernel.streams.length,
+  (len) => {
+    const delta = len - lastStreamCount
+    lastStreamCount = len
+    if (delta >= 3) scrollToBottom()
+    else followIfNearBottom()
+    void nextTick(measureRail)
+  },
+)
 
 // 快速派单落点：命令面板请求聚焦输入框——标志位由本组件消费（watcher 处理在场切换；
 // 从其他视图派单回 console 时本组件重挂载、watcher 错过事件，onMounted 兜底检查）
@@ -326,6 +506,12 @@ watch(
 )
 onMounted(() => {
   if (ui.composerFocus) consumeComposerFocus()
+  // 映射条首算（历史/boot 场景由 messages/streams watch 接续；窗口 resize 重测轨道盒子）
+  void nextTick(measureRail)
+  window.addEventListener('resize', measureRail)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', measureRail)
 })
 
 // 会话历史懒加载：切换会话或连接就绪时拉一次 transcript（内核重启后的持久真相；已覆盖时幂等跳过）。
@@ -610,7 +796,40 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
         </div>
       </div>
 
-      <div ref="streamEl" class="stream">
+      <!-- 滚动位置映射条 v2（2026-09-06 按 Claude Code 图例）：轮次等距排布 + hover 问答摘要
+           （两/三行省略）+ 鼠标邻域波浪放大 + 点击跳转该轮；视口段按轮域映射 -->
+      <div
+        ref="railEl"
+        class="stream-rail"
+        :style="{ top: `${railBox.top}px`, bottom: `${railBox.bottom}px` }"
+        @mousemove="railHoverSet"
+        @mouseleave="railHoverClear"
+      >
+        <button
+          v-for="(t, i) in railTurns"
+          :key="t.key"
+          class="rail-mark"
+          :class="{ 'is-current': i === currentTurnIdx }"
+          :style="{
+            top: `${markCenterY(i) - 1.5}px`,
+            width: `${Math.round(16 * (markScale(i) > 1 ? markScale(i) : i === currentTurnIdx ? 1.35 : 1))}px`,
+            opacity: i === currentTurnIdx || markScale(i) > 1 ? 1 : 0.65,
+          }"
+          @click.stop="railJumpToTurn(t)"
+        />
+        <div
+          v-if="hoveredTurn !== null"
+          class="rail-tip"
+          :style="{ top: `${railTipTop}px` }"
+        >
+          <p v-if="hoveredTurn.question !== ''" class="rail-tip-q">{{ hoveredTurn.question }}</p>
+          <p v-else class="rail-tip-q dim">（无用户提问）</p>
+          <p v-if="hoveredTurn.answer !== ''" class="rail-tip-a">{{ hoveredTurn.answer }}</p>
+          <p v-else class="rail-tip-a dim">（尚未回复）</p>
+        </div>
+      </div>
+
+      <div ref="streamEl" class="stream" @scroll.passive="onStreamScroll">
         <div class="stream-inner">
           <p v-if="kernel.bootError" class="placeholder">内核未连接：{{ kernel.bootError }}</p>
 
@@ -621,7 +840,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <template v-for="unit in groupUnits" :key="unit.key">
               <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
               <div v-else-if="unit.kind === 'sys'" class="sysnote">{{ kernel.messages[unit.msgIndex]!.text }}</div>
-              <div v-else-if="unit.kind === 'user'" class="m user">
+              <div v-else-if="unit.kind === 'user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
                 <div class="avatar neutral">你</div>
                 <div class="m-body">
                   <div class="m-meta">
@@ -662,7 +881,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
 
             <!-- user 消息（右对齐气泡） -->
-            <div v-else-if="unit.kind === 'msg-user'" class="m user">
+            <div v-else-if="unit.kind === 'msg-user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
               <div class="avatar neutral">你</div>
               <div class="m-body">
                 <div class="m-meta">
@@ -783,6 +1002,15 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- 滚动定位浮钮（2026-09-06 用户报障「开会在顶部」）：非底部显示回到底部/
+           新消息计数；离顶显示回顶部。轻量跳转交互（图中滚动条映射重，记档不做） -->
+      <div class="stream-jumps">
+        <button v-if="!atTop" class="jump-btn" title="回到顶部" @click="scrollToTop">↑</button>
+        <button v-if="!atBottom" class="jump-btn primary" title="回到底部" @click="scrollToBottom">
+          {{ newCount > 0 ? `↓ ${newCount} 条新消息` : '↓' }}
+        </button>
       </div>
 
       <div class="composer">
