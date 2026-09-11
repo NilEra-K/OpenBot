@@ -639,13 +639,14 @@ onBeforeUnmount(() => {
 }
 
 .btn-secondary {
-  border-color: rgba(238, 177, 84, 0.4);
-  background: rgba(238, 177, 84, 0.08);
-  color: #eeb154;
+  /* 2026-09-06 用户裁定：全应用去琥珀——gui-bar 恒深底上的次级按钮改中性白字 */
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f0f0f0;
 }
 
 .btn-secondary:hover {
-  background: rgba(238, 177, 84, 0.16);
-  border-color: rgba(238, 177, 84, 0.6);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.6);
 }
 </style>

@@ -6,20 +6,30 @@
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+  /* ctx 边栏显隐动画（2026-09-06 用户反馈「弹出效果生硬」）：grid 列宽过渡——面板平滑
+     滑出/滑入（Chromium 107+ 支持 grid-template-columns 过渡）；列数恒三列（收起=0px） */
+  transition: grid-template-columns 200ms var(--ease);
 }
 
 /* ctx 面板收起（P4 Step 6，原型 .console.no-ctx 同款）：三栏 ⇄ 两栏——stream 拉满、分界线随栏消失；
-   CtxPanel 是独立 scoped 组件，须经 :deep 命中其根元素 */
+   CtxPanel 是独立 scoped 组件，须经 :deep 命中其根元素。
+   2026-09-06 动画化：display:none 改 0px 列 + 面板渐隐；streamcol 分界线同步淡出 */
 .console.no-ctx {
-  grid-template-columns: 246px 1fr;
+  grid-template-columns: 246px 1fr 0px;
 }
 
 .console.no-ctx :deep(.ctx) {
-  display: none;
+  opacity: 0;
+}
+
+.streamcol {
+  /* 布局隔离（2026-09-06 丝滑化）：边栏动画期间本栏 reflow 不外溢全树 */
+  contain: layout;
+  transition: border-color 200ms var(--ease);
 }
 
 .console.no-ctx .streamcol {
-  border-right: none;
+  border-right-color: transparent;
 }
 
 /* ---- 中栏：头 + 流 + 输入 ---- */
@@ -36,7 +46,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 18px;
+  height: 48px; /* 与 ctx-top 严格一致（2026-09-06 用户指出：两侧顶栏应对齐成一条线） */
+  padding: 0 18px;
   border-bottom: 1px solid var(--line);
   flex: none;
 }
@@ -405,7 +416,8 @@
 }
 
 .think.is-live .think-tag {
-  color: var(--accent);
+  /* 2026-09-06 用户裁定：思考标签中性化 */
+  color: var(--ink2);
 }
 
 .think-sum {
@@ -536,9 +548,10 @@
 }
 
 .chip-accent {
-  border-color: rgba(238, 177, 84, 0.35);
-  color: var(--accent);
-  background: var(--accent-weak);
+  /* 2026-09-06 用户裁定：运行中 chip 中性化（accent 琥珀只留给特殊按钮） */
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--bg3);
 }
 
 .chip-success {
@@ -714,7 +727,7 @@
 .jump-btn {
   min-width: 30px;
   height: 28px;
-  padding: 0 10px;
+  padding: 0 8px;
   border: 1px solid var(--line-strong);
   border-radius: 14px;
   background: var(--bg2);
@@ -723,6 +736,10 @@
   cursor: pointer;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
   transition: background 140ms var(--ease), color 140ms var(--ease);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
 
 .jump-btn:hover {
@@ -769,9 +786,10 @@
   opacity: 1;
 }
 
-/* 当前阅读位置的轮（视口顶部联动高亮——2026-09-06 用户需求） */
+/* 当前阅读位置的轮（视口顶部联动高亮——2026-09-06 用户需求）；高亮色中性墨
+   （2026-09-06 用户裁定：accent 琥珀只留给特殊按钮） */
 .stream-rail .rail-mark.is-current {
-  background: var(--accent);
+  background: var(--ink);
   opacity: 1;
 }
 

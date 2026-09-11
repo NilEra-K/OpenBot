@@ -26,6 +26,24 @@ const toast = useToastStore()
 const ui = useUiStore()
 
 const streamEl = ref<HTMLElement | null>(null)
+const streamInnerEl = ref<HTMLElement | null>(null)
+/** ctx 显隐丝滑化（2026-09-06 用户反馈「不太丝滑」）：grid 列宽动画每帧触发会话流文本
+ *  rewrap（长流 DOM 大——每帧布局是卡顿根）。切换时**锁定流内容宽度**（overflow 裁切），
+ *  动画期间文本零 rewrap，结束后解锁一次铺满——布局成本从每帧降到一次 */
+const toggleCtxSmooth = (): void => {
+  const inner = streamInnerEl.value
+  if (inner !== null) {
+    inner.style.width = `${inner.clientWidth}px`
+    inner.style.overflow = 'hidden'
+  }
+  ui.toggleCtx()
+  window.setTimeout(() => {
+    if (inner !== null) {
+      inner.style.width = ''
+      inner.style.overflow = ''
+    }
+  }, 320)
+}
 const draftEl = ref<HTMLInputElement | null>(null)
 
 const activeAgent = computed(
@@ -789,7 +807,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             type="button"
             :aria-pressed="!ui.ctxCollapsed"
             :title="ui.ctxCollapsed ? '展开上下文面板' : '收起上下文面板'"
-            @click="ui.toggleCtx()"
+            @click="toggleCtxSmooth"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="ui.ctxCollapsed ? PANELEXP : PANELCOL"></svg>
           </button>
@@ -830,7 +848,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
       </div>
 
       <div ref="streamEl" class="stream" @scroll.passive="onStreamScroll">
-        <div class="stream-inner">
+        <div ref="streamInnerEl" class="stream-inner">
           <p v-if="kernel.bootError" class="placeholder">内核未连接：{{ kernel.bootError }}</p>
 
           <!-- 群聊流（P5 Step 4）：群消息没有 think/exec 卡（过程归成员各自会话）——
@@ -1007,9 +1025,12 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
       <!-- 滚动定位浮钮（2026-09-06 用户报障「开会在顶部」）：非底部显示回到底部/
            新消息计数；离顶显示回顶部。轻量跳转交互（图中滚动条映射重，记档不做） -->
       <div class="stream-jumps">
-        <button v-if="!atTop" class="jump-btn" title="回到顶部" @click="scrollToTop">↑</button>
+        <button v-if="!atTop" class="jump-btn" title="回到顶部" @click="scrollToTop">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 15l-6-6-6 6" /></svg>
+        </button>
         <button v-if="!atBottom" class="jump-btn primary" title="回到底部" @click="scrollToBottom">
-          {{ newCount > 0 ? `↓ ${newCount} 条新消息` : '↓' }}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+          <span v-if="newCount > 0">{{ newCount }} 条新消息</span>
         </button>
       </div>
 

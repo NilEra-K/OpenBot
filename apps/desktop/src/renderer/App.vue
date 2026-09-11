@@ -282,10 +282,12 @@ onUnmounted(() => kernel.shutdown())
   --ink2: #a6a6a6;
   --ink3: #747474;
   --muted: rgba(234, 234, 234, 0.55);
-  --accent: #eeb154;
-  --accent-strong: #f5c071; /* hover 提亮 */
-  --accent-ink: #2a1e0c;
-  --accent-rgb: 238, 177, 84;
+  /* accent 主色中性化（2026-09-06 用户裁定：全应用去琥珀）——夜间=白，主按钮白底黑字、
+     链接/提及白字；hover 提亮为纯白。warning/danger/success/info 语义色不变 */
+  --accent: #eaeaea;
+  --accent-strong: #ffffff; /* hover 提亮 */
+  --accent-ink: #0c0c0c;
+  --accent-rgb: 234, 234, 234;
   --accent-weak: rgba(var(--accent-rgb), 0.11);
   --warning: #e3ce5c;
   --warning-rgb: 227, 206, 92;
@@ -305,22 +307,24 @@ onUnmounted(() => kernel.shutdown())
 }
 
 /* 日间主题（夜间为默认态；data-theme 由 ui store 依偏好/系统解析挂到 <html>）。
-   同色相、白底对比度加深（正文 ≥4.5:1 目标）；weak 族由 rgb 变量派生自动适配 */
+   2026-09-06 用户裁定：中性白/灰/黑三主色调 + accent 主色中性化（全应用去琥珀）——
+   日间 accent=墨黑（主按钮黑底白字、链接/提及黑字），hover 加深为纯黑。
+   warning/danger/success/info 语义色保持日间加深版本（白底对比度）。weak 族由 rgb 派生 */
 :root[data-theme='light'] {
-  --bg0: #f4f2ed;
-  --bg1: #fbfaf7;
-  --bg2: #efece5;
-  --bg3: #e4e0d6;
-  --line: rgba(28, 25, 18, 0.1);
-  --line-strong: rgba(28, 25, 18, 0.18);
-  --ink: #26231c;
-  --ink2: #5d584c;
-  --ink3: #8f897a;
-  --muted: rgba(38, 35, 28, 0.55);
-  --accent: #9a6d1a;
-  --accent-strong: #7e5a16;
-  --accent-ink: #fff8ec;
-  --accent-rgb: 154, 109, 26;
+  --bg0: #f2f2f2;
+  --bg1: #ffffff;
+  --bg2: #f5f5f5;
+  --bg3: #e8e8e8;
+  --line: rgba(0, 0, 0, 0.1);
+  --line-strong: rgba(0, 0, 0, 0.18);
+  --ink: #1a1a1a;
+  --ink2: #595959;
+  --ink3: #8c8c8c;
+  --muted: rgba(26, 26, 26, 0.55);
+  --accent: #1a1a1a;
+  --accent-strong: #000000;
+  --accent-ink: #ffffff;
+  --accent-rgb: 26, 26, 26;
   --warning: #8a7a1c;
   --warning-rgb: 138, 122, 28;
   --danger: #c2453f;
@@ -561,8 +565,9 @@ body {
 }
 
 .nav-item.active {
-  background: var(--accent-weak);
-  color: var(--accent);
+  /* 2026-09-06 用户裁定：导航激活态中性化（白/灰/黑主色）——accent 琥珀只留给特殊按钮 */
+  background: var(--bg3);
+  color: var(--ink);
 }
 
 .badge {

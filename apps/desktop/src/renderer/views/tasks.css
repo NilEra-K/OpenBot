@@ -82,8 +82,9 @@
   flex: none;
 }
 
+/* 2026-09-06 用户裁定：状态点中性化（accent 琥珀只留给特殊按钮）——运行中=墨色脉冲 */
 .stat-dot.accent {
-  background: var(--accent);
+  background: var(--ink);
   animation: tasks-pulse 1.6s var(--ease) infinite;
 }
 

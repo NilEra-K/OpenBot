@@ -3,9 +3,17 @@
    思考过程在对话流内呈现（ConsoleView 思考块），此处纯化为屏幕。 */
 
 .ctx {
-  overflow-y: auto;
+  overflow: hidden auto; /* x 裁切（收起动画时内容被右缘裁掉不溢出）、y 滚动 */
   padding: 0 16px 16px;
   min-height: 0;
+  min-width: 0;
+  contain: layout;
+  transition: opacity 160ms var(--ease); /* 渐隐先行——视觉重心让给 stream 扩展 */
+}
+
+/* 收起动画期间内容保持布局宽度（不被压缩重排——被右缘裁掉即可） */
+.ctx > * {
+  min-width: 286px; /* 318 列宽 - 32 面板水平 padding */
 }
 
 /* ---- 一块显示器（prototype .ctx-screen / .cs-bar / .cs-term / .cs-hint） ---- */
@@ -140,7 +148,9 @@
 
 .ctx-screen:hover .cs-hint,
 .ctx-screen:focus-visible .cs-hint {
-  color: var(--accent);
+  /* 恒黑底显示器拟真区的 hover 高亮——纯白（2026-09-06 用户反馈：日间 accent 中性化后
+     变墨黑与屏底同色；白色在恒深底上任何主题下都清晰） */
+  color: #ffffff;
 }
 
 .cs-hint svg {
