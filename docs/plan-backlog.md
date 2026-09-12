@@ -173,6 +173,59 @@ ctx 档案「记忆」节呈现真数据。
 
 ---
 
+## ⑥ 镜像一等公民——Agent 控制镜像而非容器后端（远期方向，2026-09-06 用户目标陈述）
+
+> 最终目标：**一个 Agent 控制一个镜像**（完整的可远程操作桌面环境），而非绑定「容器后端」——
+> 为接入云电脑、VMWare 虚机等非容器载体做准备。编号接 ④computer-use（一期已实现）与
+> ⑤Windows Sandbox（挂起）；详细实施记档见 [plan-computer-use.md](plan-computer-use.md)。
+
+### 现状资产（离目标比表面近——「CLI 即接口」的红利）
+
+GUI 能力的真实依赖链是 `Agent → 工具族 → BoxBackend.exec/openPipe → 镜像内执行`——依赖的
+不是「容器」而是三样更基础的东西：**镜像内命令执行通道**（BoxBackend.exec/openPipe 抽象）、
+**镜像内工具集**（xdotool/scrot/ffmpeg + X11）、**能力协商**（caps/探测驱动工具注册）。
+装齐工具集的 VMWare Linux 虚机 / 云 Linux 主机，只需实现 BoxBackend（如走 SSH），
+现有全部 GUI 能力零改动直接工作。
+
+### 两个真耦合点（演进要解开的）
+
+1. **控制协议与 X11 绑死**：xdotool/scrot/ffmpeg x11grab 散布在工具族与 GuiStreamService——
+   云 Windows / VMWare Windows 无 xdotool（控制通道是 RDP/厂商 API/VMware Tools）；
+2. **镜像无一等公民地位**：镜像只是 BoxSpec.image 字符串，无载体类型、无控制协议声明、
+   无凭据模型。
+
+### 三阶段路线（每阶段独立可交付）
+
+- **阶段一：新后端验证抽象（近期，改动小）**——VmwareBackend/SshBackend（SSH 在虚机/云主机
+  内执行）+ 镜像内预装现有工具集；现有 GUI 能力直接复用。验证 exec 通道抽象普适性，
+  也是 VMWare Linux 镜像最快通路。
+- **阶段二：控制协议接口化（核心准备）**——「截图/点击/键入/实况采集」从具体命令提升为
+  **桌面控制适配器接口**（ScreenControl：capture/click/type/stream），按镜像类型提供适配器
+  （X11 适配器 = 现 xdotool/ffmpeg 命令原样迁入；RDP/VMware 适配器随需新增）；
+  工具族与 GuiStreamService 只认接口。**「Agent 控制镜像」的本质落点**。
+- **阶段三：镜像一等公民化（远期）**——镜像注册表：条目 = 载体类型（容器/VM/云桌面）+
+  连接信息 + 控制协议 + 凭据；Agent 绑定镜像条目而非后端实例；云电脑/VMWare/本地容器
+  同一套工具族无差别操作。
+
+### 现在就遵守的准备原则（防未来返工）
+
+1. 新能力一律走 caps/接口，不再散布 xdotool 假设（GuiStreamService 的 argv 构造可注入
+   即为适配器留的口）；
+2. 工具族描述措辞用「沙箱/镜像内」而非「容器」（v0.1.14 schema 已如此）；
+3. 阶段二的接口切分待真正接入 VMWare 时启动——过早抽象反而绑定错误假设。
+
+### composer 工具行交互（2026-09-06 用户五图完善——已做/记档拆分）
+
+对照 Claude Code 图例五图，**已做三项**：审批模式下拉（图 1 映射——manual「变更前确认」/
+auto「完全访问」两项热切换，SwitchableApprovalGate 复用既有闸门语义）；模型档案下拉
+（图 3 映射——providers 清单 + 当前勾选 + 管理模型入口，v1.settings.setDefault 热切换）；
+触发器胶囊样式（灰底 hover + chevron，中性色）。
+**记档不做两项（无真实数据源——不造假纪律）**：上下文容量面板（图 2——需内核 LLM usage
+采集：每轮 prompt/completion tokens、缓存命中率；OpenBot 无此管线，等 usage 采集立项）；
+推理力度下拉（图 4——LLM 层无此参数暴露，接推理力度的 provider 能力出现后再议）。
+
+---
+
 ## 排期
 
 ①（独立一轮）→ ②（独立一轮）→ ③（并入 ① 或 ② 收官尾巴；若单出则半天小轮）。

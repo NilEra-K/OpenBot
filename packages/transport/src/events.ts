@@ -114,6 +114,9 @@ export const EventPayloadSchemas = {
     decision: z.enum(['approved', 'denied']),
     nonce: z.string(),
   }),
+  'v1.approval.mode-changed': z.object({
+    mode: z.enum(['manual', 'auto']),
+  }),
   'v1.system.roster': z.object({
     agentId: z.string(),
     role: z.enum(['steward', 'worker']),

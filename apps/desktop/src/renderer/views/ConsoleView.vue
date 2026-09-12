@@ -341,7 +341,8 @@ const onStreamScroll = (): void => {
   atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   atTop.value = el.scrollTop < 40
   if (atBottom.value) newCount.value = 0
-  measureRail() // 视口/轮锚随滚动重测（轻量 DOM 读）
+  // 轮锚是内容坐标（不随滚动变）——滚动时只用缓存锚值算当前轮，**零 DOM 读**
+  // （初版此处每 scroll 全量 querySelectorAll+强制 layout，滚动性能损耗，2026-09-06 审查修正）
   // 当前阅读位置联动高亮（2026-09-06 用户需求两轮修正后的语义）：
   // - 贴底 → 最后一轮（「读到了最新」，即使最后轮只有发送未回复）
   // - 非贴底 → 视口顶部往下**第一个可见的轮锚**（滚到最顶 = 第一个；滚到某轮顶部 = 该轮）
@@ -444,12 +445,21 @@ const railTipTop = computed(() => {
   return Math.min(Math.max(railHoverPx.value - 40, 0), Math.max(0, trackHeight.value - 110))
 })
 
+/** 波浪 mousemove 节流（rAF 对齐——每帧至多一次响应式更新，高频 move 不重排） */
+let railHoverRaf = 0
 const railHoverSet = (e: MouseEvent): void => {
   const rail = railEl.value
   if (rail === null) return
-  railHoverPx.value = e.clientY - rail.getBoundingClientRect().top
+  const y = e.clientY - rail.getBoundingClientRect().top
+  if (railHoverRaf) cancelAnimationFrame(railHoverRaf)
+  railHoverRaf = requestAnimationFrame(() => {
+    railHoverRaf = 0
+    railHoverPx.value = y
+  })
 }
 const railHoverClear = (): void => {
+  if (railHoverRaf) cancelAnimationFrame(railHoverRaf)
+  railHoverRaf = 0
   railHoverPx.value = null
 }
 /** 当前阅读位置的轮（视口顶部联动——滚动时对应标记高亮，2026-09-06 用户需求） */
@@ -522,14 +532,23 @@ watch(
     if (want) consumeComposerFocus()
   },
 )
+/** 下拉点击外部关闭（审批模式/模型档案两菜单）——命名函数保证卸载时可解绑 */
+const closeMenus = (): void => {
+  modeMenuOpen.value = false
+  modelMenuOpen.value = false
+  plusMenuOpen.value = false
+}
+
 onMounted(() => {
   if (ui.composerFocus) consumeComposerFocus()
+  document.addEventListener('click', closeMenus)
   // 映射条首算（历史/boot 场景由 messages/streams watch 接续；窗口 resize 重测轨道盒子）
   void nextTick(measureRail)
   window.addEventListener('resize', measureRail)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', measureRail)
+  document.removeEventListener('click', closeMenus)
 })
 
 // 会话历史懒加载：切换会话或连接就绪时拉一次 transcript（内核重启后的持久真相；已覆盖时幂等跳过）。
@@ -637,6 +656,46 @@ const onComposerKeydown = (e: KeyboardEvent): void => {
 /** 失焦收起（延迟一拍——给菜单 mousedown 的点击留出路径） */
 const onComposerBlur = (): void => {
   window.setTimeout(closeMention, 120)
+}
+
+// ---- composer 工具行下拉（2026-09-06 图 1/3）：审批模式 + 模型档案 ----
+const modeMenuOpen = ref(false)
+const modelMenuOpen = ref(false)
+const plusMenuOpen = ref(false)
+const modelLabel = computed(() => kernel.llmStatus?.primary ?? kernel.defaultProvider ?? '未配置模型')
+
+const setApprovalMode = (mode: 'manual' | 'auto'): void => {
+  kernel.setApprovalMode(mode).catch((err: unknown) => {
+    useToastStore().push(`审批模式切换失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
+  })
+  modeMenuOpen.value = false
+}
+
+const pickModel = (name: string): void => {
+  void kernel.setDefaultProvider(name).then(() => {
+    void kernel.refreshLlmStatus()
+  })
+  modelMenuOpen.value = false
+}
+
+const goModelSettings = (): void => {
+  modelMenuOpen.value = false
+  ui.switchView('settings')
+}
+
+/** 工具行 @ 按钮：在光标处插入 @ 触发符并打开提及菜单（与手输 @ 同一管线） */
+const insertMentionTrigger = (): void => {
+  const el = draftEl.value
+  // 断连/远端只读会话：composer 不可用——注入也无意义（防脏 draft）
+  if (!el || !kernel.connected || remotePeer !== null) return
+  el.focus()
+  const caret = el.selectionStart ?? el.value.length
+  ui.draft = `${ui.draft.slice(0, caret)}@${ui.draft.slice(caret)}`
+  void nextTick(() => {
+    const pos = caret + 1
+    el.setSelectionRange(pos, pos)
+    onComposerInput() // 与手输 @ 同一触发管线（mention 状态机由此驱动）
+  })
 }
 
 const pickMention = (i: number): void => {
@@ -1054,24 +1113,101 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
               @blur="onComposerBlur"
               @keydown="onComposerKeydown"
             />
-            <!-- 双态：run 进行中且未打字 → 中止（固定位置不受对话流滚动影响；打字中保留发送=steer 能力） -->
-            <button
-              v-if="!activeRun || ui.draft.trim() !== ''"
-              class="cb-send"
-              :disabled="!kernel.connected || ui.draft.trim() === '' || sending"
-              title="发送（Enter）"
-              @click="send"
-            >发送</button>
-            <button
-              v-else
-              class="cb-send cb-stop"
-              :disabled="cancellingRunId === activeRun.runId"
-              :title="cancellingRunId === activeRun.runId ? '正在中止…' : '中止当前 run'"
-              @click="cancelActive"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>
-              {{ cancellingRunId === activeRun.runId ? '正在中止…' : '中止' }}
-            </button>
+            <!-- 工具行（2026-09-06 按 Claude/智谱图例重构）：上输入区 / 下工具行——
+                 左：@提及（真实功能）+ 审批模式真值；右：主力模型真值 + 圆形上箭头发送 -->
+            <div class="cb-tools">
+              <div class="cb-tools-left">
+                <!-- + 弹出菜单（2026-09-06 图例）：添加上下文（@提及——真实管线）。
+                     附件/能力(/)/技能($) 无底层支撑不做（不造假纪律，记档 backlog） -->
+                <div class="cb-dd cb-dd-left">
+                  <button class="cb-tool" title="添加" @click.stop="plusMenuOpen = !plusMenuOpen; modelMenuOpen = false; modeMenuOpen = false">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                  </button>
+                  <div v-if="plusMenuOpen" class="cb-menu" @click.stop>
+                    <button class="cb-menu-item" @click="insertMentionTrigger(); plusMenuOpen = false">
+                      <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
+                      <span class="mt"><span class="ti">使用 @ 添加上下文</span></span>
+                    </button>
+                  </div>
+                </div>
+                <!-- 审批模式下拉（2026-09-06 图 1）：manual=变更前确认 / auto=完全访问（热切换） -->
+                <div class="cb-dd">
+                  <button class="cb-chip" :class="{ open: modeMenuOpen }" @click.stop="modeMenuOpen = !modeMenuOpen; modelMenuOpen = false; plusMenuOpen = false">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
+                    {{ kernel.approvalMode === 'auto' ? '完全访问' : '变更前确认' }}
+                    <svg class="chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+                  </button>
+                  <div v-if="modeMenuOpen" class="cb-menu" @click.stop>
+                    <button class="cb-menu-item" :class="{ on: kernel.approvalMode === 'manual' }" @click="setApprovalMode('manual')">
+                      <svg class="mi" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" /></svg>
+                      <span class="mt">
+                        <span class="ti">变更前确认</span>
+                        <span class="ts">出 Box 操作先问你。</span>
+                      </span>
+                      <svg v-if="kernel.approvalMode === 'manual'" class="mk" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>
+                    </button>
+                    <button class="cb-menu-item" :class="{ on: kernel.approvalMode === 'auto' }" @click="setApprovalMode('auto')">
+                      <svg class="mi" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                      <span class="mt">
+                        <span class="ti">完全访问</span>
+                        <span class="ts">自动批准，减少确认次数。</span>
+                      </span>
+                      <svg v-if="kernel.approvalMode === 'auto'" class="mk" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="cb-tools-right">
+                <!-- 模型下拉（2026-09-06 图 3）：档案清单 + 当前勾选 + 管理模型入口 -->
+                <div class="cb-dd">
+                  <button class="cb-chip" :class="{ open: modelMenuOpen }" @click.stop="modelMenuOpen = !modelMenuOpen; modeMenuOpen = false; plusMenuOpen = false">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18M3 12h18" /></svg>
+                    {{ modelLabel }}
+                    <svg class="chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+                  </button>
+                  <div v-if="modelMenuOpen" class="cb-menu" @click.stop>
+                    <div class="cb-menu-head">模型档案</div>
+                    <button
+                      v-for="p in kernel.providers"
+                      :key="p.name"
+                      class="cb-menu-item"
+                      :class="{ on: kernel.defaultProvider === p.name }"
+                      @click="pickModel(p.name)"
+                    >
+                      <span class="mt">
+                        <span class="ti">{{ p.name }}</span>
+                        <span class="ts">{{ p.model }}</span>
+                      </span>
+                      <svg v-if="kernel.defaultProvider === p.name" class="mk" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>
+                    </button>
+                    <div class="cb-menu-sep" />
+                    <button class="cb-menu-item" @click="goModelSettings">
+                      <span class="mt"><span class="ti">管理模型</span></span>
+                    </button>
+                  </div>
+                </div>
+                <!-- 双态：run 进行中且未打字 → 中止（打字中保留发送=steer 能力） -->
+                <button
+                  v-if="!activeRun || ui.draft.trim() !== ''"
+                  class="cb-send"
+                  :disabled="!kernel.connected || ui.draft.trim() === '' || sending"
+                  title="发送（Enter）"
+                  @click="send"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+                </button>
+                <button
+                  v-else
+                  class="cb-send cb-stop"
+                  :disabled="cancellingRunId === activeRun.runId"
+                  :title="cancellingRunId === activeRun.runId ? '正在中止…' : '中止当前 run'"
+                  @click="cancelActive"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>
+                  {{ cancellingRunId === activeRun.runId ? '正在中止…' : '中止' }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

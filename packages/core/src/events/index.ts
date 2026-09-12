@@ -154,6 +154,12 @@ export interface GuiTakeoverPayload {
   held: boolean
 }
 
+/** 审批模式切换（2026-09-06 预算打穿问用户 + composer 审批模式下拉）：
+ *  manual=变更前确认 / auto=完全访问（SwitchableApprovalGate 热切换） */
+export interface ApprovalModeChangedPayload {
+  mode: 'manual' | 'auto'
+}
+
 /** 远端 mirror 消息到达（P7）：跨用户房间成员的本端对话镜像——呈现侧必须过 DOMPurify；
  *  roomId 用于归属该房间的成员（键空间 remote:<roomId>:<memberId>） */
 export interface MessageRemotePayload {
@@ -203,6 +209,7 @@ export interface KernelEventMap {
   'v1.system.pressure': SystemPressurePayload
   'v1.approval.requested': ApprovalRequestedPayload
   'v1.approval.resolved': ApprovalResolvedPayload
+  'v1.approval.mode-changed': ApprovalModeChangedPayload
   'v1.system.roster': SystemRosterPayload
   'v1.system.remote-members': SystemRemoteMembersPayload
   'v1.box.gui-takeover': GuiTakeoverPayload

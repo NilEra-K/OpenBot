@@ -24,7 +24,7 @@ import type { SandboxPreference, RelaySettings } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
 import type { ResolvedProvider } from '@openbot/state'
-import { ManualApprovalGate } from '@openbot/runner'
+import { AutoApprovalGate, ManualApprovalGate, SwitchableApprovalGate } from '@openbot/runner'
 import {
   DockerBoxBackend,
   MockBoxBackend,
@@ -340,6 +340,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   }
 
   let approvalGate!: ManualApprovalGate
+  /** 可切换审批闸门（2026-09-06 预算打穿问用户 + composer 审批模式下拉）：
+   *  manual=变更前确认（ManualApprovalGate 弹窗）/ auto=完全访问（AutoApprovalGate 自动批准
+   *  账本照记）；composer 下拉热切换（setMode），默认 manual（安全默认） */
+  let switchableGate!: SwitchableApprovalGate
   // 记忆存储（backlog ①）：单一实例供装配（工具+注入）与命令面共用
   const memoryStore = new MemoryStore({ fs, root: dataRoot })
   // 定时自动化（backlog ②）：Scheduler 扫描到点 → 以用户身份发消息（复用 user lane 全管线）。
@@ -388,7 +392,20 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 真实时钟：确定性断言只存在于内核测试与 CLI（plan-p2 风险与地雷）
     approvalGateFactory: (deps) => {
       approvalGate = new ManualApprovalGate(deps)
-      return approvalGate
+      // 可切换包装（manual 内件 = factory 产物；auto 内件共用 bus/ledger——幂等账本同一份）
+      const autoSeq = { n: 0 }
+      switchableGate = new SwitchableApprovalGate({
+        manual: approvalGate,
+        auto: new AutoApprovalGate({
+          bus: deps.bus,
+          ledger: deps.ledger,
+          now: Date.now,
+          nextApprovalId: () => `appr-switch-auto-${++autoSeq.n}`,
+        }),
+        bus: deps.bus,
+        mode: 'manual',
+      })
+      return switchableGate
     },
     systemPrompt: '你是 OpenBot 管家——本机多 agent 社交控制台的默认对话者，用简洁中文回复。',
     // Step 6：宿主磁盘探针（fs.statfs userData 所在卷）+ 压力阈值。
@@ -533,7 +550,14 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }, resolveSchema)
     .register('v1.approval.pending', async () => approvalGate.pending())
     // 审批闸门模式（P4 Step 7 档案事实）：桌面装配固定 Manual——出 Box 需用户批准（如实呈现） */
-    .register('v1.approval.mode', async () => ({ mode: 'manual' as const }))
+    .register('v1.approval.mode', async () => ({ mode: switchableGate.mode }))
+    // 审批模式热切换（2026-09-06 composer 审批模式下拉）：manual=变更前确认 / auto=完全访问。
+    // 内存态（重启回 manual 安全默认——记档）；经 bus 事件广播（composer chip 同步）
+    .register('v1.approval.setMode', async (payload) => {
+      const { mode } = z.object({ mode: z.enum(['manual', 'auto']) }).parse(payload)
+      switchableGate.setMode(mode)
+      return { ok: true, mode }
+    }, z.object({ mode: z.enum(['manual', 'auto']) }))
     // caps 驱动 UI：按钮渲染依据后端能力声明（永不出现「UI 有按钮但后端不支持」）
     .register('v1.boxes.caps', async () => kernel.backend.caps())
     // 沙箱后端：状态呈现 + 偏好写入（重启生效——后端选择是装配期决策，不热切换）

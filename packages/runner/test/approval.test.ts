@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EventBus } from '@openbot/core'
 import { IdempotencyLedger, InMemoryFs } from '@openbot/state'
-import { AutoApprovalGate, gated, hostFetchTool, StaticApprovalGate, ToolRegistry } from '../src/index.js'
+import { AutoApprovalGate, gated, hostFetchTool, StaticApprovalGate, SwitchableApprovalGate, ToolRegistry } from '../src/index.js'
 import type { ToolContext } from '../src/index.js'
 
 function makeGate() {
@@ -111,5 +111,73 @@ describe('gated() 闸门包装', () => {
       tool.execute(ctx({ signal: controller.signal }), { url: 'https://x' }),
     ).rejects.toMatchObject({ code: 'APPROVAL_RUN_ABORTED' })
     expect(requested).toBe(false)
+  })
+})
+
+
+// ---- 可切换闸门（2026-09-06 预算打穿问用户 + composer 审批模式下拉） ----
+describe('SwitchableApprovalGate', () => {
+  /** 内件替身：manual 侧——记录请求、返回指定决定（不测 Manual 本体，测委托与切换） */
+  const stubGate = (verdict: boolean) => {
+    const calls: string[] = []
+    let revoked = 0
+    return {
+      calls,
+      revoked: () => revoked,
+      gate: {
+        async request(req: { nonce: string }): Promise<boolean> {
+          calls.push(req.nonce)
+          return verdict
+        },
+        async revokeRun(_runId: string): Promise<number> {
+          revoked += 1
+          return 1
+        },
+      } as unknown as import('../src/index.js').ApprovalGate,
+    }
+  }
+
+  it('manual 模式：request 委托手动内件（替身收到请求）', async () => {
+    const stub = stubGate(true)
+    const gate = new SwitchableApprovalGate({
+      manual: stub.gate,
+      auto: new AutoApprovalGate({ bus: new EventBus({ now: () => 0 }), ledger: new IdempotencyLedger({ fs: new InMemoryFs(), root: 'd', now: () => 0 }), now: () => 0, nextApprovalId: () => 'a' }),
+      bus: new EventBus({ now: () => 0 }),
+    })
+    expect(gate.mode).toBe('manual')
+    expect(await gate.request({ runId: 'r', agentId: 'a', tool: 't', nonce: 'n1' })).toBe(true)
+    expect(stub.calls).toEqual(['n1'])
+  })
+
+  it('setMode 热切换：切到 auto 后委托自动内件（返回 true——自动批准）', async () => {
+    const stub = stubGate(false) // 手动替身拒绝——若委托错误会收到
+    const bus = new EventBus({ now: () => 0 })
+    const gate = new SwitchableApprovalGate({
+      manual: stub.gate,
+      auto: new AutoApprovalGate({ bus, ledger: new IdempotencyLedger({ fs: new InMemoryFs(), root: 'd', now: () => 0 }), now: () => 0, nextApprovalId: () => 'a' }),
+      bus,
+    })
+    gate.setMode('auto')
+    expect(gate.mode).toBe('auto')
+    expect(await gate.request({ runId: 'r', agentId: 'a', tool: 't', nonce: 'n2' })).toBe(true)
+    expect(stub.calls).toEqual([]) // 手动内件零委托
+  })
+
+  it('revokeRun：两个内件都善后（挂起请求可能散在切换两侧）', async () => {
+    const manualStub = stubGate(true)
+    const revokedAuto = { n: 0 }
+    const autoStub = {
+      async request(): Promise<boolean> {
+        return true
+      },
+      async revokeRun(): Promise<number> {
+        revokedAuto.n += 1
+        return 1
+      },
+    } as unknown as import('../src/index.js').ApprovalGate
+    const gate = new SwitchableApprovalGate({ manual: manualStub.gate, auto: autoStub, bus: new EventBus({ now: () => 0 }) })
+    expect(await gate.revokeRun('r-1')).toBe(2)
+    expect(manualStub.revoked()).toBe(1)
+    expect(revokedAuto.n).toBe(1)
   })
 })

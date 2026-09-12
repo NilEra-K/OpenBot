@@ -543,6 +543,11 @@ export const useKernelStore = defineStore('kernel', {
       await this.call('v1.settings.upsertProvider', input)
       await this.refreshSettings()
     },
+    /** 审批模式热切换（2026-09-06 composer 审批模式下拉）：manual=变更前确认 / auto=完全访问 */
+    async setApprovalMode(mode: 'manual' | 'auto'): Promise<void> {
+      await this.call('v1.approval.setMode', { mode })
+      this.approvalMode = mode
+    },
     async setDefaultProvider(name: string): Promise<void> {
       await this.call('v1.settings.setDefault', { name })
       await this.refreshSettings()

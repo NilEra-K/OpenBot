@@ -262,3 +262,57 @@ export function approvalDenied(request: ApprovalRequest): KernelError {
     `出 Box 操作未获批准：${request.tool}（run ${request.runId}）`,
   )
 }
+
+// ---- 可切换闸门（2026-09-06 预算打穿问用户 + composer 审批模式热切换） ----
+
+export type ApprovalMode = 'manual' | 'auto'
+
+export interface SwitchableApprovalGateDeps {
+  /** 手动内件（变更前确认——弹窗等用户决议，如 ManualApprovalGate） */
+  manual: ApprovalGate
+  /** 自动内件（完全访问——自动批准账本照记，如 AutoApprovalGate） */
+  auto: ApprovalGate
+  bus: EventBus
+}
+
+/**
+ * 可切换闸门：request 按**当前模式**委托给内件（manual=变更前确认 / auto=完全访问）。
+ * 热切换由 composer 的审批模式下拉驱动（setMode）；幂等账本在内件各自持有（Auto 内建、
+ * Manual 由装配注入同一 ledger）——切换不丢已决议记录。
+ * revokeRun：两个内件都善后（挂起请求可能散在两侧——切换前发起的挂在旧内件，幂等）。
+ * auto 模式下 TurnRunner 的工具预算询问自动获批续期（「完全访问=减少确认次数」的语义自洽）。
+ */
+export class SwitchableApprovalGate implements ApprovalGate {
+  #mode: ApprovalMode
+  readonly #manual: ApprovalGate
+  readonly #auto: ApprovalGate
+  readonly #bus: EventBus
+
+  constructor(deps: SwitchableApprovalGateDeps & { mode?: ApprovalMode }) {
+    this.#manual = deps.manual
+    this.#auto = deps.auto
+    this.#bus = deps.bus
+    this.#mode = deps.mode ?? 'manual'
+  }
+
+  get mode(): ApprovalMode {
+    return this.#mode
+  }
+
+  setMode(mode: ApprovalMode): void {
+    this.#mode = mode
+    this.#bus.emit('v1.approval.mode-changed', { mode })
+  }
+
+  async request(request: ApprovalRequest): Promise<boolean> {
+    const inner = this.#mode === 'auto' ? this.#auto : this.#manual
+    return inner.request(request)
+  }
+
+  async revokeRun(runId: string): Promise<number> {
+    let n = 0
+    if (this.#manual.revokeRun) n += await this.#manual.revokeRun(runId)
+    if (this.#auto.revokeRun) n += await this.#auto.revokeRun(runId)
+    return n
+  }
+}
