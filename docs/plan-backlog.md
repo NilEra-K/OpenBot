@@ -178,6 +178,11 @@ ctx 档案「记忆」节呈现真数据。
 > 最终目标：**一个 Agent 控制一个镜像**（完整的可远程操作桌面环境），而非绑定「容器后端」——
 > 为接入云电脑、VMWare 虚机等非容器载体做准备。编号接 ④computer-use（一期已实现）与
 > ⑤Windows Sandbox（挂起）；详细实施记档见 [plan-computer-use.md](plan-computer-use.md)。
+> **2026-09-12 立项规划**：完整功能清单与分轮实施计划见
+> [plan-image-firstclass.md](plan-image-firstclass.md)（P8-1 SSH 后端 → P8-2 ScreenControl
+> 接口化 → P8-3/4 镜像注册表与 Agent 绑定 → P8-5 按需）。
+> **阶段一（P8-1 SshBoxBackend）已实施**（2026-09-12，版本 0.1.22）——七后端矩阵齐，
+> 真机链路待设备验收，实施记档见 plan-image-firstclass P8-1 节。
 
 ### 现状资产（离目标比表面近——「CLI 即接口」的红利）
 

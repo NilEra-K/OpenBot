@@ -20,6 +20,16 @@
 
 .console.no-ctx :deep(.ctx) {
   opacity: 0;
+  /* visibility 兜底（2026-09-12 E2E 首训抓到 v0.1.21 起的潜在回归）：0 宽 + 全透明仍可被
+     键盘聚焦/辅助技术命中，Playwright toBeHidden 也不认 opacity——过渡到 opacity 收尾再藏，
+     滑出动画手感不变；展开侧 visibility 立即恢复（0s 0s），滑入不被 visibility 卡帧 */
+  visibility: hidden;
+  transition: opacity 200ms var(--ease), visibility 0s 200ms;
+}
+
+.console :deep(.ctx) {
+  visibility: visible;
+  transition: opacity 200ms var(--ease), visibility 0s 0s;
 }
 
 .streamcol {

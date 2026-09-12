@@ -6,7 +6,7 @@
 import { isSpawnFailure } from '../procexec/index.js'
 import type { ProcRunner } from '../procexec/index.js'
 
-export type SandboxBackendId = 'mock' | 'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'
+export type SandboxBackendId = 'mock' | 'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm' | 'ssh'
 
 export interface BackendProbe {
   id: SandboxBackendId
@@ -149,15 +149,62 @@ export const probeUtm = (run: ProcRunner): Promise<BackendProbe> =>
 
 export const MOCK_PROBE: BackendProbe = { id: 'mock', available: true }
 
+/** SSH 载体连接事实（probeSsh 连通性验证；纯函数不读 env——装配方从 OPENBOT_SSH_* 读取传入） */
+export interface SshProbeOptions {
+  host?: string
+  port?: number
+  user?: string
+  keyPath?: string
+}
+
+/**
+ * SSH（plan-image-firstclass P8-1）：两级探测——
+ * 1) CLI 在场：ssh -V（版本号打印在 stderr、exit 0——只看退出码）；
+ * 2) 主机连通（配置了 host 时）：BatchMode + ConnectTimeout=5 试连 `true`——CLI 在但主机
+ *    不可达/密钥被拒是最常见不可用态（docker info 同哲学）。未配置 host 时只验 CLI 在场
+ *    （主机连通性归 create/镜像 test 呈现；装配侧 sshReady 门禁防 auto/显式偏好误选）。
+ *    三平台皆可能装 OpenSSH 客户端——不按平台裁剪。
+ */
+export const probeSsh = async (run: ProcRunner, opts: SshProbeOptions = {}): Promise<BackendProbe> => {
+  const cli = await probeCli('ssh', ['ssh', '-V'], run)
+  if (!cli.available) return cli
+  if (opts.host === undefined || opts.host === '') return cli
+  try {
+    const argv = [
+      'ssh',
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      '-o',
+      'ConnectTimeout=5',
+    ]
+    if (opts.port !== undefined && opts.port !== 22) argv.push('-p', String(opts.port))
+    if (opts.keyPath !== undefined && opts.keyPath !== '') argv.push('-i', opts.keyPath)
+    argv.push(opts.user !== undefined && opts.user !== '' ? `${opts.user}@${opts.host}` : opts.host, 'true')
+    const r = await run({ command: argv, timeoutMs: 15_000 })
+    if (r.exitCode === 0) return { id: 'ssh', available: true }
+    const detail = (r.stderr || r.stdout).trim().slice(0, 160)
+    return { id: 'ssh', available: false, reason: `SSH 试连失败（exit ${r.exitCode}）：${detail}` }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    return { id: 'ssh', available: false, reason }
+  }
+}
+
 /**
  * 全量探测（设置页与装配共用）；mock 恒可用（CI 确定性地基）。
  * platform 注入平台序（P6 Step 5——纯函数不 import os，装配方传 process.platform）：
  * win 只探 wsl、linux 只探 nspawn、mac 只探 utm——异平台 CLI 必然不在，跑了也是噪音；
- * docker/podman 三平台皆可能在场照探。缺省不裁剪（向后兼容）。
+ * docker/podman/ssh 三平台皆可能在场照探。缺省不裁剪（向后兼容）。
  * 并行探测（各自独立 spawn；最坏 15s 超时不串行叠加）。
  */
-export const probeAll = async (run: ProcRunner, platform?: string): Promise<BackendProbe[]> => {
-  const rest: Array<Promise<BackendProbe>> = [probeDocker(run), probePodman(run)]
+export const probeAll = async (
+  run: ProcRunner,
+  platform?: string,
+  ssh?: SshProbeOptions,
+): Promise<BackendProbe[]> => {
+  const rest: Array<Promise<BackendProbe>> = [probeDocker(run), probePodman(run), probeSsh(run, ssh)]
   if (platform === undefined || platform === 'win32') rest.push(probeWsl(run))
   if (platform === undefined || platform === 'linux') rest.push(probeNspawn(run))
   if (platform === undefined || platform === 'darwin') rest.push(probeUtm(run))

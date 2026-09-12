@@ -129,3 +129,30 @@ describe('spawnPipeProcess', () => {
     proc.kill()
   }, 10_000)
 })
+
+describe('runProcess input 泵送（P8-1 SSH fsWrite 地基）', () => {
+  it('stdin 写入后 end（EOF 语义——大数据走 stdin 不进 argv）', async () => {
+    const { runProcess } = await import('../src/procexec/index.js')
+    const r = await runProcess({
+      command: [
+        node, '-e',
+        "let n=0; process.stdin.on('data', (d) => { n += d.length }); process.stdin.on('end', () => { console.log('got:' + n) })",
+      ],
+      input: 'x'.repeat(100_000),
+      timeoutMs: 10_000,
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout.trim()).toBe('got:100000')
+  })
+
+  it('input + 子进程不读 stdin：EPIPE 被吞、退出码照常结算', async () => {
+    const { runProcess } = await import('../src/procexec/index.js')
+    const r = await runProcess({
+      command: [node, '-e', "console.log('bye')"],
+      input: 'ignored-data',
+      timeoutMs: 10_000,
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout.trim()).toBe('bye')
+  })
+})

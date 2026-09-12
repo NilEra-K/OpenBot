@@ -30,6 +30,7 @@ import {
   MockBoxBackend,
   NspawnBoxBackend,
   PodmanBoxBackend,
+  SshBoxBackend,
   UtmBoxBackend,
   WslBoxBackend,
   probeAll,
@@ -144,7 +145,7 @@ const resolveSchema = z.object({
   nonce: z.string().min(1),
   decision: z.enum(['approved', 'denied']),
 })
-const sandboxPrefSchema = z.enum(['auto', 'mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm'])
+const sandboxPrefSchema = z.enum(['auto', 'mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm', 'ssh'])
 const sandboxSetSchema = z.object({ preference: sandboxPrefSchema })
 const relayEntrySchema = z.object({
   enabled: z.boolean(),
@@ -295,10 +296,27 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const podmanImage = process.env.OPENBOT_PODMAN_IMAGE ?? 'ubuntu:24.04'
   // UTM 模板 VM 名（P6 Step 4：UTM 是模板克隆模型，无 rootfs 导入——模板在 UTM GUI 预建）
   const utmTemplate = process.env.OPENBOT_UTM_TEMPLATE ?? 'openbot-template'
+  // SSH 载体连接事实（plan-image-firstclass P8-1，裁定 B env 接入）：host 缺席时探测只验
+  // CLI 在场，sshReady=false 防 auto/显式偏好误选（chooseBackend 如实回退 mock 带原因）
+  const sshHost = process.env.OPENBOT_SSH_HOST ?? ''
+  const sshPortRaw = Number(process.env.OPENBOT_SSH_PORT)
+  const sshPort = Number.isFinite(sshPortRaw) && sshPortRaw > 0 ? sshPortRaw : 22
+  const sshUser = process.env.OPENBOT_SSH_USER
+  const sshKeyPath = process.env.OPENBOT_SSH_KEY
+  const sshOpts =
+    sshHost !== ''
+      ? {
+          host: sshHost,
+          port: sshPort,
+          ...(sshUser !== undefined && sshUser !== '' ? { user: sshUser } : {}),
+          ...(sshKeyPath !== undefined && sshKeyPath !== '' ? { keyPath: sshKeyPath } : {}),
+        }
+      : undefined
   // 平台化探测与择优序（P6 Step 5）：win 只探 wsl、linux 只探 nspawn、mac 只探 utm——
-  // 异平台 CLI 必然不在，跑了也是噪音；auto 序随之（win wsl 主力/linux nspawn 优先/mac utm 优先）
+  // 异平台 CLI 必然不在，跑了也是噪音；auto 序随之（win wsl 主力/linux nspawn 优先/mac utm 优先）；
+  // ssh 三平台皆可能在场照探（P8-1），且永不在 auto 序内——远端机器是显式 opt-in
   const platform = process.platform
-  const probes = await probeAll(runProcess, platform)
+  const probes = await probeAll(runProcess, platform, sshOpts)
   const platformOrder: Record<string, Array<'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'>> = {
     win32: ['wsl', 'docker', 'podman'],
     linux: ['nspawn', 'docker', 'podman'],
@@ -307,8 +325,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const chosen = chooseBackend(preference, probes, {
     wslRootfs: rootfsReady,
     nspawnRootfs: nspawnRootfsReady,
-    // nspawn/utm 随 P6 Step 3/4 兑现——六后端矩阵齐（CLI 语义单测锁死，真机链路记未验收）
-    implemented: ['mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm'],
+    sshReady: sshHost !== '',
+    // nspawn/utm 随 P6 Step 3/4 兑现、ssh 随 plan-image-firstclass P8-1 兑现——CLI 语义单测
+    // 锁死，真机链路经 OPENBOT_TEST_SSH 门控套件验收
+    implemented: ['mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm', 'ssh'],
     order: platformOrder[platform] ?? ['wsl', 'docker', 'podman'],
   })
   const mockPipe = mockGuiPipe()
@@ -328,7 +348,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
               })
             : chosen.backendId === 'utm'
               ? new UtmBoxBackend({ template: utmTemplate, now: Date.now })
-              : new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
+              : chosen.backendId === 'ssh'
+                ? new SshBoxBackend({
+                    host: sshOpts!.host,
+                    port: sshOpts!.port,
+                    ...(sshOpts!.user !== undefined ? { user: sshOpts!.user } : {}),
+                    ...(sshOpts!.keyPath !== undefined ? { keyPath: sshOpts!.keyPath } : {}),
+                    workdir: '/work',
+                    now: Date.now,
+                  })
+                : new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
   // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
   const sandboxStatus: SandboxStatus = {
     preference,

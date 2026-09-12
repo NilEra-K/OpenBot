@@ -1,22 +1,24 @@
 # 平台与沙箱矩阵
 
 v1 做 **WSL2 + Docker + Podman + mock** 四个后端（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；
-Docker/Podman 双壳 2026-08-26 裁定随 P5 兑现）；**nspawn/UTM 随 P6 进（2026-09-01 兑现——六后端矩阵齐）**：
+Docker/Podman 双壳 2026-08-26 裁定随 P5 兑现）；**nspawn/UTM 随 P6 进（2026-09-01 兑现）**：
 Linux（systemd-nspawn）与 macOS（UTM）为 CLI 底座 + 脚本化单测 + 探测呈现，真机链路未验收（P6 裁定 B——真机只验版本行为漂移）。
+**SSH 主机随 plan-image-firstclass P8-1 进（2026-09-12 兑现——七后端矩阵齐）**：机器即 Box 的首个非容器载体，
+「镜像一等公民」阶段一（[plan-image-firstclass.md](plan-image-firstclass.md)）。
 Windows Sandbox 降级为 Pro 用户可选（P4 后视需求）。
 接口按 caps 设计，永不按「最强后端都能做什么」设计（ARCHITECTURE.md §6）。
 
 ## 后端能力矩阵
 
-| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (P6) | UTM (P6) | mock |
-|---|---|---|---|---|---|---|---|
-| 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓（/var/lib/machines） | ✓（VM 注册） | 假装 ✓ |
-| 快照 | --export 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓（export-tar） | ✓（clone/delete 链——载体是 VM 克隆非 tar） | ✓ |
-| 资源上限 | 全局 .wslconfig，无法按 Box 限制 | ✓ 严格 | ✓ cgroups v2（rootless 可用） | 粗粒度 | ✓（systemctl set-property 真落 cgroup） | ✗（utmctl 无配置入口——caps 如实） | 假装 ✓ |
-| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 中（rootless 无 daemon） | 强 | 中 | 强（VM 级） | —— |
-| 无人值守 | ✓ | ✓ | ✓（podman machine） | ✗ 无法 headless | 部分（写操作需 root/polkit） | 部分（exec 依赖 guest agent——模板预装） | ✓ |
-| 交互终端 | ✓（Box 内 script PTY） | ✓ | ✓ | ✗ | 设计支持（machinectl shell 自带转发；宿主侧 PTY 边界真机待验） | ✗（utmctl attach 未实现——源码 TODO） | ✗ |
-| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业收费） | 免费开源；Windows 经 podman machine | 仅 Pro/Enterprise（Home 没有） | Linux（systemd 自带零安装） | macOS（UTM app + GUI 会话） | 全平台 |
+| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (P6) | UTM (P6) | SSH 主机 (P8-1) | mock |
+|---|---|---|---|---|---|---|---|---|
+| 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓（/var/lib/machines） | ✓（VM 注册） | ✓（用户资产——attach 语义） | 假装 ✓ |
+| 快照 | --export 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓（export-tar） | ✓（clone/delete 链——载体是 VM 克隆非 tar） | ✗（vmrun 链随 P8-5） | ✓ |
+| 资源上限 | 全局 .wslconfig，无法按 Box 限制 | ✓ 严格 | ✓ cgroups v2（rootless 可用） | 粗粒度 | ✓（systemctl set-property 真落 cgroup） | ✗（utmctl 无配置入口——caps 如实） | ✗（远端资源归用户/云厂商） | 假装 ✓ |
+| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 中（rootless 无 daemon） | 强 | 中 | 强（VM 级） | 强（整机载体） | —— |
+| 无人值守 | ✓ | ✓ | ✓（podman machine） | ✗ 无法 headless | 部分（写操作需 root/polkit） | 部分（exec 依赖 guest agent——模板预装） | ✓（密钥免密 + BatchMode） | ✓ |
+| 交互终端 | ✓（Box 内 script PTY） | ✓ | ✓ | ✗ | 设计支持（machinectl shell 自带转发；宿主侧 PTY 边界真机待验） | ✗（utmctl attach 未实现——源码 TODO） | ✓（ssh -tt 真 PTY） | ✗ |
+| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业收费） | 免费开源；Windows 经 podman machine | 仅 Pro/Enterprise（Home 没有） | Linux（systemd 自带零安装） | macOS（UTM app + GUI 会话） | 全平台（OpenSSH 客户端；显式偏好 opt-in） | 全平台 |
 
 ## 已知地雷（实现时对照）
 
@@ -71,3 +73,31 @@ Windows Sandbox 降级为 Pro 用户可选（P4 后视需求）。
   子命令）；restore = delete 原名 + clone 回原名；stop 已停机会报事件错误——先 `utmctl status`
   查后动（幂等）；`utmctl list` 列格式 `UUID(36) status(pad8) name(可含空格)`——parseUtmList
   纯函数锁死
+
+## SSH 主机（P8-1——VMWare Linux 虚机 / 云 Linux 主机；真机链路经 OPENBOT_TEST_SSH 门控套件）
+
+- **接入是 env 接入 + 显式偏好 opt-in**：`OPENBOT_SSH_HOST/PORT/USER/KEY`（KEY=私钥路径）+
+  偏好设 `ssh`（设置页「SSH 主机」或 env `OPENBOT_SANDBOX=ssh`）；**auto 择优序永不含 ssh**——
+  远端机器不是本地沙箱，误选等于把 agent 的重活丢到用户资产上；主机未配置时 chooseBackend
+  按 `sshReady=false` 如实回退 mock 带指引
+- **密钥免密是无人值守前提（裁定 D key-only）**：`BatchMode=yes` 下密码/口令提示一律快速失败
+  （Permission denied 如实回传，不悬挂等输入）；带口令的私钥不受支持——ssh-agent 解锁记档后续
+- **argv → 远端命令串是单一构造点**（`buildRemoteScript`）：POSIX 单引号全元素转义（消灭词切分
+  与 glob——与容器 exec 的 argv 直传语义对齐）+ env `K='V'` 前缀注入（**SSH SendEnv 受服务端
+  AcceptEnv 限制，不可依赖**）；远端串只含单引号不含双引号（Windows ssh.exe 对嵌入双引号的
+  argv 再切分有历史怪癖）；远端登录 shell 需 POSIX（bash/zsh/sh；fish 不支持 `VAR=v cmd` 前缀）
+- **超时/中止杀的是本地 ssh 进程**：连接断开时 sshd 回收会话内进程（短命令天然收口）；
+  常驻采集（ffmpeg/注入 sh）的孤儿补刀走 pidfile 模式（坑⑯ 的 SSH 版，GuiStreamService 既有
+  exec 通道完成）——真机套件含「杀后 kill -0 gone」断言
+- **每次 exec 新连接**（LAN ~100-300ms 握手）：GUI 输入已由常驻 `sh -s` 通道解（数 ms）；
+  exec 工具循环的慢感用 ssh ControlMaster 多路复用缓解——**记档可选项**，实测痛了再开
+- **openPipe 显式 `-T` 禁 PTY**：PTY 的 \r\n 翻转会毁 jpeg 帧（二进制纯净与容器路径同款纪律）；
+  **openShell 用 `ssh -tt`**：远端 sshd 分配真 PTY，stty 注入尺寸后 exec bash 接管会话
+- **fsWrite 走 stdin 泵送**（procexec `input`）：base64 只进 stdin 不进 argv——绕 Windows 32K
+  命令行上限；远端 `base64 -d > path` 读到 EOF 落盘（单次往返零分块）
+- **GUI 工具集预置**：`tools/provision-gui.sh`（与容器模板 Dockerfile 共用同一份包清单与桌面
+  会话启动——镜像内工具集单一真相源）；虚机上 `bash provision-gui.sh` 一键装栈 + 启动
+  Xvfb+xfce 会话；OpenBot 侧另需 `OPENBOT_GUI_DISPLAY=:0`（远端虚拟显示地址，:2 是 WSLg 缺省）
+- 探测两级：`ssh -V`（CLI 在场；版本号打印在 stderr、exit 0）+ 配置了 host 时 BatchMode 试连
+  （5s ConnectTimeout，主机不可达/密钥被拒是最常见不可用态——docker info 同哲学）；
+  Windows 的 OpenSSH 客户端是可选功能（设置页探测项缺席时按指引一条命令安装）

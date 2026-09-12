@@ -24,6 +24,10 @@ export interface ProcSpec {
   timeoutMs?: number
   /** 输出解码；默认 'utf8'。wsl.exe 元信息用 'utf16le' */
   encoding?: 'utf8' | 'utf16le'
+  /** stdin 泵送内容（可选）：写入后立即 end（EOF 语义——远端 `base64 -d > f` 依赖）；
+   *  缺席 stdio ignore。大数据走 stdin 不进 argv（子进程提前退出的 EPIPE 只影响输入，
+   *  事实照常结算——真实退出码/输出不受影响） */
+  input?: string
   /** 流式回调；聚合结果仍完整返回（流是实况，聚合是事实） */
   onChunk?: (chunk: ProcChunk) => void
   /** 外部中止（run 取消/抢占传导）：触发即 kill 子进程，结果置 aborted（与超时正交） */
@@ -54,7 +58,11 @@ const runProcess: ProcRunner = (spec) =>
     const file = spec.command[0]
     if (file === undefined) throw new Error('procexec: command 不能为空')
     const args = spec.command.slice(1)
-    const options: SpawnOptions = { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+    const options: SpawnOptions = {
+      windowsHide: true,
+      // stdin：input 在场 = 'pipe'（写入后 end——EOF 语义）；缺席维持 ignore
+      stdio: [spec.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    }
     if (spec.cwd !== undefined) options.cwd = spec.cwd
     if (spec.env !== undefined) options.env = { ...process.env, ...spec.env }
     let child: ReturnType<typeof spawn>
@@ -65,6 +73,11 @@ const runProcess: ProcRunner = (spec) =>
       e.name = 'ProcSpawnError'
       reject(e)
       return
+    }
+    // stdin 泵送（fsWrite 等大数据通道）：end 内含写入（Node 内部缓冲——一次性 end 可接受）
+    if (spec.input !== undefined) {
+      child.stdin?.on('error', () => {}) // EPIPE 防护：子进程提前退出时输入失败不算事实失败
+      child.stdin?.end(spec.input, 'utf8')
     }
 
     // WHATWG TextDecoder 标签是 'utf-16le'（带连字符）；对外 API 名保持 'utf16le'（Node 习惯）

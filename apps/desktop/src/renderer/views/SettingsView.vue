@@ -304,6 +304,7 @@ const PREF_OPTIONS: PrefOption[] = [
   { value: 'utm', label: 'UTM', note: '虚拟机即 Box（macOS；从预建模板克隆，需 guest agent）' },
   { value: 'docker', label: 'Docker', note: '容器即 Box（需 Docker Desktop 运行）' },
   { value: 'podman', label: 'Podman', note: '容器即 Box（需 podman machine 运行）' },
+  { value: 'ssh', label: 'SSH 主机', note: '机器即 Box（VMWare/云主机——env OPENBOT_SSH_HOST 等接入，显式偏好 opt-in）' },
   { value: 'mock', label: '模拟', note: '命令返回模拟输出（测试用）' },
 ]
 
@@ -315,6 +316,7 @@ const BACKEND_LABELS: Record<string, string> = {
   podman: 'Podman',
   nspawn: 'systemd-nspawn',
   utm: 'UTM',
+  ssh: 'SSH 主机',
 }
 
 /**

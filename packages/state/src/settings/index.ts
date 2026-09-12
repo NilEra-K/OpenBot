@@ -31,8 +31,9 @@ export interface StoredProviderProfile {
 }
 
 /** 沙箱后端偏好：auto = 按平台序择优（win: wsl→docker→podman / linux: nspawn→docker→podman /
- *  mac: utm→docker→podman，P6 Step 5），不可用如实回退 */
-export type SandboxPreference = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'
+ *  mac: utm→docker→podman，P6 Step 5），不可用如实回退；ssh 永不在 auto 序内（远端机器是
+ *  显式 opt-in——plan-image-firstclass P8-1） */
+export type SandboxPreference = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm' | 'ssh'
 
 /** 跨用户房间接入（P7）：mirror 一期——本端对话镜像外流 + 远端 turn-request 受控进入。
  *  enabled 且 url/roomId/inviteCode 非空才装配（装配期决策，改动重启生效——与沙箱偏好同语义） */

@@ -187,7 +187,7 @@ export interface LlmStatus {
   fallback: string | null
 }
 
-export type SandboxPref = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman'
+export type SandboxPref = 'auto' | 'mock' | 'wsl' | 'docker' | 'podman' | 'ssh'
 
 /** 沙箱后端探测项（v1.sandbox.status 返回） */
 export interface SandboxProbe {

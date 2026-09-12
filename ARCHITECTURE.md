@@ -256,17 +256,19 @@ P7 做 relay 时这就是线上协议，不二次发明。
 
 ### 后端矩阵（诚实版）
 
-| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (Linux·P6 已实现) | UTM (macOS·P6 已实现) | mock |
-|---|---|---|---|---|---|---|---|
-| 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓（/var/lib/machines） | ✓（VM 注册） | 假装 ✓ |
-| 快照 | `--export` 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓（export-tar） | ✓（clone/delete 链——载体是 VM 克隆） | ✓ |
-| 资源上限 | **全局 .wslconfig，无法按 Box 限制**；所有 Box 共享一个 vmmem | ✓ 严格 | ✓ cgroups v2（rootless 可用） | 粗粒度 | ✓（set-property 真落 cgroup） | ✗（utmctl 无配置入口——如实） | 假装 ✓ |
-| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 中（rootless 无 daemon） | 强 | 中 | 强（VM 级） | —— |
-| 无人值守 | ✓ | ✓ | ✓（podman machine） | ✗ 无法 headless | 部分（写操作需 root/polkit） | 部分（exec 依赖 guest agent） | ✓ |
-| 交互终端（PTY） | ✓ Box 内 `script` 真 PTY | ✓ 容器内 script PTY | ✓ 容器内 script PTY | —— | 设计支持（宿主侧 PTY 边界真机待验） | ✗（utmctl attach 未实现） | ✓ 回显假终端 |
-| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业要付费授权） | 免费开源；Windows 经 podman machine（**自身占一个 WSL2 发行版**） | **仅 Pro/Enterprise，Home 版没有**（作者本机即 Home） | Linux（systemd 自带） | macOS（UTM app + GUI 会话） | 全平台 |
+| 能力 | WSL2 | Docker | Podman | Windows Sandbox | nspawn (Linux·P6 已实现) | UTM (macOS·P6 已实现) | SSH 主机（P8-1 已实现） | mock |
+|---|---|---|---|---|---|---|---|---|
+| 持久化 | ✓ | 需卷挂载 | 需卷挂载 | ✗ 关闭即焚 | ✓（/var/lib/machines） | ✓（VM 注册） | ✓（用户资产——create=attach / teardown=断开，绝不销毁远端） | 假装 ✓ |
+| 快照 | `--export` 整盘打包，GB 级、慢 | 镜像分层 | 镜像分层（commit） | ✗ | ✓（export-tar） | ✓（clone/delete 链——载体是 VM 克隆） | ✗（vmrun 快照链随 P8-5 组合后端） | ✓ |
+| 资源上限 | **全局 .wslconfig，无法按 Box 限制**；所有 Box 共享一个 vmmem | ✓ 严格 | ✓ cgroups v2（rootless 可用） | 粗粒度 | ✓（set-property 真落 cgroup） | ✗（utmctl 无配置入口——如实） | ✗（远端机器资源归用户/云厂商） | 假装 ✓ |
+| 隔离强度 | 弱（/mnt/c 直通、9P 慢） | 中 | 中（rootless 无 daemon） | 强 | 中 | 强（VM 级） | 强（载体是整机 VM/云主机） | —— |
+| 无人值守 | ✓ | ✓ | ✓（podman machine） | ✗ 无法 headless | 部分（写操作需 root/polkit） | 部分（exec 依赖 guest agent） | ✓（密钥免密 + BatchMode） | ✓ |
+| 交互终端（PTY） | ✓ Box 内 `script` 真 PTY | ✓ 容器内 script PTY | ✓ 容器内 script PTY | —— | 设计支持（宿主侧 PTY 边界真机待验） | ✗（utmctl attach 未实现） | ✓（`ssh -tt` 远端 sshd 分配真 PTY） | ✓ 回显假终端 |
+| 可用性 | Win10/11 全版本 | 需 Docker Desktop（企业要付费授权） | 免费开源；Windows 经 podman machine（**自身占一个 WSL2 发行版**） | **仅 Pro/Enterprise，Home 版没有**（作者本机即 Home） | Linux（systemd 自带） | macOS（UTM app + GUI 会话） | 全平台（OpenSSH 客户端；**显式偏好 opt-in——auto 序永不含 ssh**，远端机器不是本地沙箱） | 全平台 |
 
-**结论写死在架构里**：六后端矩阵齐——WSL2 + Docker + Podman + **nspawn + UTM** + mock（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；docker/podman CLI 同构共用 OCI 容器底座；nspawn/utm 随 P6 兑现——CLI 底座 + 脚本化单测 + 探测呈现，真机链路如实记未验收）；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P5 后视需求）。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
+**结论写死在架构里**：七后端矩阵齐——WSL2 + Docker + Podman + **nspawn + UTM** + **SSH 主机**（plan-image-firstclass P8-1，机器即 Box 的首个非容器载体）+ mock（Podman 提前进 v1：2026-08-19 用户裁定，消解 Docker Desktop 授权地雷；docker/podman CLI 同构共用 OCI 容器底座；nspawn/utm 随 P6 兑现——CLI 底座 + 脚本化单测 + 探测呈现，真机链路如实记未验收；SSH 载体是「镜像一等公民」阶段一的验证轮——`exec` 通道抽象普适性的实证）；Windows Sandbox 降级为「Pro 用户可选的强隔离后端」（P5 后视需求）。接口按 caps 设计，永远不按「最强后端都能做什么」设计。
+
+**attach 语义（SSH 载体，2026-09-12 裁定 C）**：远端机器是用户资产——`create` = 连通验证 + 记账（附工作目录初始化），`teardown` = 断开记账，**绝不触碰远端**；同一后端实例对应一台机器（单一 boxId，多 agent 复用）。这一语义是「镜像一等公民」（plan-image-firstclass 阶段三）的载体生命周期基调：OpenBot 只做「接入-操控-断开」。
 
 ### 接口草图
 

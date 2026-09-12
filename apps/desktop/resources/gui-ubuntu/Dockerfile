@@ -2,10 +2,14 @@
 # 目标：VMWare 式可接管桌面——Xvfb 虚拟显示 + xfce4 完整桌面（面板/桌面图标/应用菜单/窗口管理）
 # + xdotool（输入注入）/ scrot（截图）工具对。agent 与用户共用同一条 xdotool/scrot 通路（CLI 即接口）。
 #
-# 构建（podman 为例；docker 同）：
-#   podman build -t openbot-gui:24.04 -f Dockerfile .
+# 包清单与桌面会话启动共用 tools/provision-gui.sh（plan-image-firstclass P8-1 B1：
+# 镜像内工具集单一真相源——SSH/VM 载体与容器同源）。
+#
+# 构建（构建上下文是 tools/ 目录——provision-gui.sh 经 COPY 进镜像；仓库根执行，podman/docker 同）：
+#   podman build -t openbot-gui:24.04 -f apps/desktop/resources/gui-ubuntu/Dockerfile tools
 # 运行不是手动做的——desktop 装配把该镜像作为 Box 创建：
 #   OPENBOT_SANDBOX=podman OPENBOT_PODMAN_IMAGE=openbot-gui:24.04 OPENBOT_COMPUTER=1 OPENBOT_GUI_DISPLAY=:0
+# SSH/VM 载体不用本镜像——在远端机器跑 tools/provision-gui.sh（见脚本头注）。
 
 FROM ubuntu:24.04
 
@@ -14,27 +18,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SCREEN_W=1920 \
     SCREEN_H=1080
 
-# 国内源加速（machine 内直连官方源慢；24.04 为 deb822 格式 ubuntu.sources）。
-# 镜像选型实测（2026-09-03，machine 内 DNS 有污染）：tuna 1.55MB/s ✓ / 华为云 1.40MB/s ✓ /
-# aliyun 被污染到假 IP 111KB/s ✗ / 腾讯云假 IP 0 ✗——锁定 tuna
-RUN sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/ubuntu.sources
+# GUI 工具集：共用预置脚本（MIRROR=tuna——machine 内直连官方源慢且 DNS 有污染，tuna 实测
+# 1.55MB/s；aliyun/腾讯云被污染到假 IP——锁定 tuna；坑记档：首版清单漏 xvfb——容器能起但
+# 入口报 Xvfb: not found，scrot 连不上 :0，排查靠容器 logs 看入口 stderr。
+# ffmpeg 二期起在场：x11grab 采集 + mjpeg/h264 管道输出，帧经 backend.openPipe 原始字节直出
+# （PTY 文本链路会毁 jpeg）；包体 ~100MB 如实记档）
+COPY provision-gui.sh /usr/local/bin/provision-gui.sh
+RUN MIRROR=tuna sh /usr/local/bin/provision-gui.sh packages
 
-# 桌面栈：Xvfb 虚拟显示 + xfce4 元包（会话+面板+thunar 文件管理+窗口管理）+ 终端/编辑器
-# + 工具对 + 中文字体（坑记档：首版清单漏 xvfb——容器能起但入口报 Xvfb: not found，
-# scrot 连不上 :0，排查靠 podman logs 看入口 stderr）
-# ffmpeg（二期 30fps 实况流）：x11grab 采集 + mjpeg 管道输出，帧经 backend.openPipe 原始字节
-# 直出（PTY 文本链路会毁 jpeg）；包体 ~100MB 如实记档（plan-computer-use 二期风险项）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      xvfb \
-      xfce4 xfce4-terminal mousepad \
-      dbus-x11 x11-utils \
-      xdotool scrot imagemagick \
-      ffmpeg \
-      fonts-noto-cjk \
-      wget ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# firefox 走 Mozilla 官方 apt 仓：24.04 的 apt firefox 是 snap 空壳、容器内 snap 不可用（坑记档）
+# firefox 走 Mozilla 官方 apt 仓：24.04 的 apt firefox 是 snap 空壳、容器内 snap 不可用（坑记档；
+# VM 载体 snap 可用，直接 apt install firefox 即可——此块为容器专属）
 RUN install -d -m 0755 /etc/apt/keyrings \
     && wget -q -O /etc/apt/keyrings/packages.mozilla.org.asc https://packages.mozilla.org/apt/repo-signing-key.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" > /etc/apt/sources.list.d/mozilla.list \
@@ -42,8 +35,6 @@ RUN install -d -m 0755 /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends firefox \
     && rm -rf /var/lib/apt/lists/*
 
-# 常驻入口：Xvfb 起虚拟显示 → dbus 会话包裹 xfce4 桌面 → sleep 保持容器存活
-COPY start.sh /usr/local/bin/openbot-gui-start
-RUN chmod +x /usr/local/bin/openbot-gui-start
-
-ENTRYPOINT ["/usr/local/bin/openbot-gui-start"]
+# 常驻入口：共用脚本的 start-desktop 子命令（Xvfb :0 → dbus 会话 → xfce4 桌面 → sleep 保持
+# 容器存活；DISPLAY=:0 对 exec 会话由本镜像 ENV 提供——computer 工具与用户注入共用这条通路）
+ENTRYPOINT ["sh", "/usr/local/bin/provision-gui.sh", "start-desktop"]

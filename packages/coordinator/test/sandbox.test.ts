@@ -150,3 +150,31 @@ describe('chooseBackend：平台化（P6 Step 5——order 注入 + nspawn/utm�
     expect(r.backendId).toBe('wsl')
   })
 })
+
+describe('chooseBackend：SSH 载体（plan-image-firstclass P8-1）', () => {
+  const SSH_OK: BackendProbe[] = [...ALL_OK, probe('ssh', true)]
+
+  it('显式偏好 ssh + 连接事实就绪 + 探测在场 → 选中 ssh', () => {
+    const r = chooseBackend('ssh', SSH_OK, { wslRootfs: true, sshReady: true })
+    expect(r).toEqual({ backendId: 'ssh', wanted: 'ssh' })
+  })
+
+  it('显式偏好 ssh 但主机未配置（sshReady=false）→ 回退 mock 带 OPENBOT_SSH_HOST 指引', () => {
+    const r = chooseBackend('ssh', SSH_OK, { wslRootfs: true, sshReady: false })
+    expect(r.backendId).toBe('mock')
+    expect(r.wanted).toBe('ssh')
+    expect(r.reason).toContain('OPENBOT_SSH_HOST')
+  })
+
+  it('ssh 永不进 auto 序（远端机器是显式 opt-in——auto 全可用时仍选本地后端）', () => {
+    const r = chooseBackend('auto', SSH_OK, { wslRootfs: true })
+    expect(r.backendId).toBe('wsl')
+  })
+
+  it('ssh 探测不可用（CLI 缺席/主机不可达）→ 显式偏好如实回退带探测原因', () => {
+    const probes = [...ALL_OK, probe('ssh', false, 'SSH 试连失败（exit 255）：Connection refused')]
+    const r = chooseBackend('ssh', probes, { wslRootfs: true, sshReady: true })
+    expect(r.backendId).toBe('mock')
+    expect(r.reason).toContain('Connection refused')
+  })
+})

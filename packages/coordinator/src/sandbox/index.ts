@@ -11,6 +11,9 @@ export interface ChooseOptions {
   wslRootfs: boolean
   /** nspawn 的 rootfs tarball 是否就绪（与 wsl 同一「rootfs 导入」模型——装配方检查文件后传入） */
   nspawnRootfs?: boolean
+  /** SSH 载体是否就绪（连接事实已配置——P8-1 即 OPENBOT_SSH_HOST 非空；false 时显式偏好
+   *  'ssh' 如实回退 mock 带原因。缺省 undefined = 不设防——CLI 直调方自担） */
+  sshReady?: boolean
   /** 已实现的后端白名单（未实现的 CLI 即使在也不选——诚实降级） */
   implemented?: SandboxBackendId[]
   /**
@@ -32,8 +35,8 @@ export interface ChooseResult {
 const DEFAULT_ORDER: Exclude<SandboxBackendId, 'mock'>[] = ['wsl', 'docker', 'podman']
 
 export function chooseBackend(pref: SandboxPreference, probes: BackendProbe[], options: ChooseOptions): ChooseResult {
-  // 缺省全六值（P6 后矩阵齐：wsl/docker/podman/nspawn/utm 全实现）；装配方显式收窄用于灰度
-  const implemented = new Set<SandboxBackendId>(options.implemented ?? ['mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm'])
+  // 缺省全七值（P8-1 后矩阵 +ssh：plan-image-firstclass）；装配方显式收窄用于灰度
+  const implemented = new Set<SandboxBackendId>(options.implemented ?? ['mock', 'wsl', 'docker', 'podman', 'nspawn', 'utm', 'ssh'])
   const probeOf = (id: SandboxBackendId): BackendProbe | undefined => probes.find((p) => p.id === id)
 
   const tryPick = (id: Exclude<SandboxBackendId, 'mock'>): ChooseResult => {
@@ -54,8 +57,15 @@ export function chooseBackend(pref: SandboxPreference, probes: BackendProbe[], o
     if (id === 'nspawn' && options.nspawnRootfs === false) {
       return {
         backendId: 'mock',
-        wanted: 'nspawn',
+        wanted: id,
         reason: 'nspawn 基础镜像（rootfs）未就绪——请在用户数据目录放置 box-rootfs.tar.gz 或设 OPENBOT_NSPAWN_ROOTFS',
+      }
+    }
+    if (id === 'ssh' && options.sshReady === false) {
+      return {
+        backendId: 'mock',
+        wanted: id,
+        reason: 'SSH 主机未配置——请设 OPENBOT_SSH_HOST（plan-image-firstclass P8-1 env 接入）',
       }
     }
     return { backendId: id, wanted: id }

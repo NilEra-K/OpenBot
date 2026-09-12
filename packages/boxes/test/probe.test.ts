@@ -5,7 +5,7 @@
  * Engine 运行态校验（docker info Server 段，exit 非 0 = Engine 停止带指引）。
  */
 import { describe, expect, it } from 'vitest'
-import { parseMachineList, probeAll, probeDocker, probeNspawn, probePodman, probeUtm, probeWsl } from '../src/probe/index.js'
+import { parseMachineList, probeAll, probeDocker, probeNspawn, probePodman, probeSsh, probeUtm, probeWsl } from '../src/probe/index.js'
 import type { ProcResult, ProcRunner, ProcSpec } from '../src/procexec/index.js'
 
 const OK: ProcResult = { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, aborted: false }
@@ -177,6 +177,44 @@ describe('probeUtm（utmctl 与 UTM app 双在场）', () => {
   })
 })
 
+describe('probeSsh（P8-1：两级探测——CLI 在场 + 主机连通）', () => {
+  it('ssh -V exit 0 → CLI 在场；未配置 host 时只验 CLI（连通性归 create/镜像 test）', async () => {
+    const okRun = respond({ ssh: { ...OK, stderr: 'OpenSSH_9.6p1, OpenSSL 3.2.1' } })
+    await expect(probeSsh(okRun)).resolves.toEqual({ id: 'ssh', available: true })
+    const failRun: ProcRunner = () =>
+      Promise.reject(Object.assign(new Error('spawn ssh ENOENT'), { name: 'ProcSpawnError' }))
+    await expect(probeSsh(failRun)).resolves.toMatchObject({
+      available: false,
+      reason: expect.stringContaining('未安装或不在 PATH'),
+    })
+  })
+
+  it('配置 host：试连 true（BatchMode/accept-new/ConnectTimeout=5 + user/port/key 变体）；exit 0 → available', async () => {
+    const seen: ProcSpec[] = []
+    const run: ProcRunner = async (spec) => {
+      seen.push(spec)
+      return OK
+    }
+    await expect(probeSsh(run, { host: 'vm.local', port: 2222, user: 'ops', keyPath: 'C:/k.pem' })).resolves.toEqual({
+      id: 'ssh',
+      available: true,
+    })
+    expect(seen[0]?.command).toEqual(['ssh', '-V']) // 第一级：CLI 在场
+    expect(seen[1]?.command).toEqual([
+      'ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=5',
+      '-p', '2222', '-i', 'C:/k.pem', 'ops@vm.local', 'true',
+    ])
+  })
+
+  it('配置 host 但不可达/密钥被拒：exit 255 → 不可用带 stderr 摘要（docker info 同哲学）', async () => {
+    const run = respond({ ssh: { ...OK, exitCode: 255, stderr: 'Connection refused' } })
+    await expect(probeSsh(run, { host: 'vm.local' })).resolves.toMatchObject({
+      available: false,
+      reason: expect.stringContaining('Connection refused'),
+    })
+  })
+})
+
 describe('probeAll（平台裁剪——P6 Step 5：异平台 CLI 必然不在，跑了也是噪音）', () => {
   /** 探测结果 ids（排序）与实际下探的命令首词（排序）一并返回 */
   const probe = async (platform?: string): Promise<{ resultIds: string[]; seenCmds: string[] }> => {
@@ -188,24 +226,24 @@ describe('probeAll（平台裁剪——P6 Step 5：异平台 CLI 必然不在，
     const probes = await probeAll(run, platform)
     return { resultIds: probes.map((p) => p.id).sort(), seenCmds: [...seen].sort() }
   }
-  it('win32：只探 wsl/docker/podman——不探 nspawn/utm（探测列表即 UI 呈现源，win 上自然不出现）', async () => {
+  it('win32：探 wsl/docker/podman/ssh——不探 nspawn/utm（探测列表即 UI 呈现源，win 上自然不出现）', async () => {
     const { resultIds, seenCmds } = await probe('win32')
-    expect(resultIds).toEqual(['docker', 'mock', 'podman', 'wsl'])
-    expect(seenCmds).toEqual(['docker', 'podman', 'wsl'])
+    expect(resultIds).toEqual(['docker', 'mock', 'podman', 'ssh', 'wsl'])
+    expect(seenCmds).toEqual(['docker', 'podman', 'ssh', 'wsl'])
   })
-  it('linux：只探 nspawn/docker/podman——不探 wsl/utm', async () => {
+  it('linux：探 nspawn/docker/podman/ssh——不探 wsl/utm', async () => {
     const { resultIds, seenCmds } = await probe('linux')
-    expect(resultIds).toEqual(['docker', 'mock', 'nspawn', 'podman'])
-    expect(seenCmds).toEqual(['docker', 'machinectl', 'podman'])
+    expect(resultIds).toEqual(['docker', 'mock', 'nspawn', 'podman', 'ssh'])
+    expect(seenCmds).toEqual(['docker', 'machinectl', 'podman', 'ssh'])
   })
-  it('darwin：只探 utm/docker/podman——不探 wsl/nspawn', async () => {
+  it('darwin：探 utm/docker/podman/ssh——不探 wsl/nspawn', async () => {
     const { resultIds, seenCmds } = await probe('darwin')
-    expect(resultIds).toEqual(['docker', 'mock', 'podman', 'utm'])
-    expect(seenCmds).toEqual(['docker', 'podman', 'utmctl'])
+    expect(resultIds).toEqual(['docker', 'mock', 'podman', 'ssh', 'utm'])
+    expect(seenCmds).toEqual(['docker', 'podman', 'ssh', 'utmctl'])
   })
-  it('缺省不裁剪（向后兼容：mock + 五后端全探）', async () => {
+  it('缺省不裁剪（向后兼容：mock + 六后端全探）', async () => {
     const { resultIds, seenCmds } = await probe()
-    expect(resultIds).toEqual(['docker', 'mock', 'nspawn', 'podman', 'utm', 'wsl'])
-    expect(seenCmds).toEqual(['docker', 'machinectl', 'podman', 'utmctl', 'wsl'])
+    expect(resultIds).toEqual(['docker', 'mock', 'nspawn', 'podman', 'ssh', 'utm', 'wsl'])
+    expect(seenCmds).toEqual(['docker', 'machinectl', 'podman', 'ssh', 'utmctl', 'wsl'])
   })
 })
