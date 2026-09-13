@@ -251,21 +251,68 @@ GUI 能力的真实依赖链是 `Agent → 工具族 → BoxBackend.exec/openPip
   （待设备：本地容器 + SSH 载体各一轮 GUI 全链——适配器行为等价由 argv 锁死单测背书）。
   版本 0.1.23。
 
-### P8-3（阶段三 a）：镜像注册表
+### P8-3（阶段三 a）：镜像注册表（2026-09-13 实施完成）
 
-- [ ] 1. **ImageStore**（state，D1）：`<root>/images.json`；carrier 联合（一期
+- [x] 1. **ImageStore**（state，D1）：`<root>/images.json`；carrier 联合（一期
   `'container' | 'ssh'`，vmware 随 P8-5）；connection 按 carrier 分形状（zod 校验）；
   controlProtocol（'x11' | 'none'）；损坏降级空表 + 上限 16（裁定 F）；单测
-- [ ] 2. **RoutingBackend + 工厂**（D2）：`implements BoxBackend` 的多路 facade——按
-  `spec.image`（ImageEntry id）路由到对应 backend 实例（缓存 per imageId；'default' 落
-  既有全局后端）；coordinator/desktop 装配改持 RoutingBackend，**services/工具族零改动**
-- [ ] 3. **命令面 + UI**（D3/D5）：`v1.images.*` 五命令（test = ssh 探测/镜像在场 + 工具集
+- [x] 2. **RoutingBackend + 工厂**（D2）：`implements BoxBackend` 的多路 facade——按
+  `spec.image`（ImageEntry id）路由到对应 backend 实例（'default' 落既有全局后端）；
+  coordinator/desktop 装配改持 RoutingBackend，**services/工具族零改动**
+- [x] 3. **命令面 + UI**（D3/D5）：`v1.images.*` 五命令（test = ssh 探测/镜像在场 + 工具集
   探测报告）；设置页「镜像」节（清单 + 载体分表单 + 测试按钮 + 删除确认）
-- [ ] 4. **凭据位**（D4）：key 路径一期明文引用；密码/guest 凭据字段 schema 预留 + safeStorage
+- [x] 4. **凭据位**（D4）：key 路径一期明文引用；密码/guest 凭据字段 schema 预留 + safeStorage
   密文读写（encryptKey/decryptKey 先例）
-- [ ] 5. **E2E**（G3）：镜像 CRUD + test（mock 对称）+ 多条目并存
+- [x] 5. **E2E**（G3）：镜像 CRUD + test（mock 对称）+ 多条目并存
 
 **验收**：命令面全链 E2E 绿；本地容器镜像与 SSH 镜像条目并存，test 各自如实报告。
+
+### P8-3 实施记档（2026-09-13）
+
+- **ImageStore（state/images）**：`<root>/images.json` `{version:1, images[]}`——parseLoose
+  损坏降级空表 + 告警（原文件保留不回写，不静默吞数据）；条目 id 服务端生成 `img-N`
+  （自增游标懒播种：首用时扫存量条目取最大 N——跨重启不撞号）；上限 16（裁定 F）；
+  载体校验 state 层 validateEntry 兜底 + 命令面 zod superRefine 双道（错误先在命令面给用户）。
+  **凭据位（D4）如实处理**：不加假装能力的 password 字段——扩展走 version+读取端兼容，
+  encrypt/decrypt 回调位同 SettingsStore 先例（P8-5 vmrun guest 凭据届时启用）。
+- **RoutingBoxBackend（boxes/routing）**：依赖方向决定形态——boxes 不 import state，
+  路由表是纯 `Map<id, BoxRoute>`（BoxRoute = backend + translate?），条目→后端的构造在
+  desktop 装配层（`registerImageRoute`）：ssh 条目独立 SshBoxBackend 实例；container 条目
+  **复用全局 OCI 底座 + translate 改写**（create 时把路由 id 改写为实际镜像名——OCI 后端
+  本就按 spec.image 建容器，无需新后端实例）；非 OCI 底座上的 container 条目不注册路由
+  （v1.images.test 如实报告不可路由）。**boxId 所有权**：create 记录 + 跨重启按各路由
+  list() 惰性扫描缓存（list 是 boxes 视图/遥测既有调用，无新增稳态开销）；list() 聚合
+  fallback + 路由去重（单路由离线不炸清单）；caps 落 fallback（后端级概念，per-image
+  caps 呈现随 P8-4）。
+- **装配**：`assembleKernel({backend: routedBackend})`——GuiStream/Stats/Shell/screen 适配器
+  与工具族持单一引用零改动（D2 的核心收益兑现）；生产门探测与后置注册的 computerTools
+  deps 换 routedBackend（P8-4 agent 绑定镜像 Box 后 exec 也能到位）。**路由表运行时可变**
+  （add/update/remove 即时生效——按调用分发无状态，与沙箱偏好的装配期决策不同）。
+- **v1.images.test 报告语义（不造假）**：ssh = 真实 attach（连通 + mkdir 工作目录）→
+  x11 协议加测 GUI 工具集（probeX11Toolset）→ 断开（teardown 零远端副作用——裁定 C）；
+  container = 按 CLI 查镜像在场（docker image inspect / podman image exists——CLI 方言
+  分支）；底座非 OCI 如实「不可路由」。设置页测试结果红色/绿色 chip 呈现（title 全文）。
+- **UI**：设置页「镜像」节（沙箱后端与定时自动化之间）——清单行（名称/摘要/载体 chip/GUI
+  chip/测试结果 chip/测试/编辑/删除二段确认）+ 载体分表单模态（SSH：host/port/user/keyPath；
+  container：镜像名；控制协议 X11/无 + X 显示地址）。E2E 断言锚点：`.cfg-row[data-image-id]`
+  与 `data-role="image-test/edit/remove"`（字段 id if* 供表单定位）。
+- **坑（实施中，三处都值得记档）**：①**zod 4 的 `.partial()` 运行时禁止含 refinement 的
+  schema（类型面却放行——typecheck 拦不住）**，`imagePatchSchema = imageInputSchema.partial()`
+  让内核装配即炸（「OpenBot 内核装配失败」弹窗——**用户真机首训抓到**，此前后台 E2E 未跑完
+  就写结论的教训一并记档）。修法：基础 object 单独成常量（`imageInputBase`），add 全量 schema
+  从它 superRefine 派生、patch 从它 partial 派生（patch 不带 carrier 条件校验——部分载荷由
+  store 层 update 合并后 validateEntry 兜底）；语义经 zod 直演三断言验证后再跑 E2E。
+  **方法论强化：main 进程代码（apps/desktop/src/main）无单测、typecheck 不拦运行时——E2E
+  是唯一防线，E2E 结果没落地前不得写「全绿」结论（P8-2 的「argv 锁死」纪律在 main 进程侧
+  的对位是「E2E 先行」）。** ②renderer 模板事件名与脚本函数名不一致（`@click="imageTest"`
+  vs 定义 `testImage`）——Vue 对未定义 handler 静默吞掉不报 pageerror，点击零反应；E2E 快照
+  （连「测试中…」chip 都不在场）定位。③E2E `hasText` 是子串匹配——改名断言「VMWare Ubuntu」
+  恒命中「VMWare Ubuntu 2」，行定位改 `data-image-id`（新库条目 id 确定性）。
+  另：Windows 仓库 CRLF 下 node 批量替换按实际行尾构指针（P8-2 同款）；迁移脚本内嵌 Vue
+  代码含 `${...}` 会被外层模板字面量展开（坑⑫ 反引号地狱第三变体，内嵌代码改字符串拼接）。
+- **验证**：typecheck/构建零错；单测 484+16 skipped 全绿（+12：ImageStore 6 / RoutingBoxBackend 6）；
+  **E2E 29/29**（+1：镜像 CRUD 全链——真实 UI 添加/编辑/删除二段确认/连接测试如实失败/双载体
+  并存/重启持久化双段会话；首跑因坑①全数炸在装配、修复后三轮迭代全绿）。版本 0.1.24。
 
 ### P8-4（阶段三 b）：Agent 绑定与 UI
 

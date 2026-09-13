@@ -93,7 +93,148 @@ const removeAutomationRow = (row: { id: string; name: string }): void => {
 
 onMounted(() => {
   void kernel.refreshAutomations()
+  void kernel.refreshImages()
 })
+
+// ---- 镜像注册表（plan-image-firstclass P8-3）：条目清单 + 载体分表单模态 + 连接测试 ----
+const imageFormOpen = ref(false)
+const imageEditingId = ref<string | null>(null)
+const imageForm = reactive<{
+  name: string
+  carrier: 'container' | 'ssh'
+  image: string
+  host: string
+  port: number | null
+  user: string
+  keyPath: string
+  controlProtocol: 'x11' | 'none'
+  display: string
+}>({ name: '', carrier: 'ssh', image: '', host: '', port: null, user: '', keyPath: '', controlProtocol: 'x11', display: '' })
+const imageFormError = ref<string | null>(null)
+const imageSaving = ref(false)
+/** 删除二段确认（进行中的 id；语义同模型端点删除） */
+const imageConfirmRemove = ref<string | null>(null)
+/** 连接测试结果（per 条目 id——如实报告，title 带全文 chip 截断呈现） */
+const imageTestResults = ref<Record<string, { ok: boolean; text: string }>>({})
+
+const IMAGE_EMPTY_FORM = {
+  name: '',
+  carrier: 'ssh' as const,
+  image: '',
+  host: '',
+  port: null as number | null,
+  user: '',
+  keyPath: '',
+  controlProtocol: 'x11' as const,
+  display: '',
+}
+
+const openImageCreate = (): void => {
+  imageEditingId.value = null
+  Object.assign(imageForm, IMAGE_EMPTY_FORM)
+  imageFormError.value = null
+  imageFormOpen.value = true
+}
+
+const openImageEdit = (img: { id: string; name: string; carrier: 'container' | 'ssh'; image?: string; host?: string; port?: number; user?: string; keyPath?: string; controlProtocol: 'x11' | 'none'; display?: string }): void => {
+  imageEditingId.value = img.id
+  Object.assign(imageForm, {
+    name: img.name,
+    carrier: img.carrier,
+    image: img.image ?? '',
+    host: img.host ?? '',
+    port: img.port ?? null,
+    user: img.user ?? '',
+    keyPath: img.keyPath ?? '',
+    controlProtocol: img.controlProtocol,
+    display: img.display ?? '',
+  })
+  imageFormError.value = null
+  imageFormOpen.value = true
+}
+
+const closeImageForm = (): void => {
+  imageFormOpen.value = false
+  imageConfirmRemove.value = null
+}
+
+const imageFormValid = computed(() => {
+  if (imageForm.name.trim() === '') return false
+  if (imageForm.carrier === 'container') return imageForm.image.trim() !== ''
+  return imageForm.host.trim() !== ''
+})
+
+const saveImage = async (): Promise<void> => {
+  if (!imageFormValid.value || imageSaving.value) return
+  imageSaving.value = true
+  imageFormError.value = null
+  const payload = {
+    name: imageForm.name.trim(),
+    carrier: imageForm.carrier,
+    controlProtocol: imageForm.controlProtocol,
+    ...(imageForm.carrier === 'container'
+      ? { image: imageForm.image.trim() }
+      : {
+          host: imageForm.host.trim(),
+          ...(imageForm.port !== null && Number.isFinite(imageForm.port) ? { port: Number(imageForm.port) } : {}),
+          ...(imageForm.user.trim() !== '' ? { user: imageForm.user.trim() } : {}),
+          ...(imageForm.keyPath.trim() !== '' ? { keyPath: imageForm.keyPath.trim() } : {}),
+        }),
+    ...(imageForm.display.trim() !== '' ? { display: imageForm.display.trim() } : {}),
+  }
+  try {
+    if (imageEditingId.value !== null) await kernel.updateImage(imageEditingId.value, payload)
+    else await kernel.addImage(payload)
+    toast.push(imageEditingId.value !== null ? '镜像条目已更新' : '镜像条目已添加', 'success')
+    imageFormOpen.value = false
+  } catch (err) {
+    imageFormError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    imageSaving.value = false
+  }
+}
+
+const removeImage = async (img: { id: string; name: string }): Promise<void> => {
+  if (imageConfirmRemove.value !== img.id) {
+    imageConfirmRemove.value = img.id
+    return
+  }
+  try {
+    await kernel.removeImage(img.id)
+    toast.push('镜像条目已删除：' + img.name, 'success')
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  } finally {
+    imageConfirmRemove.value = null
+  }
+}
+
+const testImage = async (img: { id: string }): Promise<void> => {
+  imageTestResults.value = { ...imageTestResults.value, [img.id]: { ok: true, text: '测试中…' } }
+  try {
+    const r = await kernel.testImage(img.id)
+    imageTestResults.value = {
+      ...imageTestResults.value,
+      [img.id]: r.ok ? { ok: true, text: r.detail ?? '连接正常' } : { ok: false, text: r.reason ?? '不可用' },
+    }
+  } catch (err) {
+    imageTestResults.value = {
+      ...imageTestResults.value,
+      [img.id]: { ok: false, text: err instanceof Error ? err.message : String(err) },
+    }
+  }
+}
+
+const carrierLabel = (c: 'container' | 'ssh'): string => (c === 'ssh' ? 'SSH' : '容器')
+const imageSummary = (img: { carrier: 'container' | 'ssh'; image?: string; host?: string; port?: number; user?: string; keyPath?: string }): string => {
+  if (img.carrier !== 'ssh') return img.image ?? ''
+  let out = ''
+  if (img.user) out += img.user + '@'
+  out += img.host ?? ''
+  if (img.port) out += ':' + String(img.port)
+  if (img.keyPath) out += ' · key ' + img.keyPath
+  return out
+}
 
 /** 应用版本（P4 Step 1）：main 经 preload 桥取 package.json version——不手写不过时 */
 const appVersion = ref<string | null>(null)
@@ -542,6 +683,111 @@ const wslHelpNeeded = computed(() => {
         </div>
       </template>
       <p v-else class="settings-empty">沙箱状态未加载（网关未连接）</p>
+
+      <!-- 镜像注册表（plan-image-firstclass P8-3）：条目 = 载体 + 连接事实 + 控制协议——
+           Agent 绑定镜像条目随 P8-4 开放；add/update 即时维护路由表（无需重启） -->
+      <div class="set-sec-row">
+        <div class="set-sec">镜像</div>
+        <HelpTip
+          text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 tools/provision-gui.sh 预置桌面工具集。"
+        />
+        <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openImageCreate">＋ 添加镜像</button>
+      </div>
+      <div v-for="img in kernel.images" :key="img.id" class="cfg-row" :data-image-id="img.id">
+        <div class="cfg-main">
+          <div class="cfg-name">{{ img.name }}</div>
+          <div class="cfg-desc mono">{{ imageSummary(img) }}</div>
+        </div>
+        <div class="cfg-actions">
+          <span class="chip">{{ carrierLabel(img.carrier) }}</span>
+          <span v-if="img.controlProtocol === 'x11'" class="chip">GUI</span>
+          <span
+            v-if="imageTestResults[img.id]"
+            class="chip"
+            :class="imageTestResults[img.id].ok ? 'chip-success' : 'chip-danger'"
+            :title="imageTestResults[img.id].text"
+          >{{ imageTestResults[img.id].text.length > 24 ? imageTestResults[img.id].text.slice(0, 24) + '…' : imageTestResults[img.id].text }}</span>
+          <button class="btn btn-ghost btn-sm" data-role="image-test" @click="testImage(img)">测试</button>
+          <button class="btn btn-ghost btn-sm" data-role="image-edit" @click="openImageEdit(img)">编辑</button>
+          <button class="btn btn-ghost btn-sm btn-danger" data-role="image-remove" @click="removeImage(img)">
+            {{ imageConfirmRemove === img.id ? '确认删除？' : '删除' }}
+          </button>
+        </div>
+      </div>
+      <p v-if="kernel.images.length === 0" class="settings-empty">尚无镜像条目——SSH 主机（VMWare/云电脑）与容器镜像都可在此注册</p>
+
+      <!-- 镜像条目表单（模态——provider 模态同款容器；字段 id 供 E2E 定位） -->
+      <div v-if="imageFormOpen" class="wiz-overlay" @mousedown.self="closeImageForm()">
+        <div class="wiz-card" role="dialog" aria-label="镜像条目配置" @keydown.escape="closeImageForm">
+          <div class="wiz-head">
+            <span class="wiz-title">{{ imageEditingId !== null ? '编辑镜像条目' : '添加镜像条目' }}</span>
+            <button class="wiz-close" type="button" aria-label="关闭" @click="closeImageForm()">✕</button>
+          </div>
+          <div class="wiz-body provider-form">
+            <div class="field">
+              <label class="field-label" for="ifName">显示名称</label>
+              <input id="ifName" v-model="imageForm.name" class="field-input" placeholder="例：VMWare Ubuntu" autocomplete="off" maxlength="64" />
+            </div>
+            <div class="field">
+              <span class="field-label">载体</span>
+              <div class="proto-seg" role="radiogroup" aria-label="载体类型">
+                <label class="proto-opt" :class="{ 'is-on': imageForm.carrier === 'ssh' }">
+                  <input type="radio" name="if-carrier" value="ssh" v-model="imageForm.carrier" />
+                  SSH 主机
+                </label>
+                <label class="proto-opt" :class="{ 'is-on': imageForm.carrier === 'container' }">
+                  <input type="radio" name="if-carrier" value="container" v-model="imageForm.carrier" />
+                  容器镜像
+                </label>
+              </div>
+            </div>
+            <template v-if="imageForm.carrier === 'ssh'">
+              <div class="field">
+                <label class="field-label" for="ifHost">主机地址</label>
+                <input id="ifHost" v-model="imageForm.host" class="field-input mono" placeholder="192.168.1.20 或 vm.local" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label class="field-label" for="ifPort">端口（可选，缺省 22）</label>
+                <input id="ifPort" v-model.number="imageForm.port" class="field-input mono" type="number" min="1" max="65535" placeholder="22" />
+              </div>
+              <div class="field">
+                <label class="field-label" for="ifUser">用户（可选）</label>
+                <input id="ifUser" v-model="imageForm.user" class="field-input mono" placeholder="ops" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label class="field-label" for="ifKey">私钥路径（可选——密钥免密为前提）</label>
+                <input id="ifKey" v-model="imageForm.keyPath" class="field-input mono" placeholder="C:/keys/vm.pem" autocomplete="off" spellcheck="false" />
+              </div>
+            </template>
+            <div v-else class="field">
+              <label class="field-label" for="ifImage">镜像名</label>
+              <input id="ifImage" v-model="imageForm.image" class="field-input mono" placeholder="openbot-gui:24.04" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field">
+              <span class="field-label">控制协议</span>
+              <div class="proto-seg" role="radiogroup" aria-label="控制协议">
+                <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'x11' }">
+                  <input type="radio" name="if-proto" value="x11" v-model="imageForm.controlProtocol" />
+                  X11（Linux 桌面）
+                </label>
+                <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'none' }">
+                  <input type="radio" name="if-proto" value="none" v-model="imageForm.controlProtocol" />
+                  无（纯命令行）
+                </label>
+              </div>
+            </div>
+            <div v-if="imageForm.controlProtocol === 'x11'" class="field">
+              <label class="field-label" for="ifDisplay">X 显示地址（可选，缺省 :0）</label>
+              <input id="ifDisplay" v-model="imageForm.display" class="field-input mono" placeholder=":0" autocomplete="off" spellcheck="false" />
+            </div>
+            <p v-if="imageFormError" class="form-error">{{ imageFormError }}</p>
+          </div>
+          <div class="wiz-foot">
+            <button class="btn btn-primary" :disabled="!imageFormValid || imageSaving" @click="saveImage">{{ imageSaving ? '保存中…' : '保存' }}</button>
+            <button class="btn btn-ghost" @click="closeImageForm()">取消</button>
+          </div>
+        </div>
+      </div>
 
       <!-- 定时自动化（backlog ②）：规则到点 → 以用户身份给 agent 发消息（走既有审批管线）——
            说明收进 ⓘ；列表 + 模态（cron 即时预览下次触发——防写错） -->

@@ -1532,3 +1532,84 @@ test('GUI 实况流（plan-computer-use 二期）：大屏接管开流 → 30fps
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('镜像注册表（P8-3）：CRUD 全链 + 连接测试如实报告 + 多载体并存 + 重启持久化', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-images-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+
+    // —— 添加 SSH 条目（真实 UI 全链；不可达主机——测试按钮须如实报失败，不假装可用） ——
+    await page.getByRole('button', { name: '＋ 添加镜像' }).click()
+    await page.locator('#ifName').fill('VMWare Ubuntu')
+    await page.locator('#ifHost').fill('192.168.99.99')
+    await page.locator('#ifPort').fill('2222')
+    await page.locator('#ifUser').fill('ops')
+    await page.locator('#ifKey').fill('C:/keys/vm.pem')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    // 行定位用 data-image-id（新库首两条目确定性 id=img-1/img-2）——hasText 子串匹配会
+    // 把改名后的「VMWare Ubuntu 2」也命中（E2E 首训踩坑）
+    const sshRow = page.locator('.cfg-row[data-image-id="img-1"]')
+    await expect(sshRow).toBeVisible()
+    await expect(sshRow).toContainText('SSH')
+    await expect(sshRow).toContainText('ops@192.168.99.99:2222')
+
+    // —— 添加容器条目（多载体并存） ——
+    await page.getByRole('button', { name: '＋ 添加镜像' }).click()
+    await page.locator('label.proto-opt', { hasText: '容器镜像' }).click()
+    await page.locator('#ifName').fill('GUI 容器')
+    await page.locator('#ifImage').fill('openbot-gui:24.04')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    const cRow = page.locator('.cfg-row', { hasText: 'GUI 容器' })
+    await expect(cRow).toBeVisible()
+    await expect(cRow).toContainText('容器')
+
+    // —— 连接测试如实报告：ssh 不可达 / 容器在 mock 底座不可路由 —— 红色 chip 呈现原因 ——
+    await sshRow.locator('[data-role="image-test"]').click()
+    await expect(sshRow.locator('.chip-danger')).toBeVisible({ timeout: 30_000 })
+    await cRow.locator('[data-role="image-test"]').click()
+    await expect(cRow.locator('.chip-danger')).toBeVisible({ timeout: 30_000 })
+    // chip 可见文本截断 24 字——全文在 title 属性（测试报告语义断言锚 title）
+    await expect(cRow.locator('.chip-danger')).toHaveAttribute('title', /不可路由/)
+
+    // —— 编辑：改条目名（同 id 路由替换对 UI 透明） ——
+    await sshRow.locator('[data-role="image-edit"]').click()
+    await page.locator('#ifName').fill('VMWare Ubuntu 2')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(sshRow).toBeVisible() // 同 id 行就地更新（路由替换对 UI 透明）
+    await expect(sshRow).toContainText('VMWare Ubuntu 2')
+    const renamed = sshRow
+
+    // —— 删除二段确认（误触保护）；容器条目并存不受影响 ——
+    const del = renamed.locator('[data-role="image-remove"]')
+    await del.click()
+    await expect(del).toHaveText('确认删除？')
+    await del.click()
+    await expect(sshRow).toHaveCount(0)
+    await expect(cRow).toBeVisible()
+
+    // —— 重启持久化（双段会话）：images.json 是真相，重启后条目仍在 ——
+    await app.close()
+    const app2 = await _electron.launch({
+      args: ['.'],
+      env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+    })
+    const page2 = await app2.firstWindow()
+    try {
+      await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+      await page2.getByRole('button', { name: '设置', exact: true }).click()
+      await expect(page2.locator('.cfg-row', { hasText: 'GUI 容器' })).toBeVisible({ timeout: 10_000 })
+    } finally {
+      await app2.close()
+    }
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

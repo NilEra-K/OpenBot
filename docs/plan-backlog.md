@@ -186,6 +186,9 @@ ctx 档案「记忆」节呈现真数据。
 > **阶段二（P8-2 ScreenControl 接口化）已实施**（2026-09-13，版本 0.1.23）——工具族/实况流/
 > gui 命令面零具体命令依赖，GUI 生产注册门兑现（工具集探测 ∩ 视觉声明），实施记档见
 > plan-image-firstclass P8-2 节。
+> **阶段三 a（P8-3 镜像注册表）已实施**（2026-09-13，版本 0.1.24）——ImageStore +
+> RoutingBoxBackend + `v1.images.*` 命令面 + 设置页「镜像」节，实施记档见
+> plan-image-firstclass P8-3 节；Agent 绑定镜像（P8-4）随后开放。
 
 ### 现状资产（离目标比表面近——「CLI 即接口」的红利）
 

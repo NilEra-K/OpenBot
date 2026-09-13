@@ -19,8 +19,8 @@ import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinat
 import { startGateway, RelayClient } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
-import { NodeFs, SettingsStore, MemoryStore, AutomationStore, nextAfter } from '@openbot/state'
-import type { SandboxPreference, RelaySettings } from '@openbot/state'
+import { NodeFs, SettingsStore, MemoryStore, AutomationStore, ImageStore, nextAfter } from '@openbot/state'
+import type { SandboxPreference, RelaySettings, ImageEntry } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
 import type { ResolvedProvider } from '@openbot/state'
@@ -32,6 +32,7 @@ import {
   PodmanBoxBackend,
   SshBoxBackend,
   UtmBoxBackend,
+  RoutingBoxBackend,
   WslBoxBackend,
   probeAll,
   probeX11Toolset,
@@ -168,6 +169,31 @@ const automationInputSchema = z.object({
   enabled: z.boolean(),
 })
 const automationPatchSchema = automationInputSchema.partial().extend({ id: z.string() })
+/** 镜像条目（plan-image-firstclass P8-3）：连接事实按载体分形状——container 须 image、
+ *  ssh 须 host（superRefine 校验；state 层 validateEntry 二道兜底）。
+ *  坑：zod 4 的 .partial() 运行时禁止含 refinement 的 schema（类型面却放行——typecheck 拦不住，
+ *  真机首训「内核装配失败」弹窗）——基础 object 单独成常量，partial 从它派生；
+ *  patch 不带 carrier 条件校验（部分载荷由 store 层 update 合并后 validateEntry 兜底） */
+const imageInputBase = z.object({
+  name: z.string().trim().min(1).max(64),
+  carrier: z.enum(['container', 'ssh']),
+  image: z.string().trim().min(1).max(200).optional(),
+  host: z.string().trim().min(1).max(200).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  user: z.string().trim().min(1).max(64).optional(),
+  keyPath: z.string().trim().min(1).max(500).optional(),
+  controlProtocol: z.enum(['x11', 'none']),
+  display: z.string().trim().max(40).optional(),
+})
+const imageInputSchema = imageInputBase.superRefine((v, ctx) => {
+  if (v.carrier === 'container' && (v.image === undefined || v.image === '')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['image'], message: '容器镜像条目须指定镜像名' })
+  }
+  if (v.carrier === 'ssh' && (v.host === undefined || v.host === '')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['host'], message: 'SSH 镜像条目须指定主机地址' })
+  }
+})
+const imagePatchSchema = imageInputBase.partial().extend({ id: z.string() })
 /** 注册 agent（P4 Step 5）：name 必填（去空白 1-24 字）；color hex6 可选；role 默认 worker（steward 走任命事务语义） */
 const registerAgentSchema = z.object({
   name: z.string().trim().min(1).max(24),
@@ -381,6 +407,74 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
                     now: Date.now,
                   })
                 : new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
+  // 镜像注册表（plan-image-firstclass P8-3）：镜像条目获得一等公民地位——Agent 绑定镜像
+  // 而非后端（绑定随 P8-4）。路由后端包一层多路 facade：镜像条目 id → 后端实例（container
+  // 条目复用全局 OCI 底座、create 时把路由 id 改写为实际镜像名；ssh 条目独立 SshBoxBackend）。
+  // 路由表运行时可变（add/remove 即时生效——按调用分发无状态，与沙箱偏好的装配期决策不同）
+  const imageStore = new ImageStore({ fs, root: dataRoot, now: Date.now })
+  const routingBackend = new RoutingBoxBackend({ fallback: backend })
+  const registerImageRoute = (entry: ImageEntry): void => {
+    if (entry.carrier === 'ssh') {
+      routingBackend.registerRoute(entry.id, {
+        backend: new SshBoxBackend({
+          host: entry.host ?? '',
+          ...(entry.port !== undefined ? { port: entry.port } : {}),
+          ...(entry.user !== undefined ? { user: entry.user } : {}),
+          ...(entry.keyPath !== undefined ? { keyPath: entry.keyPath } : {}),
+          workdir: '/work',
+          now: Date.now,
+        }),
+      })
+    } else if (chosen.backendId === 'docker' || chosen.backendId === 'podman') {
+      routingBackend.registerRoute(entry.id, {
+        backend,
+        translate: (spec) => ({ ...spec, image: entry.image ?? dockerImage }),
+      })
+    }
+    // 非 OCI 底座上的 container 条目：不注册路由（v1.images.test 如实报告不可路由）
+  }
+  for (const entry of await imageStore.list()) registerImageRoute(entry)
+  /** 连接测试（D3——v1.images.test 的探测报告，如实不造假）：
+   *  ssh = 真实 attach（连通验证 + 工作目录）→ x11 协议加测 GUI 工具集 → 断开；
+   *  container = 按 CLI 查镜像在场（docker inspect / podman exists）；底座非 OCI 如实报告不可路由 */
+  const testImageEntry = async (entry: ImageEntry): Promise<{ ok: boolean; detail?: string; reason?: string }> => {
+    if (entry.carrier === 'ssh') {
+      const probe = new SshBoxBackend({
+        host: entry.host ?? '',
+        ...(entry.port !== undefined ? { port: entry.port } : {}),
+        ...(entry.user !== undefined ? { user: entry.user } : {}),
+        ...(entry.keyPath !== undefined ? { keyPath: entry.keyPath } : {}),
+        workdir: '/work',
+        now: Date.now,
+      })
+      try {
+        const boxId = await probe.create({ image: entry.id })
+        let detail = 'SSH 连接正常'
+        if (entry.controlProtocol === 'x11') {
+          const toolset = await probeX11Toolset(probe, boxId)
+          detail += toolset ? '；GUI 工具集在场（xdotool/scrot）' : '；GUI 工具集未检出（可在远端跑 tools/provision-gui.sh）'
+        }
+        await probe.teardown(boxId)
+        return { ok: true, detail }
+      } catch (err) {
+        return { ok: false, reason: (err instanceof Error ? err.message : String(err)).slice(0, 200) }
+      }
+    }
+    if (chosen.backendId !== 'docker' && chosen.backendId !== 'podman') {
+      return { ok: false, reason: '当前沙箱后端不是 Docker/Podman——容器镜像条目不可路由（设置页切换后端后重试）' }
+    }
+    const cli = chosen.backendId
+    const args = cli === 'podman' ? ['image', 'exists', entry.image ?? ''] : ['image', 'inspect', entry.image ?? '']
+    try {
+      const r = await runProcess({ command: [cli, ...args], timeoutMs: 20_000 })
+      return r.exitCode === 0
+        ? { ok: true, detail: `镜像在场（${cli}）：${entry.image}` }
+        : { ok: false, reason: `镜像不存在（${cli}）：${entry.image}——先构建或拉取` }
+    } catch (err) {
+      return { ok: false, reason: `镜像查询失败：${err instanceof Error ? err.message : String(err)}` }
+    }
+  }
+  const routedBackend: BoxBackend = routingBackend
   // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
   const sandboxStatus: SandboxStatus = {
     preference,
@@ -431,7 +525,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
-    backend,
+    // 镜像路由后端（P8-3）：镜像条目 id → 后端实例的多路 facade——services/工具族零改动
+    backend: routedBackend,
     // save/recall 工具 + 会话装配「此前记忆」注入（每轮同步读缓存；addAgent 预载）
     memory: memoryStore,
     // run 策略上调（2026-09-06 进展驱动 grace 语义）：无进展 5 分钟才逃逸（慢模型长思考/
@@ -674,6 +769,33 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       const next = nextAfter(cron, Date.now())
       return { nextAt: next, readable: next === null ? '该规则永不触发（如 2 月 30 日）' : new Date(next).toLocaleString('zh-CN') }
     }, z.object({ cron: z.string() }))
+    // 镜像注册表（plan-image-firstclass P8-3 D3）：CRUD + 连接测试（test = 连通/镜像在场 +
+    // GUI 工具集探测的如实报告）。add/update 即时维护路由表（按调用分发，无需重启）
+    .register('v1.images.list', async () => ({ images: await imageStore.list() }))
+    .register('v1.images.add', async (payload) => {
+      const input = imageInputSchema.parse(payload)
+      const entry = await imageStore.add(input)
+      registerImageRoute(entry)
+      return { image: entry }
+    }, imageInputSchema)
+    .register('v1.images.update', async (payload) => {
+      const { id, ...patch } = imagePatchSchema.parse(payload)
+      const entry = await imageStore.update(id, patch)
+      registerImageRoute(entry) // 同 id 重注册 = 路由替换（连接事实/协议即时生效）
+      return { image: entry }
+    }, imagePatchSchema)
+    .register('v1.images.remove', async (payload) => {
+      const { id } = z.object({ id: z.string() }).parse(payload)
+      await imageStore.remove(id)
+      routingBackend.removeRoute(id)
+      return { ok: true }
+    }, z.object({ id: z.string() }))
+    .register('v1.images.test', async (payload) => {
+      const { id } = z.object({ id: z.string() }).parse(payload)
+      const entry = await imageStore.get(id)
+      if (entry === null) throw new KernelError('STATE_IMAGE_NOT_FOUND', `镜像条目不存在：${id}`)
+      return testImageEntry(entry)
+    }, z.object({ id: z.string() }))
     .register('v1.sandbox.status', async () => ({
       preference: sandboxStatus.preference,
       stored: await settings.getSandbox(),
@@ -785,7 +907,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       /* 无默认 provider——门自然关着（不放假能力） */
     }
     if (supportsImages) {
-      const probeBoxId = (await backend.list())[0]?.boxId
+      const probeBoxId = (await routedBackend.list())[0]?.boxId
       if (probeBoxId !== undefined) {
         computerEnabled = await probeX11Toolset(backend, probeBoxId)
         if (!computerEnabled) {
@@ -796,7 +918,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   }
   if (computerEnabled) {
     for (const tool of computerTools({
-      backend,
+      backend: routedBackend, // 路由面——P8-4 起 agent 绑定的镜像 Box 也能 exec 到位
       bus: kernel.bus,
       onStream: kernel.onStream,
       transcript: kernel.transcript,

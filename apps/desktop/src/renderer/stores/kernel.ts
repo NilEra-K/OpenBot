@@ -170,6 +170,41 @@ export interface ProviderView {
   supportsImages?: boolean
 }
 
+/** 镜像条目（plan-image-firstclass P8-3；v1.images.* 载荷——Agent 绑定镜像而非后端，绑定随 P8-4） */
+export interface ImageEntryView {
+  id: string
+  name: string
+  carrier: 'container' | 'ssh'
+  image?: string
+  host?: string
+  port?: number
+  user?: string
+  keyPath?: string
+  controlProtocol: 'x11' | 'none'
+  display?: string
+  createdAt: number
+}
+
+/** 镜像表单输入（add/update 共用形状；连接事实按载体分形状校验在内核 zod） */
+export interface ImageInputView {
+  name: string
+  carrier: 'container' | 'ssh'
+  image?: string
+  host?: string
+  port?: number
+  user?: string
+  keyPath?: string
+  controlProtocol: 'x11' | 'none'
+  display?: string
+}
+
+/** 镜像连接测试结果（如实报告——ok=true 时 detail 说明探测到的事实） */
+export interface ImageTestResult {
+  ok: boolean
+  detail?: string
+  reason?: string
+}
+
 /** provider 表单输入（v1.settings.upsertProvider 载荷；apiKey 留空=保留原密文） */
 export interface ProviderInput {
   name: string
@@ -280,6 +315,8 @@ export const useKernelStore = defineStore('kernel', {
     llmStatus: null as LlmStatus | null,
     /** 沙箱后端装配事实（settings 视图呈现） */
     sandbox: null as SandboxStatus | null,
+    /** 镜像注册表（P8-3；settings 视图呈现与管理） */
+    images: [] as ImageEntryView[],
     /** Box 资源统计（Step 6）：每盒最新值；字段缺席=后端不可测（WSL 只有磁盘） */
     boxStats: {} as Record<string, { cpuPercent?: number; memoryMb?: number; diskMb?: number; at: number }>,
     /** 快照链（P4 Step 9）：全局快照目录事实（最近在前）；caps.snapshot=false 时空链 */
@@ -578,6 +615,28 @@ export const useKernelStore = defineStore('kernel', {
     async setSandbox(pref: SandboxPref): Promise<void> {
       await this.call('v1.sandbox.set', { preference: pref })
       await this.refreshSandbox()
+    },
+    /** 镜像注册表（P8-3）：刷新/增改删/连接测试——add/update 后服务端即时维护路由表 */
+    async refreshImages(): Promise<void> {
+      const state = await this.call<{ images: ImageEntryView[] }>('v1.images.list')
+      this.images = state.images
+    },
+    async addImage(input: ImageInputView): Promise<ImageEntryView> {
+      const state = await this.call<{ image: ImageEntryView }>('v1.images.add', input)
+      await this.refreshImages()
+      return state.image
+    },
+    async updateImage(id: string, patch: Partial<ImageInputView>): Promise<ImageEntryView> {
+      const state = await this.call<{ image: ImageEntryView }>('v1.images.update', { id, ...patch })
+      await this.refreshImages()
+      return state.image
+    },
+    async removeImage(id: string): Promise<void> {
+      await this.call('v1.images.remove', { id })
+      await this.refreshImages()
+    },
+    async testImage(id: string): Promise<ImageTestResult> {
+      return await this.call<ImageTestResult>('v1.images.test', { id })
     },
     /**
      * 会话历史懒加载（切换会话时调用一次）：transcript 是持久真相——内核重启后 SSE 事件流为空，
