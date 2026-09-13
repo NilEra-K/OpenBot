@@ -655,3 +655,250 @@
   resize: vertical;
   font-family: inherit;
 }
+
+/* ---- 切换式分类导航（UI 优化 2026-09-13，对照用户图例）：左侧组标+图标条目，右侧仅渲染
+   当前分节（v-show 保表单态）。布局居中收窄（1024），导航 sticky 跟随滚动 ---- */
+.settings-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 26px;
+  max-width: 1024px;
+  margin: 0 auto;
+}
+
+.settings-nav {
+  flex: none;
+  width: 188px;
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 40px;
+}
+
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav-group-label {
+  font-size: 11px;
+  color: var(--ink3);
+  letter-spacing: 0.05em;
+  padding: 0 10px 4px;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-nav-item:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.settings-nav-item.is-active {
+  background: var(--bg3);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.settings-nav-icon {
+  display: inline-flex;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ink3);
+}
+
+.settings-nav-item.is-active .settings-nav-icon {
+  color: var(--accent);
+}
+
+.settings-nav-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* 内容列在布局内让宽度（居中由 layout 管，不再自身居中） */
+.settings-layout .settings {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+}
+
+/* ---- 外观卡片行（UI 优化 2026-09-13，对照用户图例）：圆角容器 + 标题/说明居左 + 控件居右 ---- */
+.appearance-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg1);
+  overflow: hidden;
+}
+
+.appearance-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.appearance-row + .appearance-row {
+  border-top: 1px solid var(--line);
+}
+
+.appearance-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.appearance-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.appearance-desc {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink3);
+}
+
+.appearance-select {
+  flex: none;
+  width: 200px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg1);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.appearance-select:focus {
+  border-color: var(--accent);
+}
+
+/* ---- 卡片容器统一（UI 优化 0.1.26：外观卡片语言同步全部分节）——
+   行组件去自身边框，容器统一圆角边框 + 行间分隔线；既有类名保留（E2E 选择器零影响） ---- */
+.settings-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg1);
+  overflow: hidden;
+  margin: 0 0 14px;
+}
+
+.settings-card > * + * {
+  border-top: 1px solid var(--line);
+}
+
+.settings-card .kv {
+  padding: 12px 16px;
+  border-bottom: none;
+}
+
+.settings-card .cfg-row {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  padding: 12px 16px;
+}
+
+.settings-card .setrow {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  background: none;
+  padding: 12px 16px;
+}
+
+.settings-card .setrow:hover {
+  border-color: transparent;
+}
+
+.settings-card .settings-empty {
+  margin: 0;
+  padding: 14px 16px;
+}
+
+.settings-card .form-actions {
+  margin: 0;
+  padding: 12px 16px;
+}
+
+.settings-card .sandbox-list {
+  gap: 0;
+  margin: 0;
+}
+
+.settings-card .sandbox-row {
+  border: none;
+  border-radius: 0;
+  background: none;
+  padding: 10px 16px;
+}
+
+.settings-card .sandbox-row + .sandbox-row {
+  border-top: 1px solid var(--line);
+}
+
+/* ---- 后端行（沙箱分节 P8-4 后重构）：名称/说明居左 + 可用性 chip 居右 + caps chips 次行 ---- */
+.backend-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 16px;
+}
+
+.backend-row + .backend-row {
+  border-top: 1px solid var(--line);
+}
+
+.backend-row .appearance-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.backend-row .chip {
+  flex: none;
+}
+
+.backend-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.cap-chip {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg3);
+  color: var(--ink3);
+  white-space: nowrap;
+}
+
+.cap-chip.is-on {
+  background: var(--bg3);
+  color: var(--ink);
+}

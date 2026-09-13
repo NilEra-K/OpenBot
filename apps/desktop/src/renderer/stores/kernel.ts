@@ -621,6 +621,10 @@ export const useKernelStore = defineStore('kernel', {
       await this.call('v1.sandbox.set', { preference: pref })
       await this.refreshSandbox()
     },
+    /** 数据目录设置（UI 优化 0.1.26，用户需求）：写标记文件重启生效（旧数据不自动迁移） */
+    async setDataRoot(path: string | null): Promise<void> {
+      await this.call('v1.system.setDataRoot', { path })
+    },
     /** 镜像注册表（P8-3）：刷新/增改删/连接测试——add/update 后服务端即时维护路由表 */
     async refreshImages(): Promise<void> {
       const state = await this.call<{ images: ImageEntryView[] }>('v1.images.list')

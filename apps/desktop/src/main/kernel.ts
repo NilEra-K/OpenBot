@@ -13,6 +13,7 @@
 import { app, safeStorage } from 'electron'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { stat, statfs } from 'node:fs/promises'
 import { assembleKernel, chooseBackend } from '@openbot/coordinator'
 import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinator'
@@ -34,11 +35,17 @@ import {
   UtmBoxBackend,
   RoutingBoxBackend,
   WslBoxBackend,
+  MOCK_BOX_CAPS,
+  NSPAWN_BOX_CAPS,
+  OCI_BOX_CAPS,
+  SSH_BOX_CAPS,
+  UTM_BOX_CAPS,
+  WSL_BOX_CAPS,
   probeAll,
   probeX11Toolset,
   runProcess,
 } from '@openbot/boxes'
-import type { BackendProbe, BoxBackend, BoxStats, PipeSession, PipeSpec, ScreenAction } from '@openbot/boxes'
+import type { BackendProbe, BoxBackend, BoxCaps, BoxStats, PipeSession, PipeSpec, ScreenAction } from '@openbot/boxes'
 import { computerTools } from '@openbot/runner'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
@@ -239,6 +246,8 @@ export interface SandboxStatus {
   /** WSL 基础镜像查找路径与就绪与否（未就绪时 UI 引导用户放置） */
   rootfsPath: string
   rootfsReady: boolean
+  /** 每后端能力声明（P8-4 后 UI 优化）：id → caps——per-backend 呈现的事实源 */
+  backendCaps: Record<string, BoxCaps>
 }
 
 export interface DesktopKernel {
@@ -327,7 +336,27 @@ function mockGuiPipe(): ((boxId: string, spec: PipeSpec) => PipeSession) | undef
 export async function assembleDesktop(): Promise<DesktopKernel> {
   // NodeFs 路径约定 posix 风格（Windows 同样接受 '/'）
   const userDataRoot = app.getPath('userData').replaceAll('\\', '/')
-  const dataRoot = `${userDataRoot}/data`
+  // 数据目录可自定义（UI 优化 0.1.26，用户需求）：userData 根下 data-root.txt 标记承载覆盖路径
+  // （标记在数据目录之外——settings.json 随数据目录走，不能自举）；目录探测（建目录+写删探针）
+  // 失败如实回退默认。标记读写走 node:fs（userData 根不归数据目录的 NodeFs 实例管）
+  const dataRootMarker = `${userDataRoot}/data-root.txt`
+  let dataRoot = `${userDataRoot}/data`
+  try {
+    const custom = (existsSync(dataRootMarker) ? readFileSync(dataRootMarker, 'utf8') : '').trim()
+    if (custom !== '') {
+      mkdirSync(custom, { recursive: true })
+      rmSync(`${custom}/.openbot-root-probe`, { force: true })
+      writeFileSync(`${custom}/.openbot-root-probe`, '1')
+      rmSync(`${custom}/.openbot-root-probe`, { force: true })
+      dataRoot = custom
+    }
+  } catch (err) {
+    // 无标记（ENOENT）= 用户从未自定义——静默走默认；真错误才告警
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn('[openbot] 自定义数据目录标记读取失败——回退默认目录：', err)
+    }
+    dataRoot = `${userDataRoot}/data`
+  }
   const fs = new NodeFs()
   const settings = new SettingsStore({ fs, root: dataRoot, encrypt: encryptKey, decrypt: decryptKey })
   const provider = new SwitchableChatProvider()
@@ -478,6 +507,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   }
   const routedBackend: BoxBackend = routingBackend
   // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
+  // 每后端 caps 表（P8-4 后 UI 优化）：per-backend 呈现的事实源（常量即声明，零构造开销）
   const sandboxStatus: SandboxStatus = {
     preference,
     stored: await settings.getSandbox(),
@@ -485,6 +515,15 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     probes,
     rootfsPath,
     rootfsReady,
+    backendCaps: {
+      wsl: WSL_BOX_CAPS,
+      docker: OCI_BOX_CAPS,
+      podman: OCI_BOX_CAPS,
+      nspawn: NSPAWN_BOX_CAPS,
+      utm: UTM_BOX_CAPS,
+      ssh: SSH_BOX_CAPS,
+      mock: MOCK_BOX_CAPS,
+    },
   }
 
   let approvalGate!: ManualApprovalGate
@@ -807,6 +846,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       probes: sandboxStatus.probes,
       rootfsPath: sandboxStatus.rootfsPath,
       rootfsReady: sandboxStatus.rootfsReady,
+      backendCaps: sandboxStatus.backendCaps,
     }))
     .register('v1.sandbox.set', async (payload) => {
       const { preference: pref } = sandboxSetSchema.parse(payload)
@@ -883,6 +923,28 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await kernel.agentStore.setImage(agentId, imageId)
       return { ok: true, restartRequired: true }
     }, z.object({ agentId: z.string().min(1), imageId: z.string().trim().min(1).max(32).nullable() }))
+    // 数据目录设置（UI 优化 0.1.26，用户需求）：写 userData 根下 data-root.txt 标记（重启生效；
+    // 旧目录数据不自动迁移）。轻校验绝对路径形状；探测写删验证目录可用——失败如实拒绝
+    .register('v1.system.setDataRoot', async (payload) => {
+      const { path } = z
+        .object({ path: z.string().trim().min(1).max(500).nullable() })
+        .parse(payload)
+      if (path === null || path === '') {
+        await fs.write(dataRootMarker, '')
+        return { ok: true, restartRequired: true }
+      }
+      if (!/^[a-zA-Z]:[\\/]/.test(path) && !path.startsWith('/')) {
+        throw new KernelError('STATE_DATA_ROOT_INVALID', `须为绝对路径（如 D:\\OpenBotData）：${path}`)
+      }
+      try {
+        await fs.write(`${path}/.openbot-root-probe`, '1')
+        await fs.remove(`${path}/.openbot-root-probe`)
+      } catch (err) {
+        throw new KernelError('STATE_DATA_ROOT_INVALID', `目录不可用：${err instanceof Error ? err.message : String(err)}`)
+      }
+      await fs.write(dataRootMarker, path)
+      return { ok: true, restartRequired: true }
+    }, z.object({ path: z.string().trim().min(1).max(500).nullable() }))
 
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })

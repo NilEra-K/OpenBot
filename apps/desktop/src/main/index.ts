@@ -5,6 +5,7 @@
  */
 import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { dirname, join, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { DesktopKernel } from './kernel.js'
 
@@ -143,10 +144,18 @@ ipcMain.handle('openbot:auto-launch:set', (_e, enabled: boolean) => {
 // transcript 落 <data>/agents/<agentId>/transcript.jsonl（state 包布局约定）
 ipcMain.handle('openbot:paths', () => {
   const userData = app.getPath('userData')
+  // 自定义数据目录（P8-4 后 UI 优化）：userData 根下 data-root.txt 标记——与 kernel.ts 装配端同一真相
+  let dataDir = join(userData, 'data')
+  try {
+    const custom = readFileSync(join(userData, 'data-root.txt'), 'utf8').trim()
+    if (custom !== '') dataDir = custom
+  } catch {
+    /* 无标记——默认目录 */
+  }
   return {
     userData,
-    data: join(userData, 'data'),
-    transcript: join(userData, 'data', 'agents'),
+    data: dataDir,
+    transcript: join(dataDir, 'agents'),
   }
 })
 

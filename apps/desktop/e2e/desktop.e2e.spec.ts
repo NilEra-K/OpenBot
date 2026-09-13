@@ -65,8 +65,10 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await expect(page.locator('.cfg-row', { hasText: 'E2E mock' })).toBeVisible()
     await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
     await expect(page.locator('.cfg-row.is-primary', { hasText: 'E2E mock' })).toBeVisible()
-    // 沙箱后端：OPENBOT_SANDBOX=mock env 覆盖 → 装配链路落在 mock（不依赖宿主 WSL/Docker）
-    await expect(page.locator('.kv', { hasText: '当前后端' })).toContainText('模拟')
+    // 沙箱后端：OPENBOT_SANDBOX=mock env 覆盖 → 装配链路落在 mock（不依赖宿主 WSL/Docker）——
+    // 默认沙箱状态卡呈现（P8-4 后 UI 优化：全局偏好选择退役，per-backend 可用性 + caps）
+    await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click() // 切换式导航
+    await expect(page.locator('.settings-card', { hasText: '默认沙箱' })).toContainText('模拟')
 
     // —— console：发消息 ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -1089,12 +1091,14 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
 
     // —— 数据区块（裁定 E 一期只读）：路径指向本 userData、打开按钮在场（不点击——会真开资源管理器） ——
     await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '数据' }).click() // 切换式导航
     await expect(page.locator('.set-sec', { hasText: '数据' })).toBeVisible()
     await expect(page.locator('.kv', { hasText: '数据目录' })).toContainText('data')
     await expect(page.locator('.kv', { hasText: 'transcript' })).toContainText('agents')
     await expect(page.getByRole('button', { name: '打开数据文件夹' })).toBeVisible()
 
     // —— 配置两端点：主力 = 必然连接失败端口；回退 = E2E mock ——
+    await page.locator('.settings-nav-item', { hasText: '模型设置' }).click() // 切换式导航（从数据分节切回模型分节）
     await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfName').fill('坏端点')
     await page.locator('#pfUrl').fill('http://127.0.0.1:9/v1')
@@ -1222,17 +1226,18 @@ test('平台裁剪（P6 Step 5）：win 上 nspawn/UTM 不出现——探测列�
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
     await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click() // 切换式导航
 
     // win 探测列表（probeAll 平台裁剪）：mock/wsl/docker/podman 在场，nspawn/utm 不探——
     // 选项集与探测区同源（探测事实驱动），两处都不得出现异平台后端
-    await expect(page.locator('.sandbox-row', { hasText: 'systemd-nspawn' })).toHaveCount(0)
-    await expect(page.locator('.sandbox-row', { hasText: 'UTM' })).toHaveCount(0)
+    await expect(page.locator('.backend-row', { hasText: 'systemd-nspawn' })).toHaveCount(0)
+    await expect(page.locator('.backend-row', { hasText: 'UTM' })).toHaveCount(0)
     await expect(page.locator('.sandbox-probe', { hasText: 'systemd-nspawn' })).toHaveCount(0)
     await expect(page.locator('.sandbox-probe', { hasText: 'UTM' })).toHaveCount(0)
     // 本平台候选在场：WSL2 选项（探测项不问可用性——不可用时选项在、选中如实降级）
-    await expect(page.locator('.sandbox-row', { hasText: 'WSL2' })).toHaveCount(1)
+    await expect(page.locator('.backend-row', { hasText: 'WSL2' })).toHaveCount(1)
     // 探测并入列表行后（0.1.2 改版）：mock 行恒在（确定性地基），无独立探测区
-    await expect(page.locator('.sandbox-row', { hasText: '模拟' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.backend-row', { hasText: '模拟' })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.sandbox-probe')).toHaveCount(0)
   } finally {
     await app.close()
@@ -1334,7 +1339,8 @@ test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
-    // 新建自动化（模态：cron 预览在场）
+    // 新建自动化（模态：cron 预览在场）——先切到自动化分节（切换式导航）
+    await page.locator('.settings-nav-item', { hasText: '自动化' }).click()
     await page.getByRole('button', { name: '＋ 新建', exact: true }).click()
     await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('新建自动化')
     await page.locator('.wiz-overlay input.mono').fill('* * * * *')
@@ -1545,6 +1551,7 @@ test('镜像注册表（P8-3）：CRUD 全链 + 连接测试如实报告 + 多�
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
     await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '镜像' }).click() // 切换式导航
 
     // —— 添加 SSH 条目（真实 UI 全链；不可达主机——测试按钮须如实报失败，不假装可用） ——
     await page.getByRole('button', { name: '＋ 添加镜像' }).click()
@@ -1605,6 +1612,7 @@ test('镜像注册表（P8-3）：CRUD 全链 + 连接测试如实报告 + 多�
     try {
       await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
       await page2.getByRole('button', { name: '设置', exact: true }).click()
+      await page2.locator('.settings-nav-item', { hasText: '镜像' }).click() // 切换式导航
       await expect(page2.locator('.cfg-row', { hasText: 'GUI 容器' })).toBeVisible({ timeout: 10_000 })
     } finally {
       await app2.close()
@@ -1629,6 +1637,7 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
 
     // —— 前置：注册一个容器镜像条目（mock 底座不可路由——注册落默认沙箱，绑定持久照常） ——
     await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '镜像' }).click() // 切换式导航
     await page.getByRole('button', { name: '＋ 添加镜像' }).click()
     await page.locator('label.proto-opt', { hasText: '容器镜像' }).click()
     await page.locator('#ifName').fill('GUI 容器')
@@ -1671,6 +1680,7 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
 
       // —— 删除镜像条目 → 重启 → 悬空如实呈现「已删除 · 回默认沙箱」（agent 存活不炸装配） ——
       await page2.getByRole('button', { name: '设置', exact: true }).click()
+      await page2.locator('.settings-nav-item', { hasText: '镜像' }).click() // 切换式导航（每次进设置回落默认分节）
       const del = page2.locator('.cfg-row', { hasText: 'GUI 容器' }).locator('[data-role="image-remove"]')
       await del.click()
       await expect(del).toHaveText('确认删除？')

@@ -96,6 +96,42 @@ onMounted(() => {
   void kernel.refreshImages()
 })
 
+// ---- 设置分类导航（切换式，2026-09-13 UI 优化，对照用户图例）：左侧组标+图标条目，右侧仅渲染当前分节（v-show 保表单态） ----
+type SettingsSectionId = 'llm' | 'runtime' | 'automation' | 'policy' | 'data' | 'general' | 'appearance' | 'about'
+const activeSection = ref<SettingsSectionId>('llm')
+const ICON = (paths: string): string =>
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>'
+const SETTINGS_GROUPS: Array<{ label: string; items: Array<{ id: SettingsSectionId; label: string; icon: string }> }> = [
+  {
+    label: '智能与应用',
+    items: [
+      { id: 'llm', label: '模型设置', icon: ICON('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>') },
+      { id: 'automation', label: '自动化', icon: ICON('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>') },
+    ],
+  },
+  {
+    label: '执行环境',
+    items: [
+      { id: 'runtime', label: '容器与镜像', icon: ICON('<path d="M12 2l10 5-10 5L2 7z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/>') },
+    ],
+  },
+  {
+    label: '权限与数据',
+    items: [
+      { id: 'policy', label: '权限策略', icon: ICON('<path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/>') },
+      { id: 'data', label: '数据', icon: ICON('<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>') },
+    ],
+  },
+  {
+    label: '通用',
+    items: [
+      { id: 'general', label: '通用', icon: ICON('<path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h7"/>') },
+      { id: 'appearance', label: '外观', icon: ICON('<path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2v-1c0-1.7 1.3-3 3-3h2a4 4 0 0 0 4-4c0-5.5-4.9-10-11-10z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16.5" cy="10.5" r="1"/>') },
+      { id: 'about', label: '关于', icon: ICON('<circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M12 12v4"/>') },
+    ],
+  },
+]
+
 // ---- 镜像注册表（plan-image-firstclass P8-3）：条目清单 + 载体分表单模态 + 连接测试 ----
 const imageFormOpen = ref(false)
 const imageEditingId = ref<string | null>(null)
@@ -411,6 +447,37 @@ onMounted(() => {
     .catch(() => (dataPaths.value = null)) // 桥缺失（浏览器 dev）——如实降级
 })
 
+// ---- 数据目录设置（UI 优化 0.1.26，用户需求）：标记文件重启生效，旧数据不自动迁移 ----
+const dataRootOpen = ref(false)
+const dataRootDraft = ref('')
+const dataRootError = ref<string | null>(null)
+const dataRootSaving = ref(false)
+
+const openDataRoot = (): void => {
+  dataRootDraft.value = dataPaths.value?.data ?? ''
+  dataRootError.value = null
+  dataRootOpen.value = true
+}
+
+const saveDataRoot = async (path: string | null = dataRootDraft.value.trim()): Promise<void> => {
+  if (dataRootSaving.value) return
+  dataRootSaving.value = true
+  dataRootError.value = null
+  try {
+    await kernel.setDataRoot(path)
+    toast.push(path === null ? '数据目录已恢复默认——重启应用后生效' : '数据目录已更新——重启应用后生效', 'success')
+    dataRootOpen.value = false
+  } catch (err) {
+    dataRootError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    dataRootSaving.value = false
+  }
+}
+
+const saveDataRootDefault = (): void => {
+  void saveDataRoot(null)
+}
+
 /** 打开数据文件夹（main 白名单限定 userData 内；返回错误消息，空串 = 成功） */
 const openFolder = (path: string): void => {
   void window.openbot?.app?.openPath(path).then((err: string) => {
@@ -421,37 +488,20 @@ const openFolder = (path: string): void => {
 /** 档案名缩写徽标（大写两字符内） */
 const markOf = (name: string): string => name.trim().slice(0, 2).toUpperCase() || '?'
 
-const capsRows = computed(() => {
-  const caps = kernel.caps
-  if (!caps) return []
-  return [
-    { k: '快照', v: caps.snapshot ? '支持' : '不支持' },
-    { k: '常驻', v: caps.persistent ? '支持' : '不支持' },
-    { k: '无头执行', v: caps.headless ? '支持' : '不支持' },
-    { k: '资源限额', v: caps.resourceLimits ? '支持' : '不支持' },
-    { k: '隔离强度', v: caps.isolation },
-  ]
-})
-
 // ---- 沙箱后端偏好（写 settings 重启生效；表单值与 stored 分离——未保存改动有提示） ----
 
-interface PrefOption {
-  value: SandboxPref
-  label: string
-  note: string
-  disabled?: boolean
+const BACKEND_META: Record<string, { label: string; note: string }> = {
+  wsl: { label: 'WSL2', note: '每 Box 一个发行版（Windows 主力）' },
+  nspawn: { label: 'systemd-nspawn', note: '机器即 Box（Linux；写操作需 root/polkit 授权）' },
+  utm: { label: 'UTM', note: '虚拟机即 Box（macOS；从预建模板克隆，需 guest agent）' },
+  docker: { label: 'Docker', note: '容器即 Box（需 Docker Desktop 运行）' },
+  podman: { label: 'Podman', note: '容器即 Box（需 podman machine 运行）' },
+  ssh: { label: 'SSH 主机', note: '机器即 Box（VMWare/云主机——env OPENBOT_SSH_HOST 等接入，显式偏好 opt-in）' },
+  mock: { label: '模拟', note: '命令返回模拟输出（测试用）' },
 }
-
-const PREF_OPTIONS: PrefOption[] = [
-  { value: 'auto', label: '自动', note: '按平台择优可用（探测事实驱动）' },
-  { value: 'wsl', label: 'WSL2', note: '每 Box 一个发行版（Windows 主力）' },
-  { value: 'nspawn', label: 'systemd-nspawn', note: '机器即 Box（Linux；写操作需 root/polkit 授权）' },
-  { value: 'utm', label: 'UTM', note: '虚拟机即 Box（macOS；从预建模板克隆，需 guest agent）' },
-  { value: 'docker', label: 'Docker', note: '容器即 Box（需 Docker Desktop 运行）' },
-  { value: 'podman', label: 'Podman', note: '容器即 Box（需 podman machine 运行）' },
-  { value: 'ssh', label: 'SSH 主机', note: '机器即 Box（VMWare/云主机——env OPENBOT_SSH_HOST 等接入，显式偏好 opt-in）' },
-  { value: 'mock', label: '模拟', note: '命令返回模拟输出（测试用）' },
-]
+/** 展示顺序（探测顺序随平台变化——呈现用固定序） */
+const BACKEND_ORDER = ['wsl', 'nspawn', 'utm', 'docker', 'podman', 'ssh', 'mock']
+const ISO_LABEL: Record<string, string> = { low: '弱', medium: '中', high: '强' }
 
 const BACKEND_LABELS: Record<string, string> = {
   auto: '自动',
@@ -465,43 +515,35 @@ const BACKEND_LABELS: Record<string, string> = {
 }
 
 /**
- * 偏好选项按探测在场过滤（P6 Step 5）：auto/mock 恒在，真实后端只有探测列表里有的才出选项——
- * 平台裁剪后的 probes 天然不含异平台后端（win 上不出现 nspawn/UTM），探测事实驱动零 if 平台特判
+ * 后端行（P8-4 后 UI 优化）：可用性（探测事实）× 每后端 caps（常量声明经 v1.sandbox.status 下发）——
+ * 全局「偏好选择」已随镜像绑定退役：Agent 经镜像条目选载体，后端只看可用性；默认沙箱是状态行非选择器
  */
-const prefOptions = computed<PrefOption[]>(() => {
-  if (!kernel.sandbox) return PREF_OPTIONS.filter((o) => o.value === 'auto' || o.value === 'mock')
-  const probed = new Set(kernel.sandbox.probes.map((p) => p.id))
-  return PREF_OPTIONS.filter((o) => o.value === 'auto' || o.value === 'mock' || probed.has(o.value as Exclude<SandboxPref, 'auto' | 'mock'>))
+const backendRows = computed(() => {
+  const sandbox = kernel.sandbox
+  if (!sandbox) return []
+  const probed = new Map(sandbox.probes.map((p) => [p.id as string, p]))
+  return BACKEND_ORDER.filter((id) => probed.has(id)).map((id) => {
+    const probe = probed.get(id)!
+    const caps = sandbox.backendCaps?.[id]
+    const capChips = caps
+      ? [
+          { label: '快照', on: caps.snapshot },
+          { label: '休眠', on: caps.suspendable },
+          { label: '限额', on: caps.resourceLimits },
+          { label: '终端', on: caps.interactive },
+          { label: '隔离 ' + (ISO_LABEL[caps.isolation] ?? caps.isolation), on: true },
+        ]
+      : []
+    return {
+      id,
+      label: BACKEND_META[id]?.label ?? id,
+      note: BACKEND_META[id]?.note ?? '',
+      available: probe.available,
+      reason: probe.reason ?? '',
+      capChips,
+    }
+  })
 })
-
-/** 该偏好项的探测事实（0.1.2 列表化：chip 并入行内；auto 无探测项返回 undefined，mock 恒可用） */
-const probeOf = (value: SandboxPref) => kernel.sandbox?.probes.find((p) => p.id === value)
-
-const sandboxChoice = ref<SandboxPref>('auto')
-const sandboxError = ref<string | null>(null)
-/** stored 变化（boot 加载/set 成功）时同步表单值 */
-watch(
-  () => kernel.sandbox,
-  (s) => {
-    if (s) sandboxChoice.value = s.stored
-  },
-  { immediate: true },
-)
-
-const sandboxDirty = computed(() => kernel.sandbox !== null && sandboxChoice.value !== kernel.sandbox.stored)
-
-const applySandbox = async (): Promise<void> => {
-  if (!kernel.sandbox) return
-  const prev = kernel.sandbox.stored
-  try {
-    await kernel.setSandbox(sandboxChoice.value)
-    sandboxError.value = null
-    toast.push('沙箱偏好已保存——重启应用后生效', 'success')
-  } catch (err) {
-    sandboxChoice.value = prev // 写入失败回滚（呈现与 settings 真相一致）
-    sandboxError.value = err instanceof Error ? err.message : String(err)
-  }
-}
 
 /** 后端显示名 */
 const backendLabel = (id: string): string => BACKEND_LABELS[id] ?? id
@@ -522,15 +564,33 @@ const wslHelpNeeded = computed(() => {
 
 <template>
   <section class="view view-scroll">
-    <div class="settings">
+    <div class="settings-layout">
+      <nav class="settings-nav" aria-label="设置分类">
+        <div v-for="g in SETTINGS_GROUPS" :key="g.label" class="settings-nav-group">
+          <div class="settings-nav-group-label">{{ g.label }}</div>
+          <button
+            v-for="item in g.items"
+            :key="item.id"
+            type="button"
+            class="settings-nav-item"
+            :class="{ 'is-active': activeSection === item.id }"
+            @click="activeSection = item.id"
+          >
+            <span class="settings-nav-icon" v-html="item.icon"></span>{{ item.label }}
+          </button>
+        </div>
+      </nav>
+      <div class="settings">
+      <div v-show="activeSection === 'llm'" class="settings-section">
       <!-- LLM 推理（真实命令面）——说明收进 ⓘ（0.1.2 设置页改版：正文只留活数据） -->
       <div class="set-sec-row">
-        <div class="set-sec">LLM 推理</div>
+        <div class="set-sec">模型设置</div>
         <HelpTip
           text="接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个；设为主力后对管家与全部 agent 下轮对话生效；可设一个回退端点——主力请求失败（网络/超时/过载）时本轮自动降级，主力恢复后下轮自然切回。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。"
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openCreate">＋ 添加模型</button>
       </div>
+      <div class="settings-card">
       <div class="kv">
         <span class="k">当前主力</span>
         <span class="v mono">{{ kernel.defaultProvider ?? '未配置（对话将失败）' }}</span>
@@ -560,6 +620,8 @@ const wslHelpNeeded = computed(() => {
         </div>
       </div>
       <p v-if="kernel.providers.length === 0" class="settings-empty">还没有模型端点——添加一个开始对话</p>
+      </div>
+
 
       <!-- 添加/编辑表单（模态——AgentWizard/GroupWizard 容器同款；字段 id 全保留：E2E 定位与路径不变） -->
       <div v-if="formOpen" class="wiz-overlay" @mousedown.self="closeForm()">
@@ -618,81 +680,75 @@ const wslHelpNeeded = computed(() => {
         </div>
       </div>
 
-      <!-- 沙箱后端（装配事实 + 偏好选择；plan-p3 Step 5）——说明收进 ⓘ（0.1.2 改版：
-           偏好改五行列表，环境探测并入行内 chip，不再独立分节） -->
+      </div>
+      <div v-show="activeSection === 'runtime'" class="settings-section">
+      <!-- 容器与镜像（P8-4 语义）：Agent 经镜像绑定选载体；默认沙箱按平台自动择优 -->
       <div class="set-sec-row">
-        <div class="set-sec">沙箱后端</div>
+        <div class="set-sec">容器与镜像</div>
         <HelpTip
-          text="重活进本机沙箱。装配时按「偏好 × 环境探测」选择后端——改动偏好重启后生效（装配期决策，不热切换）；偏好不可用时如实回退 mock（命令返回模拟输出）并注明原因。"
+          text="各执行载体的可用性与能力一览（探测事实驱动）。Agent 通过绑定镜像条目选择载体（向导/ctx 均可）；未绑定镜像的 agent 使用默认沙箱——按平台自动择优，env OPENBOT_SANDBOX 可强制指定；不可用时如实回退 mock 并注明原因。"
         />
       </div>
       <template v-if="kernel.sandbox">
-        <div class="kv">
-          <span class="k">当前后端</span>
-          <span class="v mono">
-            {{ backendLabel(kernel.sandbox.backendId) }}<template v-if="kernel.sandbox.reason">（降级）</template>
-          </span>
+        <!-- 默认沙箱（状态行——非选择器）：未绑定镜像的 agent 落在这里 -->
+        <div class="settings-card">
+          <div class="appearance-row">
+            <div class="appearance-main">
+              <div class="appearance-name">默认沙箱</div>
+              <div class="appearance-desc">
+                未绑定镜像的 agent 使用——按平台自动择优，env OPENBOT_SANDBOX 可强制指定。
+                <template v-if="kernel.sandbox.reason">降级原因：{{ kernel.sandbox.reason }}</template>
+              </div>
+            </div>
+            <span class="chip chip-accent">{{ backendLabel(kernel.sandbox.backendId) }}</span>
+          </div>
+          <p v-if="kernel.sandbox.reason" class="sandbox-warn">⚠ {{ kernel.sandbox.reason }}</p>
+          <p v-if="wslRelevant" class="sandbox-warn">
+            WSL 基础镜像未就绪：请把 Ubuntu rootfs 压缩包（tar.gz）放到
+            <span class="mono">{{ kernel.sandbox.rootfsPath }}</span>，或设环境变量 OPENBOT_WSL_ROOTFS 指向已有文件后重启。
+          </p>
+          <p v-if="wslHelpNeeded" class="sandbox-warn">
+            一键安装暂不提供（自动安装系统级软件风险高于收益）：WSL2 启用与 rootfs 制作步骤见仓库文档
+            <span class="mono">docs/platforms.md</span>，完成后重启应用即可生效。
+          </p>
         </div>
-        <p v-if="kernel.sandbox.reason" class="sandbox-warn">⚠ {{ kernel.sandbox.reason }}</p>
-        <p v-if="wslRelevant" class="sandbox-warn">
-          WSL 基础镜像未就绪：请把 Ubuntu rootfs 压缩包（tar.gz）放到
-          <span class="mono">{{ kernel.sandbox.rootfsPath }}</span>，或设环境变量 OPENBOT_WSL_ROOTFS 指向已有文件后重启。
-        </p>
-        <!-- 一键配置降级引导（裁定 D）：不自动装系统级软件，指引到仓库文档 -->
-        <p v-if="wslHelpNeeded" class="sandbox-warn">
-          一键安装暂不提供（自动安装系统级软件风险高于收益）：WSL2 启用与 rootfs 制作步骤见仓库文档
-          <span class="mono">docs/platforms.md</span>，完成后重启应用即可生效。
-        </p>
 
-        <!-- 偏好五行列表：名称 + 说明 + 该后端探测 chip（auto 无探测项/mock 恒可用） -->
-        <div class="sandbox-list">
-          <label
-            v-for="opt in prefOptions"
-            :key="opt.value"
-            class="sandbox-row"
-            :class="{ 'is-on': sandboxChoice === opt.value, 'is-disabled': opt.disabled }"
-          >
-            <input
-              type="radio"
-              name="sandbox-pref"
-              class="sandbox-pref-radio"
-              :value="opt.value"
-              v-model="sandboxChoice"
-              :disabled="opt.disabled"
-              @change="applySandbox"
-            />
-            <span class="sandbox-row-label">{{ opt.label }}</span>
-            <span class="sandbox-row-note">{{ opt.note }}</span>
+        <!-- 各后端可用性与能力（探测事实 × 每后端 caps 常量——P8-4 后全局偏好选择退役，Agent 经镜像绑定选载体） -->
+        <div class="settings-card">
+          <div v-for="row in backendRows" :key="row.id" class="backend-row">
+            <div class="appearance-main">
+              <div class="appearance-name">{{ row.label }}</div>
+              <div class="appearance-desc">{{ row.note }}</div>
+              <div v-if="row.available && row.capChips.length" class="backend-caps">
+                <span
+                  v-for="c in row.capChips"
+                  :key="c.label"
+                  class="cap-chip"
+                  :class="{ 'is-on': c.on }"
+                >{{ c.label }} {{ c.on ? '✓' : '✗' }}</span>
+              </div>
+            </div>
             <span
-              v-if="probeOf(opt.value)"
-              class="chip sandbox-row-probe"
-              :class="probeOf(opt.value)!.available ? 'chip-success' : ''"
-              :title="probeOf(opt.value)!.available ? 'CLI 探测可用' : probeOf(opt.value)!.reason"
-            >
-              {{ probeOf(opt.value)!.available ? '可用' : '不可用' }}
-            </span>
-          </label>
-        </div>
-        <p v-if="sandboxDirty" class="set-sec-note">偏好已修改——重启应用后生效（当前会话仍运行在 {{ backendLabel(kernel.sandbox.backendId) }}）。</p>
-        <p v-if="sandboxError" class="form-error">{{ sandboxError }}</p>
-
-        <!-- caps 事实（随所选后端变化） -->
-        <div class="kv"><span class="k">能力声明（caps）</span><span class="v"></span></div>
-        <div v-for="row in capsRows" :key="row.k" class="kv kv-sub">
-          <span class="k">{{ row.k }}</span><span class="v mono">{{ row.v }}</span>
+              class="chip"
+              :class="row.available ? 'chip-success' : ''"
+              :title="row.reason"
+            >{{ row.available ? '可用' : '不可用' }}</span>
+          </div>
         </div>
       </template>
       <p v-else class="settings-empty">沙箱状态未加载（网关未连接）</p>
 
+
       <!-- 镜像注册表（plan-image-firstclass P8-3）：条目 = 载体 + 连接事实 + 控制协议——
            Agent 绑定镜像条目随 P8-4 开放；add/update 即时维护路由表（无需重启） -->
       <div class="set-sec-row">
-        <div class="set-sec">镜像</div>
+        <div class="set-sec">镜像注册表</div>
         <HelpTip
           text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 tools/provision-gui.sh 预置桌面工具集。"
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openImageCreate">＋ 添加镜像</button>
       </div>
+      <div class="settings-card">
       <div v-for="img in kernel.images" :key="img.id" class="cfg-row" :data-image-id="img.id">
         <div class="cfg-main">
           <div class="cfg-name">{{ img.name }}</div>
@@ -716,6 +772,7 @@ const wslHelpNeeded = computed(() => {
       </div>
       <p v-if="kernel.images.length === 0" class="settings-empty">尚无镜像条目——SSH 主机（VMWare/云电脑）与容器镜像都可在此注册</p>
 
+      </div>
       <!-- 镜像条目表单（模态——provider 模态同款容器；字段 id 供 E2E 定位） -->
       <div v-if="imageFormOpen" class="wiz-overlay" @mousedown.self="closeImageForm()">
         <div class="wiz-card" role="dialog" aria-label="镜像条目配置" @keydown.escape="closeImageForm">
@@ -789,6 +846,8 @@ const wslHelpNeeded = computed(() => {
         </div>
       </div>
 
+      </div>
+      <div v-show="activeSection === 'automation'" class="settings-section">
       <!-- 定时自动化（backlog ②）：规则到点 → 以用户身份给 agent 发消息（走既有审批管线）——
            说明收进 ⓘ；列表 + 模态（cron 即时预览下次触发——防写错） -->
       <div class="set-sec-row">
@@ -798,6 +857,8 @@ const wslHelpNeeded = computed(() => {
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openAutomation(null)">＋ 新建</button>
       </div>
+      <div class="settings-card">
+
       <div v-for="a in kernel.automations" :key="a.id" class="setrow">
         <div class="set-main">
           <div class="set-name">{{ a.name }} <span class="mono automation-cron">{{ a.cron }}</span></div>
@@ -818,7 +879,11 @@ const wslHelpNeeded = computed(() => {
         <button class="btn btn-ghost btn-sm btn-danger" @click="removeAutomationRow(a)">删除</button>
       </div>
       <p v-if="kernel.automations.length === 0" class="settings-empty">还没有自动化规则——到点让 agent 干活（如每天 9 点汇总）。</p>
+      </div>
 
+
+      </div>
+      <div v-show="activeSection === 'policy'" class="settings-section">
       <!-- 权限策略（呈现现状，不放假开关）——说明收进 ⓘ（0.1.2 改版） -->
       <div class="set-sec-row">
         <div class="set-sec">权限策略</div>
@@ -826,7 +891,18 @@ const wslHelpNeeded = computed(() => {
           text="当前为手工审批闸门（Manual）：agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。"
         />
       </div>
+      <div class="settings-card">
+        <div class="appearance-row">
+          <div class="appearance-main">
+            <div class="appearance-name">审批闸门</div>
+            <div class="appearance-desc">agent 在 Box 内自由执行；触碰宿主机文件或出网时逐条请求批准，挂起期间 run 计入 deadline；应用重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。</div>
+          </div>
+          <span class="chip" :class="kernel.approvalMode === 'manual' ? 'chip-accent' : ''">{{ kernel.approvalMode === 'manual' ? '手工审批' : '自动批准' }}</span>
+        </div>
+      </div>
 
+      </div>
+      <div v-show="activeSection === 'data'" class="settings-section">
       <!-- 数据（P4 Step 11，裁定 E 一期只读：路径展示 + 打开文件夹；导出/清空属后续版本） -->
       <div class="set-sec-row">
         <div class="set-sec">数据</div>
@@ -834,17 +910,52 @@ const wslHelpNeeded = computed(() => {
           text="对话与执行记录以 JSONL 追加落盘（append-only——只增不改，永不就地改写历史）；全部数据只在本机，不上传。导出全部 / 清空 transcript 属后续版本。"
         />
       </div>
+      <div class="settings-card">
+
       <template v-if="dataPaths">
-        <div class="kv"><span class="k">数据目录</span><span class="v mono kv-path">{{ dataPaths.data }}</span></div>
-        <div class="kv"><span class="k">transcript</span><span class="v mono kv-path">{{ dataPaths.transcript }}</span></div>
-        <div class="form-actions">
-          <button class="btn btn-secondary btn-sm" @click="openFolder(dataPaths.userData)">打开数据文件夹</button>
+        <div class="kv">
+          <span class="k">数据目录</span>
+          <span class="v mono kv-path">{{ dataPaths.data }}</span>
+          <span class="kv-actions">
+            <button class="btn btn-ghost btn-sm kv-icon" aria-label="打开数据文件夹" title="打开数据文件夹" @click="openFolder(dataPaths.data)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+            <button class="btn btn-ghost btn-sm kv-icon" aria-label="设置数据目录" title="设置数据目录（重启生效）" @click="openDataRoot"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          </span>
         </div>
+        <div class="kv"><span class="k">transcript</span><span class="v mono kv-path">{{ dataPaths.transcript }}</span></div>
       </template>
       <p v-else class="settings-empty">开发模式（无壳）——数据路径由桌面壳提供</p>
 
+      <!-- 数据目录设置（模态——provider 模态同款容器；重启生效，旧数据不自动迁移） -->
+      <div v-if="dataRootOpen" class="wiz-overlay" @mousedown.self="dataRootOpen = false">
+        <div class="wiz-card" role="dialog" aria-label="数据目录设置" @keydown.escape="dataRootOpen = false">
+          <div class="wiz-head">
+            <span class="wiz-title">设置数据目录</span>
+            <button class="wiz-close" type="button" aria-label="关闭" @click="dataRootOpen = false">✕</button>
+          </div>
+          <div class="wiz-body provider-form">
+            <div class="field">
+              <label class="field-label" for="drPath">数据目录（绝对路径）</label>
+              <input id="drPath" v-model="dataRootDraft" class="field-input mono" placeholder="D:\\OpenBotData" autocomplete="off" spellcheck="false" />
+              <p class="wiz-note">重启应用后生效。切换目录不会自动迁移数据——将现有 data 文件夹整体搬到新位置后指向它，即可无缝继承全部设置与对话记录；恢复默认则回到应用数据目录下的 data。</p>
+            </div>
+            <p v-if="dataRootError" class="form-error">{{ dataRootError }}</p>
+          </div>
+          <div class="wiz-foot">
+            <button class="btn btn-primary" :disabled="dataRootSaving || dataRootDraft.trim() === ''" @click="saveDataRoot()">{{ dataRootSaving ? '保存中…' : '保存' }}</button>
+            <button class="btn btn-ghost" @click="dataRootOpen = false">取消</button>
+            <span class="wiz-spacer"></span>
+            <button class="btn btn-ghost" :disabled="dataRootSaving" @click="saveDataRootDefault()">恢复默认</button>
+          </div>
+        </div>
+      </div>
+      </div>
+
+
+      </div>
+      <div v-show="activeSection === 'general'" class="settings-section">
       <!-- 通用（0.1.0 产品化）：系统自启动——注册表现状即真相，开关即时生效 -->
       <div class="set-sec">通用</div>
+      <div class="settings-card">
       <div class="setrow">
         <div class="set-main">
           <div class="set-name">开机自启动</div>
@@ -859,7 +970,11 @@ const wslHelpNeeded = computed(() => {
           @click="toggleAutoLaunch"
         ></button>
       </div>
+      </div>
 
+
+      </div>
+      <div v-show="activeSection === 'appearance'" class="settings-section">
       <!-- 外观（呈现层偏好，即时生效）——说明收进 ⓘ（0.1.2 改版）；主题选项同步列表化 -->
       <div class="set-sec-row">
         <div class="set-sec">外观</div>
@@ -867,19 +982,19 @@ const wslHelpNeeded = computed(() => {
           text="日间/夜间主题即时生效，「跟随系统」随 Windows 主题自动切换；标题栏的太阳/月亮按钮可随时快捷切换。此偏好只存本机（浏览器存储），不进内核设置。"
         />
       </div>
-      <div class="sandbox-list">
-        <label
-          v-for="opt in THEME_OPTIONS"
-          :key="opt.value"
-          class="sandbox-row"
-          :class="{ 'is-on': ui.theme === opt.value }"
-        >
-          <input type="radio" name="theme-pref" class="sandbox-pref-radio" :value="opt.value" v-model="themeChoice" />
-          <span class="sandbox-row-label">{{ opt.label }}</span>
-          <span class="sandbox-row-note">{{ opt.note }}</span>
-        </label>
+      <div class="appearance-card">
+        <div class="appearance-row">
+          <div class="appearance-main">
+            <div class="appearance-name">界面主题</div>
+            <div class="appearance-desc">选择浅色、深色或跟随系统主题。标题栏的太阳/月亮按钮可随时快捷切换。</div>
+          </div>
+          <select v-model="themeChoice" class="appearance-select" aria-label="界面主题">
+            <option v-for="opt in THEME_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+        </div>
       </div>
 
+      </div>
       <!-- 自动化模态（新建/编辑共用；cron 即时预览下次触发） -->
       <div v-if="automationModal" class="wiz-overlay" @mousedown.self="automationModal = false">
         <div class="wiz-card" role="dialog" aria-label="自动化规则" @keydown.escape="automationModal = false">
@@ -922,10 +1037,17 @@ const wslHelpNeeded = computed(() => {
         </div>
       </div>
 
+      <div v-show="activeSection === 'about'" class="settings-section">
       <!-- 关于 -->
       <div class="set-sec">关于</div>
+      <div class="settings-card">
+
       <div class="kv"><span class="k">版本</span><span class="v mono">{{ appVersion ? `v${appVersion}` : '开发模式（无壳）' }}</span></div>
       <div class="kv"><span class="k">许可</span><span class="v">Apache-2.0 · 净室自研</span></div>
+      </div>
+
+      </div>
+    </div>
     </div>
   </section>
 </template>
