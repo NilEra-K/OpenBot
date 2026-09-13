@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { MockChatProvider } from '@openbot/llm'
 import type { MockStep } from '@openbot/llm'
 import { MockBoxBackend } from '@openbot/boxes'
+import { RoutingBoxBackend } from '@openbot/boxes'
+import type { BoxBackend } from '@openbot/boxes'
 import { ManualApprovalGate } from '@openbot/runner'
 import { assembleKernel, InProcessCarrier } from '../src/index.js'
 import type { AssembledKernel } from '../src/index.js'
@@ -355,5 +357,52 @@ describe('InProcessCarrier（部署开关缝）', () => {
     off()
     await carrier.stop()
     expect(kernel.transport.has('v1.system.ping')).toBe(true)
+  })
+})
+
+describe('addAgent 镜像绑定（plan-image-firstclass P8-4）：create 按 imageId 经路由后端分发', () => {
+  /** 记录型替身后端（create 返回确定性 boxId——分发断言的观察面） */
+  function fakeBackend(id: string): BoxBackend {
+    let n = 0
+    return {
+      id,
+      caps: () => ({ persistent: true, snapshot: false, headless: true, resourceLimits: false, isolation: 'high', interactive: true, suspendable: false }),
+      create: async (spec) => `${id}-box-${++n}`,
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      fsRead: async () => null,
+      fsWrite: async () => undefined,
+      snapshot: async () => 'snap-1',
+      stats: async () => ({}),
+      teardown: async () => undefined,
+      list: async () => [],
+    }
+  }
+
+  it('绑定 agent 的 Box 落对应后端、未绑定落 fallback（互不串线）；imageId 落 profile 持久', async () => {
+    const fallback = fakeBackend('fb')
+    const vm = fakeBackend('vm')
+    const routing = new RoutingBoxBackend({ fallback })
+    routing.registerRoute('img-vm', { backend: vm })
+    const kernel = assembleKernel({ backend: routing, now: () => 0, bootPrefix: 't', systemPrompt: 'x' })
+    await kernel.addAgent({ agentId: 'a-default', llm: new MockChatProvider({ steps: [] }) })
+    await kernel.addAgent({ agentId: 'a-vm', imageId: 'img-vm', llm: new MockChatProvider({ steps: [] }) })
+
+    // listAgents 的 boxId 归属：未绑定 → fallback 后端；绑定 → 镜像后端（A 的 box 不在 B）
+    const client = kernel.transport.createClient()
+    const agents = await client.call<Array<{ agentId: string; boxId: string | null }>>('v1.system.listAgents')
+    expect(agents.find((a) => a.agentId === 'a-default')?.boxId).toBe('fb-box-1')
+    expect(agents.find((a) => a.agentId === 'a-vm')?.boxId).toBe('vm-box-1')
+    expect(agents.find((a) => a.agentId === 'a-vm')?.imageId).toBe('img-vm') // profile 透传
+    // profile 持久：agentStore 是唯一真相
+    expect((await kernel.agentStore.list()).find((a) => a.agentId === 'a-vm')?.imageId).toBe('img-vm')
+  })
+
+  it('未注册的 imageId（悬空/无路由）落 fallback——不炸装配（恢复路径静默回默认语义）', async () => {
+    const fallback = fakeBackend('fb')
+    const routing = new RoutingBoxBackend({ fallback })
+    const kernel = assembleKernel({ backend: routing, now: () => 0, bootPrefix: 't', systemPrompt: 'x' })
+    await kernel.addAgent({ agentId: 'a-dangling', imageId: 'img-gone', llm: new MockChatProvider({ steps: [] }) })
+    const agents = await kernel.transport.createClient().call<Array<{ agentId: string; boxId: string | null }>>('v1.system.listAgents')
+    expect(agents.find((a) => a.agentId === 'a-dangling')?.boxId).toBe('fb-box-1')
   })
 })

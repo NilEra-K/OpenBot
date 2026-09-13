@@ -32,6 +32,8 @@ const roleIdx = ref(1) // 默认研究员（管家在职时选管家会被拒绝
 const color = ref<string>(COLORS[3])
 /** 模型覆盖（backlog ③）：空串=继承全局主力 */
 const modelOverride = ref('')
+/** 镜像绑定（plan-image-firstclass P8-4）：空串=默认沙箱（装配选定的本机后端） */
+const imageBinding = ref('')
 const error = ref('')
 const creating = ref(false)
 const nameEl = ref<HTMLInputElement | null>(null)
@@ -50,7 +52,9 @@ watch(
     name.value = ''
     roleIdx.value = 1
     color.value = COLORS[3]
+    imageBinding.value = ''
     error.value = ''
+    void kernel.refreshImages() // 镜像清单现拉（设置页改动后向导不背旧账）
     void nextTick(() => nameEl.value?.focus())
   },
 )
@@ -89,6 +93,7 @@ const next = async (): Promise<void> => {
       color: color.value,
       role: isSteward.value ? 'steward' : 'worker',
       ...(modelOverride.value !== '' ? { modelProvider: modelOverride.value } : {}),
+      ...(imageBinding.value !== '' ? { imageId: imageBinding.value } : {}),
     })
     toast.push(`agent「${name.value.trim()}」已创建`, 'success')
     ui.closeWizard()
@@ -188,9 +193,16 @@ const onKeydown = (e: KeyboardEvent): void => {
           </label>
           <p v-if="modelOverride !== ''" class="wiz-note">覆盖后该 agent 钉住所选端点——全局主力切换不影响它（改动重启生效）。</p>
         </div>
-        <div class="wiz-kv">
-          <span class="k">沙箱</span>
-          <span class="v">注册即建专属 Box<span class="wiz-sub">本地执行 · 重活不进云</span></span>
+        <div class="wiz-kv wiz-kv-col">
+          <span class="k">沙箱镜像</span>
+          <label class="wiz-field">
+            <span class="wiz-field-label">缺省用默认沙箱（装配选定的本机后端，重活不进云）——或绑定已注册的镜像：</span>
+            <select v-model="imageBinding" class="wiz-select">
+              <option value="">默认沙箱</option>
+              <option v-for="img in kernel.images" :key="img.id" :value="img.id">{{ img.name }}（{{ img.carrier === 'ssh' ? 'SSH ' + img.host : img.image }}）</option>
+            </select>
+          </label>
+          <p v-if="imageBinding !== ''" class="wiz-note">绑定后该 agent 的专属 Box 落在所选镜像上——注册即真实连接（机器不可达会如实失败）；改绑重启生效。</p>
         </div>
       </div>
 
@@ -203,7 +215,7 @@ const onKeydown = (e: KeyboardEvent): void => {
           <span class="v"><span class="wiz-dot" :style="{ background: color }"></span>{{ color }}</span>
         </div>
         <div class="wiz-kv"><span class="k">模型</span><span class="v">{{ modelOverride !== '' ? `覆盖：${modelOverride}` : `继承全局主力（${primaryModel}）` }}</span></div>
-        <div class="wiz-kv"><span class="k">沙箱</span><span class="v">注册即建专属 Box</span></div>
+        <div class="wiz-kv"><span class="k">沙箱镜像</span><span class="v">{{ imageBinding === '' ? '默认沙箱（注册即建专属 Box）' : '镜像：' + (kernel.images.find((i) => i.id === imageBinding)?.name ?? imageBinding) }}</span></div>
         <p class="wiz-note">创建后立即出现在成员名册、@提及与派单目标里；社交图谱会在下一条消息后连边。</p>
       </div>
 

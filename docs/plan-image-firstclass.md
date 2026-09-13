@@ -314,16 +314,45 @@ GUI 能力的真实依赖链是 `Agent → 工具族 → BoxBackend.exec/openPip
   **E2E 29/29**（+1：镜像 CRUD 全链——真实 UI 添加/编辑/删除二段确认/连接测试如实失败/双载体
   并存/重启持久化双段会话；首跑因坑①全数炸在装配、修复后三轮迭代全绿）。版本 0.1.24。
 
-### P8-4（阶段三 b）：Agent 绑定与 UI
+### P8-4（阶段三 b）：Agent 绑定与 UI（2026-09-13 实施完成）
 
-- [ ] 1. **AgentProfile.imageId?**（E1）：register 可选参数 + setImage（null=清除）；
+- [x] 1. **AgentProfile.imageId?**（E1）：register 可选参数 + setImage（null=清除）；
   悬空双语义（恢复静默回默认 + 告警 / 命令显式拒绝——modelProvider 先例）；单测
-- [ ] 2. **装配分流**（E2）：addAgent 的 `backend.create({ image: imageId ?? 'default' })` +
+- [x] 2. **装配分流**（E2）：addAgent 的 `backend.create({ image: imageId ?? 'default' })` +
   恢复循环按 profile.imageId 分流（RoutingBackend 解析）
-- [ ] 3. **命令面 + UI**（E3/E4）：registerAgent schema 加 imageId；`v1.system.setImage`
-  （重启生效语义）；AgentWizard 镜像步；ctx 档案 kv；boxes 视图载体呈现
-- [ ] 4. **E2E**（G3）：双 agent 各绑不同镜像条目 → 断言 create 分发到各自后端（A 的 box
+- [x] 3. **命令面 + UI**（E3/E4）：registerAgent schema 加 imageId；`v1.system.setImage`
+  （重启生效语义）；AgentWizard 镜像下拉（并入「模型与沙箱」步——步数不变 E2E 安全）；ctx 档案 kv；boxes 视图载体呈现
+- [x] 4. **E2E**（G3）：双 agent 各绑不同镜像条目 → 断言 create 分发到各自后端（A 的 box
   不出现在 B 的后端）+ 绑定悬空恢复路径
+
+### P8-4 实施记档（2026-09-13）
+
+- **接线四层全链**：state（AgentProfile.imageId + setImage，与 modelProvider 完全同构——
+  清除键消失非空串残留）→ coordinator（AgentRegistration.imageId → addAgent 的
+  `create({ image: imageId ?? 'default' })`——**一行分流，路由后端按 id 分发**）→ desktop
+  （registerAgent 透传 + `v1.system.setImage` 悬空显式拒绝 + 恢复循环悬空告警回默认）→
+  renderer（向导下拉 + ctx 档案 kv）。
+- **悬空双语义落地**：命令面（register/setImage）对不存在条目显式拒绝
+  （STATE_IMAGE_NOT_FOUND）；恢复循环对已删条目 console 告警 + 回默认沙箱（agent 照常
+  创建）。RoutingBoxBackend 对未注册 id 落 fallback 是第二道兜底（单测锁定）。
+- **绑定即真实连接**：向导创建绑 SSH 镜像的 agent 时，create=attach 会对不可达机器如实
+  失败（BOX_CREATE_FAILED 冒泡到向导 wiz-error）——「注册即建 Box」语义在远端载体上是
+  「注册即连接」，用户当下反馈不静默。
+- **ctx 镜像呈现的现势保障（E2E 首训 heisenbug 记档）**：镜像清单由设置页维护、ctx 跨页
+  消费——首版渲染吃到别页副作用残留的旧状态（组件挂载早于数据、后续无现拉），绑定条目
+  误报「已删除」。修法 = CtxPanel 挂载与档案面打开时**现拉镜像清单**（refreshImages）+
+  store 加 imagesLoaded 标志（未加载不误报「已删除」，呈现「镜像条目加载中…」）。调试过程
+  记档：pinia state 与组件渲染「精神分裂」用五层探针定位（page.evaluate 直挖 pinia →
+  双时刻 textContent 对比 → 组件内 computed 求值日志）——最终确认 store 正确、组件渲染
+  依赖跨页时序。**跨页消费的状态，消费端现拉是单向数据流的正确姿势，不依赖别页副作用。**
+- **向导步数不变**：镜像下拉并入既有「模型与沙箱」步（不新增第 4 步——既有向导 E2E 断言
+  步数与流程，最小扰动）。既有用例两处随 UI 演进同步：步 2 文案断言（缺省用默认沙箱/绑定
+  已注册的镜像）+ 模型下拉选择器限定 .wiz-kv hasText 模型（新增镜像下拉后 .wiz-select
+  撞严格模式）。
+- **验证**：typecheck/构建零错；单测 487+16 skipped 全绿（+3：agent-store imageId 1 /
+  assemble 路由分发 2——「A 的 box 不落在 B 的后端」互不串线断言在 coordinator 层锁定）；
+  E2E 30/30（+1：绑定全链——向导绑定 → ctx 呈现 → 重启持久 → 删条目悬空如实回默认，
+  三段会话）。版本 0.1.25。
 
 **验收**：agent A 绑 VMWare SSH 镜像、agent B 用本地容器——同一控制台并行操控互不串线；
 E2E 分流断言绿。

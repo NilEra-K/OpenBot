@@ -146,4 +146,22 @@ describe('AgentStore 名册', () => {
     // 不存在稳定码
     await expect(store.setModelProvider('nope', 'x')).rejects.toMatchObject({ code: 'STATE_AGENT_NOT_FOUND' })
   })
+
+  it('imageId 镜像绑定（P8-4）：注册可选落档（与 modelProvider 并存）；setImage 改写与清除（null）', async () => {
+    const { store } = makeStore()
+    const p1 = await store.register('agent-1', '甲', undefined, '端点B', 'img-1')
+    expect(p1.imageId).toBe('img-1')
+    expect(p1.modelProvider).toBe('端点B') // 两个覆盖维度互不干扰
+    // 改写
+    expect((await store.setImage('agent-1', 'img-2')).imageId).toBe('img-2')
+    // 清除：键消失（非空串残留）
+    const cleared = await store.setImage('agent-1', null)
+    expect(cleared.imageId).toBeUndefined()
+    expect(JSON.stringify(cleared)).not.toContain('imageId')
+    expect(cleared.modelProvider).toBe('端点B') // 清除镜像不动模型覆盖
+    // 空串等价清除；不存在稳定码
+    await store.setImage('agent-1', 'img-1')
+    expect((await store.setImage('agent-1', '')).imageId).toBeUndefined()
+    await expect(store.setImage('nope', 'img-1')).rejects.toMatchObject({ code: 'STATE_AGENT_NOT_FOUND' })
+  })
 })

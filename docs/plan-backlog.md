@@ -188,7 +188,8 @@ ctx 档案「记忆」节呈现真数据。
 > plan-image-firstclass P8-2 节。
 > **阶段三 a（P8-3 镜像注册表）已实施**（2026-09-13，版本 0.1.24）——ImageStore +
 > RoutingBoxBackend + `v1.images.*` 命令面 + 设置页「镜像」节，实施记档见
-> plan-image-firstclass P8-3 节；Agent 绑定镜像（P8-4）随后开放。
+> plan-image-firstclass P8-3 节；**阶段三 b（P8-4 Agent 绑定镜像）已实施**（2026-09-13，
+> 版本 0.1.25）——「一个 Agent 控制一个镜像」的最终落点兑现。
 
 ### 现状资产（离目标比表面近——「CLI 即接口」的红利）
 

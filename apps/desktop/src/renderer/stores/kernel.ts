@@ -48,6 +48,8 @@ export interface RosterEntry {
   color?: string
   /** 模型覆盖档案名（backlog ③）；缺席=继承全局主力 */
   modelProvider?: string
+  /** 镜像绑定条目 id（plan-image-firstclass P8-4）；缺席=默认沙箱；悬空（条目已删）装配层如实回默认 */
+  imageId?: string
   /** 该 agent 的专属 Box（v1.system.listAgents 返回；注册即创建——ctx 任意时刻可接管的信号源）。
    *  可选：roster 事件 push 的新 agent（运行中注册）归属未知，待下次快照刷新。 */
   boxId?: string | null
@@ -317,6 +319,8 @@ export const useKernelStore = defineStore('kernel', {
     sandbox: null as SandboxStatus | null,
     /** 镜像注册表（P8-3；settings 视图呈现与管理） */
     images: [] as ImageEntryView[],
+    /** 镜像清单已加载（ctx 档案悬空判定的前提——未加载不误报「已删除」） */
+    imagesLoaded: false,
     /** Box 资源统计（Step 6）：每盒最新值；字段缺席=后端不可测（WSL 只有磁盘） */
     boxStats: {} as Record<string, { cpuPercent?: number; memoryMb?: number; diskMb?: number; at: number }>,
     /** 快照链（P4 Step 9）：全局快照目录事实（最近在前）；caps.snapshot=false 时空链 */
@@ -407,18 +411,19 @@ export const useKernelStore = defineStore('kernel', {
     },
     /** 名册快照重拉（boot 与注册后共用——roster 事件只带 agentId/role，档案字段以快照为准） */
     async refreshRoster(): Promise<void> {
-      const agents = await this.call<Array<{ agentId: string; name?: string; role: string; color?: string; modelProvider?: string; boxId?: string | null }>>('v1.system.listAgents')
+      const agents = await this.call<Array<{ agentId: string; name?: string; role: string; color?: string; modelProvider?: string; imageId?: string; boxId?: string | null }>>('v1.system.listAgents')
       this.roster = agents.map((a) => ({
         agentId: a.agentId,
         name: a.name,
         role: a.role as RosterEntry['role'],
         color: a.color,
         ...(a.modelProvider !== undefined ? { modelProvider: a.modelProvider } : {}),
+        ...(a.imageId !== undefined ? { imageId: a.imageId } : {}),
         boxId: a.boxId ?? null,
       }))
     },
     /** 注册 agent（P4 Step 5）：命令面受理（name/color/role）→ 重拉名册 → 返回 agentId（向导跳会话用） */
-    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string }): Promise<string> {
+    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string; imageId?: string }): Promise<string> {
       const created = await this.call<{ agentId: string }>('v1.system.registerAgent', input)
       await this.refreshRoster()
       return created.agentId
@@ -620,6 +625,7 @@ export const useKernelStore = defineStore('kernel', {
     async refreshImages(): Promise<void> {
       const state = await this.call<{ images: ImageEntryView[] }>('v1.images.list')
       this.images = state.images
+      this.imagesLoaded = true
     },
     async addImage(input: ImageInputView): Promise<ImageEntryView> {
       const state = await this.call<{ image: ImageEntryView }>('v1.images.add', input)

@@ -27,6 +27,9 @@ export interface AgentProfile {
   /** 模型覆盖（backlog ③）：引用 providers 档案名——未指定继承全局主力；悬空在装配层
    *  如实降级回继承（不炸装配——与沙箱 mock 回退同哲学）；版本号+读取端兼容零迁移 */
   modelProvider?: string
+  /** 镜像绑定（plan-image-firstclass P8-4）：引用镜像条目 id——未指定用默认沙箱；悬空在
+   *  装配层如实降级回默认（console 告警——modelProvider 悬空双语义同款）；版本号+读取端兼容 */
+  imageId?: string
 }
 
 export interface AgentStoreOptions {
@@ -51,7 +54,7 @@ export class AgentStore {
   }
 
   /** 注册：一律 worker（steward 只能经任命事务产生）；重名拒绝；color 可选（身份色档案事实） */
-  async register(agentId: string, name?: string, color?: string, modelProvider?: string): Promise<AgentProfile> {
+  async register(agentId: string, name?: string, color?: string, modelProvider?: string, imageId?: string): Promise<AgentProfile> {
     return this.#withLock(async () => {
       await this.#load()
       if (this.#profiles.has(agentId)) {
@@ -64,6 +67,7 @@ export class AgentStore {
         createdAt: this.#now(),
         ...(color !== undefined ? { color } : {}),
         ...(modelProvider !== undefined && modelProvider !== '' ? { modelProvider } : {}),
+        ...(imageId !== undefined && imageId !== '' ? { imageId } : {}),
       }
       this.#profiles.set(agentId, profile)
       await this.#persist(profile)
@@ -86,6 +90,27 @@ export class AgentStore {
               return rest
             })()
           : { ...profile, modelProvider }
+      this.#profiles.set(agentId, next)
+      await this.#persist(next)
+      return { ...next }
+    })
+  }
+
+  /** 更新镜像绑定（P8-4）：null = 清除（回默认沙箱） */
+  async setImage(agentId: string, imageId: string | null): Promise<AgentProfile> {
+    return this.#withLock(async () => {
+      await this.#load()
+      const profile = this.#profiles.get(agentId)
+      if (!profile) {
+        throw new KernelError(AgentStoreErrorCodes.STATE_AGENT_NOT_FOUND, `agent 不存在：${agentId}`)
+      }
+      const next: AgentProfile =
+        imageId === null || imageId === ''
+          ? (() => {
+              const { imageId: _drop, ...rest } = profile
+              return rest
+            })()
+          : { ...profile, imageId }
       this.#profiles.set(agentId, next)
       await this.#persist(next)
       return { ...next }

@@ -725,9 +725,10 @@ test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → 
     // 角色默认研究员；身份色默认第 4 色（断言选中态——档案色断言依赖此值）
     await expect(card.locator('.wiz-swatch.is-sel')).toHaveAttribute('aria-label', '身份色 #3987e5')
     await card.getByRole('button', { name: '下一步' }).click()
-    // 步 2：模型与沙箱如实说明（裁定 B/F——不放假选项）
+    // 步 2：模型与沙箱如实说明（裁定 B/F——不放假选项；P8-4 起沙箱镜像可选绑定）
     await expect(card.locator('.wiz-body')).toContainText('继承全局主力')
-    await expect(card.locator('.wiz-body')).toContainText('注册即建专属 Box')
+    await expect(card.locator('.wiz-body')).toContainText('缺省用默认沙箱')
+    await expect(card.locator('.wiz-body')).toContainText('绑定已注册的镜像')
     await card.getByRole('button', { name: '下一步' }).click()
     // 步 3：复核行（名字/角色/身份色/继承说明）
     await expect(card.locator('.wiz-body')).toContainText('欧米伽')
@@ -1390,7 +1391,7 @@ test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 ag
     await page.getByRole('button', { name: '新建 agent' }).click()
     await page.locator('#wizName').fill('专属模型员')
     await page.getByRole('button', { name: '下一步' }).click()
-    await page.locator('.wiz-select').selectOption('覆盖B')
+    await page.locator('.wiz-kv', { hasText: '模型' }).locator('select').selectOption('覆盖B') // 限定模型下拉（P8-4 起向导有镜像下拉）
     await expect(page.locator('.wiz-note', { hasText: '钉住所选端点' })).toBeVisible()
     await page.getByRole('button', { name: '下一步' }).click()
     await page.getByRole('button', { name: '创建 agent' }).click()
@@ -1605,6 +1606,92 @@ test('镜像注册表（P8-3）：CRUD 全链 + 连接测试如实报告 + 多�
       await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
       await page2.getByRole('button', { name: '设置', exact: true }).click()
       await expect(page2.locator('.cfg-row', { hasText: 'GUI 容器' })).toBeVisible({ timeout: 10_000 })
+    } finally {
+      await app2.close()
+    }
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重启持久 → 删条目悬空如实回默认', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-bind-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— 前置：注册一个容器镜像条目（mock 底座不可路由——注册落默认沙箱，绑定持久照常） ——
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加镜像' }).click()
+    await page.locator('label.proto-opt', { hasText: '容器镜像' }).click()
+    await page.locator('#ifName').fill('GUI 容器')
+    await page.locator('#ifImage').fill('openbot-gui:24.04')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.locator('.cfg-row', { hasText: 'GUI 容器' })).toBeVisible()
+
+    // —— 向导绑定镜像（步 2 下拉选 GUI 容器 → 复核显示 → 创建成功） ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    const card = page.locator('.wiz-card')
+    await expect(card).toBeVisible()
+    await page.locator('#wizName').fill('维机')
+    await card.getByRole('button', { name: '下一步' }).click()
+    // 镜像下拉：缺省「默认沙箱」，绑定后向导如实说明连接语义
+    await card.locator('.wiz-kv', { hasText: '沙箱镜像' }).locator('select').selectOption('img-1') // 新库首条目确定性 id
+    await expect(card.locator('.wiz-body')).toContainText('注册即真实连接')
+    await card.getByRole('button', { name: '下一步' }).click()
+    await expect(card.locator('.wiz-body')).toContainText('镜像：GUI 容器')
+    await card.getByRole('button', { name: '创建 agent' }).click()
+    await expect(page.locator('.toast', { hasText: '维机」已创建' })).toBeVisible({ timeout: 15_000 })
+
+    // —— ctx 档案镜像 kv：条目名（载体 镜像名） ——
+    await page.locator('.roster-item', { hasText: '维机' }).click()
+    await page.getByTitle('会话档案（Settings）').click() // ctx 切档案节（镜像 kv 所在）
+    await expect(page.locator('.ctx')).toContainText('GUI 容器（容器 openbot-gui:24.04）', { timeout: 10_000 })
+
+    // —— 重启持久化（双段会话）：绑定是档案事实，重启后 ctx 呈现不变 ——
+    await app.close()
+    const app2 = await _electron.launch({
+      args: ['.'],
+      env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+    })
+    const page2 = await app2.firstWindow()
+    try {
+      await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+      await page2.locator('.roster-item', { hasText: '维机' }).click()
+      await page2.getByTitle('会话档案（Settings）').click()
+      await expect(page2.locator('.ctx')).toContainText('GUI 容器（容器 openbot-gui:24.04）', { timeout: 10_000 })
+
+      // —— 删除镜像条目 → 重启 → 悬空如实呈现「已删除 · 回默认沙箱」（agent 存活不炸装配） ——
+      await page2.getByRole('button', { name: '设置', exact: true }).click()
+      const del = page2.locator('.cfg-row', { hasText: 'GUI 容器' }).locator('[data-role="image-remove"]')
+      await del.click()
+      await expect(del).toHaveText('确认删除？')
+      await del.click()
+      await expect(page2.locator('.cfg-row', { hasText: 'GUI 容器' })).toHaveCount(0)
+      await app2.close()
+
+      const app3 = await _electron.launch({
+        args: ['.'],
+        env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+      })
+      const page3 = await app3.firstWindow()
+      try {
+        await expect(page3.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+        // agent 仍在名册（悬空回默认不炸装配）；ctx 如实标注
+        await page3.locator('.roster-item', { hasText: '维机' }).click()
+        await page3.getByTitle('会话档案（Settings）').click()
+        await expect(page3.locator('.ctx')).toContainText('镜像已删除 · 回默认沙箱', { timeout: 10_000 })
+      } finally {
+        await app3.close()
+      }
     } finally {
       await app2.close()
     }

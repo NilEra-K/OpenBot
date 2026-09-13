@@ -87,6 +87,23 @@ const GROUP_MAX_RECORDS = 200
 // ---- 档案模式（P4 Step 7）：全部为既有 store 投影，零内核改动（approvalMode 除外——boot 快照） ----
 
 const activeAgent = computed(() => kernel.roster.find((a) => a.agentId === ui.activeAgentId) ?? null)
+/** 镜像绑定显示（plan-image-firstclass P8-4）：绑定在场→条目名（载体）；悬空（条目已删）→
+ *  如实标注「已删除·回默认沙箱」（装配层已回默认——呈现不假装仍绑定）；未绑→默认沙箱 */
+const activeImageDisplay = computed(() => {
+  const id = activeAgent.value?.imageId
+  if (id === undefined) return '默认沙箱'
+  if (!kernel.imagesLoaded) return '镜像条目加载中…'
+  const entry = kernel.images.find((e) => e.id === id)
+  if (entry === undefined) return '镜像已删除 · 回默认沙箱'
+  return entry.name + '（' + (entry.carrier === 'ssh' ? 'SSH ' + entry.host : '容器 ' + (entry.image ?? '')) + '）'
+})
+// 镜像清单现势保障（P8-4 E2E 首训记档）：清单由设置页维护——ctx 跨页消费，**挂载与档案
+// 面打开时现拉**（不依赖别页副作用残留）；悬空判定只认现势数据，不误报「已删除」
+const refreshImagesForArchive = (): void => {
+  if (ui.ctxSettings) void kernel.refreshImages().catch(() => {})
+}
+onMounted(refreshImagesForArchive)
+watch(() => ui.ctxSettings, refreshImagesForArchive)
 /** 远端 mirror 成员（P7 多房间轮）：键空间 remote:<roomId>:<memberId> */
 const remotePeer = computed(() => {
   if (!ui.activeAgentId.startsWith('remote:')) return null
@@ -261,6 +278,7 @@ const lastAt = computed(() => {
             <template v-else>继承全局主力{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}</template>
           </span>
         </div>
+        <div class="kv"><span class="k">镜像</span><span class="v">{{ activeImageDisplay }}</span></div>
         <div class="kv"><span class="k">Box 归属</span><span class="v mono">{{ screenBoxId ?? '—' }}</span></div>
         <div class="kv"><span class="k">权限现状</span><span class="v">{{ kernel.approvalMode === 'manual' ? 'Box 内自由 · 出 Box 需批准（Manual 闸门）' : '自动批准' }}</span></div>
 

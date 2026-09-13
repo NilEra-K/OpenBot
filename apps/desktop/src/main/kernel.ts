@@ -203,6 +203,8 @@ const registerAgentSchema = z.object({
     .optional(),
   /** 模型覆盖档案名（backlog ③）：可选——引用 providers 档案；悬空显式拒绝（命令面） */
   modelProvider: z.string().trim().min(1).max(64).optional(),
+  /** 镜像绑定（P8-4）：可选——引用镜像条目 id；悬空显式拒绝（命令面） */
+  imageId: z.string().trim().min(1).max(32).optional(),
   role: z.enum(['steward', 'worker']).optional(),
 })
 /** 桌面输入动作批次（P8-2 接口化——协议中性词表，renderer 不再拼 xdotool 串；
@@ -833,7 +835,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 注册 agent（P4 Step 5）：经装配 addAgent（名册+调度器+专属 Box+turn 接线）；
     // llm 共享 SwitchableChatProvider——主力模型切换对全部 agent 生效（与启动装配同语义）
     .register('v1.system.registerAgent', async (payload) => {
-      const { name, color, role, modelProvider } = registerAgentSchema.parse(payload)
+      const { name, color, role, modelProvider, imageId } = registerAgentSchema.parse(payload)
       // 管家前置检查：在位时直接拒绝（不创建半成品 agent；任命事务由 addAgent 兜底不变量）
       if (role === 'steward' && (await kernel.agentStore.findSteward()) !== null) {
         throw new KernelError('STATE_STEWARD_EXISTS', '管家已在位（须先罢免或转移）')
@@ -843,12 +845,18 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       let n = 1
       while (ids.has(`agent-${n}`)) n++
       const agentId = `agent-${n}`
+      // 镜像绑定悬空在此显式拒绝（用户当下反馈——与模型覆盖同语义）；绑定后 Box 由路由后端
+      // 分发到对应载体（创建即真实连接——不可达的机器注册如实失败）
+      if (imageId !== undefined && (await imageStore.get(imageId)) === null) {
+        throw new KernelError('STATE_IMAGE_NOT_FOUND', `镜像条目不存在：${imageId}`)
+      }
       // 覆盖悬空在此显式拒绝（用户当下反馈）；分流实例与档案持久同步落
       await kernel.addAgent({
         agentId,
         name,
         color,
         ...(modelProvider !== undefined ? { modelProvider } : {}),
+        ...(imageId !== undefined ? { imageId } : {}),
         llm: await providerOfAgent(modelProvider, false),
         steward: role === 'steward',
       })
@@ -863,6 +871,18 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await kernel.agentStore.setModelProvider(agentId, modelProvider)
       return { ok: true, restartRequired: true }
     }, z.object({ agentId: z.string().min(1), modelProvider: z.string().trim().min(1).max(64).nullable() }))
+    // 镜像绑定改写（P8-4）：null=清除回默认沙箱；悬空显式拒绝；重启生效（Box 是装配期创建——
+    // 与模型覆盖同语义；改绑后的下一次应用重启把 agent 的 Box 落到新载体）
+    .register('v1.system.setImage', async (payload) => {
+      const { agentId, imageId } = z
+        .object({ agentId: z.string().min(1), imageId: z.string().trim().min(1).max(32).nullable() })
+        .parse(payload)
+      if (imageId !== null && (await imageStore.get(imageId)) === null) {
+        throw new KernelError('STATE_IMAGE_NOT_FOUND', `镜像条目不存在：${imageId}`)
+      }
+      await kernel.agentStore.setImage(agentId, imageId)
+      return { ok: true, restartRequired: true }
+    }, z.object({ agentId: z.string().min(1), imageId: z.string().trim().min(1).max(32).nullable() }))
 
   await applyProvider()
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })
@@ -872,12 +892,23 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // addAgent 幂等分支只重建内存态（名册不重复写）；steward 已上方装配（跳过防 mock 后端二次建 Box）
   for (const profile of await kernel.agentStore.list()) {
     if (profile.agentId === 'steward') continue
+    // 镜像绑定恢复（P8-4）：悬空（条目已删）静默回默认 + 告警留痕——modelProvider 悬空双语义同款；
+    // 绑定在场则 create 直接落对应载体（路由后端按 id 分发——不可达机器在此如实失败并冒泡）
+    let imageId: string | undefined
+    if (profile.imageId !== undefined) {
+      if ((await imageStore.get(profile.imageId)) !== null) {
+        imageId = profile.imageId
+      } else {
+        console.warn(`[openbot] agent ${profile.agentId} 绑定的镜像条目 ${profile.imageId} 已删除——回默认沙箱`)
+      }
+    }
     await kernel.addAgent({
       agentId: profile.agentId,
       name: profile.name,
       ...(profile.color !== undefined ? { color: profile.color } : {}),
       // 模型覆盖（backlog ③）：恢复路径悬空静默回继承（告警留痕）——档案可能已被删除
       llm: await providerOfAgent(profile.modelProvider, true),
+      ...(imageId !== undefined ? { imageId } : {}),
       steward: profile.role === 'steward',
     })
   }

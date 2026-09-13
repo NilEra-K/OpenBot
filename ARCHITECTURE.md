@@ -135,10 +135,11 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - **幂等账本**：clientNonce + inputDigest，超时重试零双发。durable acceptance 使发送与执行解耦。
 - etag 钩子保留（条件写），**BCS 多端同步整块推 P6**。
 - 薄薄的 box 目录存储（box 实例清单、快照索引、模板注册）。
-- **镜像注册表**（plan-image-firstclass P8-3）：`<root>/images.json`——镜像条目 = 载体类型
+- **镜像注册表**（plan-image-firstclass P8-3 + P8-4）：`<root>/images.json`——镜像条目 = 载体类型
   （容器/SSH 主机）+ 连接事实 + 控制协议（'x11' | 'none'）+ 显示地址；路由后端（RoutingBoxBackend）
   按 `BoxSpec.image`（条目 id）分发到对应后端实例，'default' 落全局后端——**Agent 绑定镜像
-  而非后端实例**（绑定随 P8-4），services/工具族持单一 backend 引用零改动。
+  而非后端实例**（P8-4 已兑现：`AgentProfile.imageId`，addAgent 即按绑定分发创建 Box；
+  悬空回默认 + 告警；命令面悬空显式拒绝），services/工具族持单一 backend 引用零改动。
 - 继任路线：规模到瓶颈时迁移 `node:sqlite`（Electron 内置 Node 自带，无原生编译）；JSONL 始终是 transcript 源头真相。
 
 ### 3.3 `llm` —— 模型接入（自研薄客户端）

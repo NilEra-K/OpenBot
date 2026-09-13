@@ -78,6 +78,9 @@ export interface AgentRegistration {
   color?: string
   /** 模型覆盖档案名（backlog ③）：落 profile 持久；llm 实例由装配方按此构造（分流在 desktop） */
   modelProvider?: string
+  /** 镜像绑定（plan-image-firstclass P8-4）：引用镜像条目 id——backend 按 spec.image 路由
+   *  （RoutingBoxBackend）；未指定 'default' 落全局后端 */
+  imageId?: string
   /** 该 agent 的模型客户端；未提供时用空脚本 mock（首个 turn 即显式报脚本耗尽） */
   llm?: ChatProvider
   /** 注册后立即任命为管家（走标准任命事务：他人在位时如实拒绝） */
@@ -513,14 +516,16 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
       const registered = (await agentStore.list()).some((a) => a.agentId === registration.agentId)
       if (!registered) {
-        await agentStore.register(registration.agentId, registration.name, registration.color, registration.modelProvider)
+        await agentStore.register(registration.agentId, registration.name, registration.color, registration.modelProvider, registration.imageId)
       }
       // 记忆预载（backlog ①）：listSync 注入路径的缓存就绪（append 后自动最新）
       if (memory !== undefined) await memory.ensureLoaded(registration.agentId)
       llms.set(registration.agentId, registration.llm ?? new MockChatProvider({ steps: [] }))
       // 默认限额档（P5 Step 7 色档分母 + OCI 后端 --cpus/--memory 落地）：工程默认 2 核 / 2GB——
-      // caps.resourceLimits=false 的后端（wsl）如实忽略；mock 忽略（但 spec 留档供 renderer 呈现上限）
-      const boxId = await backend.create({ image: 'default', cpus: 2, memoryMb: 2048 })
+      // caps.resourceLimits=false 的后端（wsl）如实忽略；mock 忽略（但 spec 留档供 renderer 呈现上限）。
+      // 镜像绑定（P8-4）：image = 绑定条目 id——RoutingBoxBackend 按它分发到对应后端实例；
+      // 未绑定/悬空落 'default'（全局后端——悬空告警在装配方恢复循环）
+      const boxId = await backend.create({ image: registration.imageId ?? 'default', cpus: 2, memoryMb: 2048 })
       boxes.set(registration.agentId, boxId)
       const scheduler = new AgentScheduler({
         agentId: registration.agentId,
