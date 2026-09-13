@@ -194,24 +194,62 @@ GUI 能力的真实依赖链是 `Agent → 工具族 → BoxBackend.exec/openPip
   `OPENBOT_TEST_SSH_GUI=1` GUI 全链（工具集在场/几何/scrot 截图 magic/ffmpeg 实况管道
   字节直出/pidfile 补刀后 `kill -0` gone）。版本 0.1.22（P8-1）。
 
-### P8-2（阶段二）：ScreenControl 接口化——控制协议解耦
+### P8-2（阶段二）：ScreenControl 接口化——控制协议解耦（2026-09-13 实施完成）
 
-- [ ] 1. **ScreenControl 接口**（boxes `src/screen/`）：`geometry(boxId)` /
+- [x] 1. **ScreenControl 接口**（boxes `src/screen/`）：`geometry(boxId)` /
   `capture(boxId, opts)`（返回字节 + mime + 缩放/屏幕尺寸元数据——token 纪律与坐标系语义
-  内聚适配器）/ `act(boxId, action)`（ScreenAction 联合：click/dblclick/type/key/scroll）/
+  内聚适配器）/ `act(boxId, action)`（ScreenAction 联合：move/down/up/click/key/type）/
   `stream(boxId, opts)`（返回已编码字节流常驻会话 + codec meta）/ `inputChannel?(boxId)`
-- [ ] 2. **X11ScreenControl**：耦合点 1/2/3 的 xdotool/scrot/ffmpeg 命令与清场模式原样迁入
-  （构造参数：exec 通道 + display 地址 + settleMs）——**行为等价重构**，argv 单测锁死
-- [ ] 3. **三消费方接线**：ComputerToolDeps 换注入 ScreenControl；GuiStreamService 构造注入
-  （argvOf 注入位即为此留）；desktop gui.frame/input 命令面换调适配器（常驻注入通道逻辑随迁）
-- [ ] 4. **GUI 生产注册门兑现**（C4，裁定 E）：镜像 GUI 声明 ∩ 工具集探测（B2）∩ provider
+- [x] 2. **X11ScreenControl**：耦合点 1/2/3 的 xdotool/scrot/ffmpeg 命令与清场模式原样迁入
+  （构造参数：exec 通道 + display 地址）——**行为等价重构**，argv 单测锁死
+- [x] 3. **三消费方接线**：ComputerToolDeps 换注入 ScreenControl；GuiStreamService 构造注入；
+  desktop gui.frame/input 命令面换调适配器（常驻注入通道逻辑随迁）
+- [x] 4. **GUI 生产注册门兑现**（C4，裁定 E）：镜像 GUI 声明 ∩ 工具集探测（B2）∩ provider
   supportsImages → computerEnabled；`OPENBOT_COMPUTER=1` 保留为 E2E 强制门
-- [ ] 5. **DISPLAY 配置化**（B3）：全局 env → 装配参数（backend 构造注入，P8-3 由镜像条目接管）
-- [ ] 6. **回归**：28 E2E 零回退 + 真机双载体复验（本地容器 + SSH 载体各一轮 GUI 全链）；
+- [x] 5. **DISPLAY 配置化**（B3）：全局 env → 装配参数（适配器构造注入，P8-3 由镜像条目接管）
+- [x] 6. **回归**：28 E2E 零回退 + 真机双载体复验（本地容器 + SSH 载体各一轮 GUI 全链）；
   渲染层无类型检查盲区（v0.1.18/19 记档）——gui 命令面迁移真机目验补位
 
 **验收**：行为等价（既有用例/真机交互零感知差异）；生产环境（无 env）GUI 容器在 OCI 后端
 时 computer 工具自动注册；SSH 载体 GUI 复验绿。
+
+### P8-2 实施记档（2026-09-13）
+
+- **接口形状定形**：`ScreenControl`（boxes/screen）= geometry / capture / act / stream /
+  supportsStream / inputChannel? / dispose?；执行通道经 `ScreenControlHost`（exec+openPipe
+  窄面——BoxBackend 结构化满足，测试注入窄替身）。**坐标语义不对称是接口契约**：act() 收
+  截图坐标（agent 视角，适配器内换算），inputChannel 收真实屏幕坐标（用户看原生分辨率流，
+  原样注入）——与既有行为一致（agent 走 coordScaleOf / 用户走 renderer contain 换算）。
+  词表协议中性（move/down/up/click/key/type + click 的 count/intervalMs 表达连击与滚轮），
+  键名沿用 X keysym、按钮沿用 X 编号——RDP 适配器届时映射（记档）。
+- **行为等价迁移**：X11ScreenControl 收编三处散布命令——runner 工具族的
+  captureScreen/screenGeometryOf/coordScaleOf/actXdotool、GuiStreamService 的双引擎 argv +
+  清场 pkill 拆半 + pidfile 包装与补刀、desktop 的 1920/q85 轮询帧 + 常驻 `sh -s` 注入通道
+  （惰性建立/退出除名/dispose 全关全部内聚适配器）。几何缓存从 runner 模块级 Map 收编为
+  适配器实例级（测试污染问题顺带消解——v0.1.17 记档的模块级缓存用例互扰不复存在）。
+- **生产注册门（C4）落地形态**：探测需要 Box 在场（steward 名册装配后）——注册从装配期
+  改为**后置注册**：AssembledKernel 暴露 tools/screen/onStream（onStream 原是装配内部构造，
+  壳侧后置注册需要同一依赖），desktop 在 addAgent 循环后、startGateway 前执行
+  `probeX11Toolset ∩ settings.resolve().supportsImages ∩ backendId≠mock` → kernel.tools.register。
+  时序保证：网关未开则无对话，注册必先于任何工具 specs 请求。探测只在视觉 provider 在场时
+  跑（零配置用户零启动开销）。**supportsImages 接真**：llm 的 ProviderCapabilities 声明面
+  一直无管线（记档「一期未接」）——本轮 state 档案加可选字段（版本号不动、读取端兼容）+
+  设置页模态「视觉（图像输入）」勾选。P8-3 起第三源「镜像 GUI 声明」由镜像条目接管。
+- **输入 wire 协议化**：`v1.box.gui.input` 从 `{boxId, script}`（renderer 拼 xdotool 串）
+  改 `{boxId, actions: ScreenAction[]}`（zod 判别联合校验）——renderer 的 GuiScreen 六处
+  调用点改结构化对象、escapeSh/键名拼串退役（键名 X keysym 映射表保留在 renderer，属
+  接口契约的键名词表）。renderer 与内核同 app 发布，无外部客户端，无兼容负担；E2E 走
+  真实 UI 点击全链验证通过。
+- **坑（实施中）**：①serializeScreenAction 的连击标志初版插在 mousemove 与 click 之间
+  （`mousemove X Y --repeat …` 是非法 xdotool 语法）——单测首抓，修正为跟在 click 词后
+  （`click --repeat N --delay M B`）——「argv 单测锁死」纪律的价值兑现。②Windows 仓库
+  CRLF：node 脚本批量改 renderer/state 时 `\n` 指针全空——先探测行尾再替换（scripts 走
+  临时 .cjs 文件，内联 heredoc 会被 bash 反引号展开——坑⑫的 bash 变体）。
+- **验证**：typecheck/构建零错；单测 472+16 skipped 全绿（+21：适配器 25 含 serialize
+  10 例参数化 / runner 工具族重写 6 / gui-stream 重写 11——argv 断言随命令上收适配器层，
+  两层各司其职）；E2E 28/28（结构化输入走真实 UI 点击全链）。**真机双载体复验记未完成**
+  （待设备：本地容器 + SSH 载体各一轮 GUI 全链——适配器行为等价由 argv 锁死单测背书）。
+  版本 0.1.23。
 
 ### P8-3（阶段三 a）：镜像注册表
 

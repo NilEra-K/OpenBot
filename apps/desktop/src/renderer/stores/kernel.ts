@@ -166,6 +166,8 @@ export interface ProviderView {
   proxyUrl?: string
   /** 协议族（P4 Step 11）：缺省 openai-compat */
   protocol?: 'openai-compat' | 'anthropic'
+  /** 视觉（图像输入）声明——computer 工具族生产注册门的事实源之一 */
+  supportsImages?: boolean
 }
 
 /** provider 表单输入（v1.settings.upsertProvider 载荷；apiKey 留空=保留原密文） */
@@ -176,6 +178,8 @@ export interface ProviderInput {
   apiKey?: string
   proxyUrl?: string
   protocol?: 'openai-compat' | 'anthropic'
+  /** 视觉（图像输入）声明（P8-2）——缺省 false */
+  supportsImages?: boolean
 }
 
 /** LLM 生效事实（v1.settings.llmStatus；状态栏「当轮生效端点」投影） */

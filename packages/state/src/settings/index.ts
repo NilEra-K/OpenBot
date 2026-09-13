@@ -28,6 +28,8 @@ export interface StoredProviderProfile {
   timeoutMs?: number
   /** 协议族（P4 Step 11）；缺省 openai-compat */
   protocol?: ProviderProtocol
+  /** 视觉（图像输入）声明（plan-image-firstclass P8-2 生产注册门的事实源之一）——缺省 false */
+  supportsImages?: boolean
 }
 
 /** 沙箱后端偏好：auto = 按平台序择优（win: wsl→docker→podman / linux: nspawn→docker→podman /
@@ -71,6 +73,8 @@ export interface ProviderProfileView {
   hasKey: boolean
   proxyUrl?: string
   protocol?: ProviderProtocol
+  /** 视觉（图像输入）声明——设置页「视觉」徽标呈现 */
+  supportsImages?: boolean
 }
 
 /** 解析形状：装配 provider 用，apiKey 为明文 */
@@ -84,6 +88,8 @@ export interface ResolvedProvider {
   temperature?: number
   timeoutMs?: number
   protocol?: ProviderProtocol
+  /** 视觉（图像输入）声明——computer 工具族生产注册门的事实源之一 */
+  supportsImages?: boolean
 }
 
 export interface ProviderInput {
@@ -97,6 +103,8 @@ export interface ProviderInput {
   temperature?: number
   timeoutMs?: number
   protocol?: ProviderProtocol
+  /** 视觉（图像输入）声明（P8-2）——缺省 false（不放假能力） */
+  supportsImages?: boolean
 }
 
 export interface SettingsStoreOptions {
@@ -140,6 +148,7 @@ export class SettingsStore {
       hasKey: p.apiKey !== undefined && p.apiKey !== '',
       ...(p.proxyUrl !== undefined ? { proxyUrl: p.proxyUrl } : {}),
       ...(p.protocol !== undefined ? { protocol: p.protocol } : {}),
+      ...(p.supportsImages !== undefined ? { supportsImages: p.supportsImages } : {}),
     }))
   }
 
@@ -164,6 +173,7 @@ export class SettingsStore {
       ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
       ...(profile.timeoutMs !== undefined ? { timeoutMs: profile.timeoutMs } : {}),
       ...(profile.protocol !== undefined ? { protocol: profile.protocol } : {}),
+      ...(profile.supportsImages !== undefined ? { supportsImages: profile.supportsImages } : {}),
     }
   }
 
@@ -185,6 +195,7 @@ export class SettingsStore {
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.protocol !== undefined ? { protocol: input.protocol } : {}),
+      ...(input.supportsImages !== undefined ? { supportsImages: input.supportsImages } : {}),
     }
     const providers = settings.providers.filter((p) => p.name !== input.name)
     providers.push(profile)
@@ -195,6 +206,7 @@ export class SettingsStore {
       model: profile.model,
       hasKey: apiKey !== undefined,
       ...(profile.protocol !== undefined ? { protocol: profile.protocol } : {}),
+      ...(profile.supportsImages !== undefined ? { supportsImages: profile.supportsImages } : {}),
     }
   }
 

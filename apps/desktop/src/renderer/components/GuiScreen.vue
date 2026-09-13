@@ -230,16 +230,23 @@ const resetStreamState = (): void => {
   paused = false
 }
 
-// ---- 用户输入注入（interactive 实例专属；经 main 常驻通道行式转发——事件延迟 ~数 ms） ----
+// ---- 用户输入注入（interactive 实例专属；经 main 结构化动作批次转发——常驻通道行式执行，
+// 事件延迟 ~数 ms。P8-2 接口化：renderer 不再拼 xdotool 串，翻译内聚内核适配器） ----
 
-/** POSIX 单引号转义（' → '\''——sh 行式语境） */
-const escapeSh = (s: string): string => s.replaceAll("'", "'\\''")
+/** 桌面输入动作（协议中性词表——键名沿用 X keysym 惯例，button 沿用 X 编号） */
+type GuiAction =
+  | { kind: 'move'; x: number; y: number }
+  | { kind: 'down'; button: number }
+  | { kind: 'up'; button: number }
+  | { kind: 'click'; button: number }
+  | { kind: 'key'; key: string }
+  | { kind: 'type'; text: string }
 
-const sendInput = (script: string): void => {
-  void kernel.call('v1.box.gui.input', { boxId: props.boxId, script }).catch(() => {})
+const sendInput = (actions: GuiAction[]): void => {
+  void kernel.call('v1.box.gui.input', { boxId: props.boxId, actions }).catch(() => {})
 }
 
-/** 键入批量合并：50ms 窗口内单键攒一串，一次 xdotool type 发出 */
+/** 键入批量合并：50ms 窗口内单键攒一串，一次 type 动作发出 */
 const TYPE_WINDOW_MS = 50
 let typeBuf = ''
 let typeTimer: ReturnType<typeof setTimeout> | null = null
@@ -252,7 +259,7 @@ const flushTypeBuffer = (): void => {
   if (typeBuf === '') return
   const text = typeBuf
   typeBuf = ''
-  sendInput(`xdotool type --delay 0 -- '${escapeSh(text)}'`)
+  sendInput([{ kind: 'type', text }])
 }
 
 const queueType = (ch: string): void => {
@@ -296,7 +303,7 @@ const flushMove = (): void => {
   const key = `${latestMove.x},${latestMove.y}`
   if (key === moveSentKey) return // 位置没变不发包
   moveSentKey = key
-  sendInput(`xdotool mousemove ${latestMove.x} ${latestMove.y}`)
+  sendInput([{ kind: 'move', x: latestMove.x, y: latestMove.y }])
 }
 
 const onPointerMove = (e: PointerEvent): void => {
@@ -318,7 +325,7 @@ const onPointerDown = (e: PointerEvent): void => {
   latestMove = p
   flushMove() // 点击位置先精确落点再按下
   dragButton = btn
-  sendInput(`xdotool mousedown ${btn}`)
+  sendInput([{ kind: 'down', button: btn }])
   kernel.setGuiTakeover(true) // 首笔点击即接管（挂起 agent 下一个动作）
   canvasRef.value?.setPointerCapture(e.pointerId) // 拖拽出画布也能收到 up
   e.preventDefault()
@@ -331,13 +338,13 @@ const onPointerUp = (e: PointerEvent): void => {
     latestMove = p
     flushMove()
   }
-  sendInput(`xdotool mouseup ${dragButton}`)
+  sendInput([{ kind: 'up', button: dragButton }])
   dragButton = null
 }
 
 const onPointerCancel = (): void => {
   if (dragButton === null) return
-  sendInput(`xdotool mouseup ${dragButton}`)
+  sendInput([{ kind: 'up', button: dragButton }])
   dragButton = null
 }
 
@@ -357,7 +364,7 @@ const onWheel = (e: WheelEvent): void => {
   e.preventDefault()
   if (Math.abs(e.deltaY) < 50) return // 触控板微步进不产生点击（桌面滚动由连续事件自然补齐）
   const button = e.deltaY < 0 ? 4 : 5
-  sendInput(`xdotool click ${button}`)
+  sendInput([{ kind: 'click', button }])
   kernel.setGuiTakeover(true)
 }
 
@@ -383,7 +390,7 @@ const onKey = (e: KeyboardEvent): void => {
   } else if (map[e.key] !== undefined) {
     e.preventDefault()
     flushTypeBuffer() // 特殊键保序：先落已攒字符再发键
-    sendInput(`xdotool key ${map[e.key]}`)
+    sendInput([{ kind: 'key', key: map[e.key] }])
   }
 }
 

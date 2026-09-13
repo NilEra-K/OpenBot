@@ -34,9 +34,11 @@ import {
   UtmBoxBackend,
   WslBoxBackend,
   probeAll,
+  probeX11Toolset,
   runProcess,
 } from '@openbot/boxes'
-import type { BackendProbe, BoxBackend, BoxStats, PipeSession, PipeSpec } from '@openbot/boxes'
+import type { BackendProbe, BoxBackend, BoxStats, PipeSession, PipeSpec, ScreenAction } from '@openbot/boxes'
+import { computerTools } from '@openbot/runner'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
 
@@ -137,6 +139,8 @@ const providerInputSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
   /** 协议族（P4 Step 11）：缺省 openai-compat（旧档案读取端兼容） */
   protocol: z.enum(['openai-compat', 'anthropic']).optional(),
+  /** 视觉（图像输入）声明（P8-2 生产注册门的事实源之一）：缺省 false */
+  supportsImages: z.boolean().optional(),
 })
 /** 回退端点设置（P4 Step 11）：null = 清除回退 */
 const setFallbackSchema = z.object({ name: z.string().min(1).nullable() })
@@ -175,6 +179,25 @@ const registerAgentSchema = z.object({
   modelProvider: z.string().trim().min(1).max(64).optional(),
   role: z.enum(['steward', 'worker']).optional(),
 })
+/** 桌面输入动作批次（P8-2 接口化——协议中性词表，renderer 不再拼 xdotool 串；
+ *  坐标为真实屏幕坐标语义；button 沿用 X 编号 1=左 2=中 3=右 4=滚轮上 5=滚轮下） */
+const screenActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('move'), x: z.number(), y: z.number() }),
+  z.object({ kind: z.literal('down'), button: z.number().int().min(1).max(5) }),
+  z.object({ kind: z.literal('up'), button: z.number().int().min(1).max(5) }),
+  z.object({
+    kind: z.literal('click'),
+    button: z.number().int().min(1).max(5),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    count: z.number().int().min(1).max(20).optional(),
+    intervalMs: z.number().int().min(0).max(500).optional(),
+  }),
+  z.object({ kind: z.literal('key'), key: z.string().min(1).max(40) }),
+  z.object({ kind: z.literal('type'), text: z.string().min(1).max(500), delayMs: z.number().int().min(0).max(200).optional() }),
+])
+const guiInputSchema = z.object({ boxId: z.string(), actions: z.array(screenActionSchema).min(1).max(64) })
+
 /** 沙箱装配事实（status 命令与 UI 呈现的单一来源；main 内存态，重启随装配重算） */
 export interface SandboxStatus {
   /** 生效偏好（env 覆盖后的值——装配决策用的就是它） */
@@ -401,17 +424,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       console.log('[openbot] computer-use：已交还 agent——挂起动作继续')
     }
   }
-  // 注册门：env OPENBOT_COMPUTER=1（E2E/显式开启）。生产门（GUI 镜像探测 ∩ provider
-  // supportsImages 声明）待 GUI 容器真机链路（podman machine 未启）——记档 plan Step 4
-  const computerEnabled = process.env.OPENBOT_COMPUTER === '1'
+  // 注册门（plan-image-firstclass P8-2 C4 生产门兑现）：env OPENBOT_COMPUTER=1 是强制门
+  //（E2E/显式开启）；生产门 = GUI 工具集探测 ∩ 主力 provider 视觉声明，在名册装配后探测
+  // 注册（见下方 addAgent 之后——探测需要 Box 在场）。enabled 是运行时可变事实（v1.box.gui.state）
+  let computerEnabled = process.env.OPENBOT_COMPUTER === '1'
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
     backend,
     // save/recall 工具 + 会话装配「此前记忆」注入（每轮同步读缓存；addAgent 预载）
     memory: memoryStore,
-    // computer-use 工具族（plan-computer-use）：env 门开即注册（生产门记档待 GUI 真机）
-    ...(computerEnabled ? { computer: { lock: guiLock } } : {}),
     // run 策略上调（2026-09-06 进展驱动 grace 语义）：无进展 5 分钟才逃逸（慢模型长思考/
     // 多轮工具循环在动就不算停滞）、总时长 15 分钟硬限兜底失控——CLI/测试保持内核缺省
     runPolicy: { graceMs: 300_000, deadlineMs: 900_000 },
@@ -450,37 +472,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     })(),
   })
 
-  // ---- GUI 注入常驻通道（P0-1，2026-09-04 优化轮）：Box 内常驻 `sh -s` 读行执行——
-  // 事件延迟 = 容器内 xdotool 执行（~数 ms）；对照逐事件 podman exec 冷启实测 410-550ms
-  // （「不跟手」的根治——与采集管道对称：采集常驻了，注入不能再逐次冷启）。
-  // 惰性建立（首笔 GUI 输入）、随 Box 切换重建、进程退出自动除名（下次输入重建）、
-  // dispose 兜底杀（孤儿纪律）。通道不可用（后端无 openPipe / 启动失败）回退逐事件 exec ----
-  let guiInputChannel: { boxId: string; pipe: PipeSession } | null = null
-  const guiDisplay = (): string => process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2'
-  const ensureGuiInputChannel = async (boxId: string): Promise<void> => {
-    if (guiInputChannel !== null && guiInputChannel.boxId === boxId) return
-    guiInputChannel?.pipe.close()
-    guiInputChannel = null
-    if (!backend.openPipe) return
-    try {
-      // 坑⑱同款清场：硬杀后残留的旧注入 sh（argv $0 标签定位——$0 进 /proc cmdline）；
-      // 同坑⑱b 模式拆半拼接（防 pkill 命中执行自身命令的 sh）
-      await backend
-        // 模式拆半（坑⑱b）：shell 相邻单引号段拼接 'openbot-gui-''input'——sh 自身 cmdline
-        // 含引号字符不被 pkill 模式命中（防自杀），解析后模式仍为 openbot-gui-input
-        .exec(boxId, { command: ['sh', '-c', "pkill -9 -f 'openbot-gui-''input' 2>/dev/null; true"], timeoutMs: 5_000 })
-        .catch(() => {})
-      // argv 第三参是 $0 标签（进 /proc cmdline 供 pkill 定位；不影响 -s 行式读 stdin）
-      const pipe = await backend.openPipe(boxId, { command: ['sh', '-s', 'openbot-gui-input'], env: { DISPLAY: guiDisplay() } })
-      pipe.onExit(() => {
-        if (guiInputChannel?.pipe === pipe) guiInputChannel = null
-      })
-      guiInputChannel = { boxId, pipe }
-      console.log(`[openbot] gui 注入通道开启（${boxId}，display ${guiDisplay()}）`)
-    } catch (err) {
-      console.warn('[openbot] gui 注入通道建立失败（回退逐事件 exec）：', err instanceof Error ? err.message : err)
-    }
-  }
+  // GUI 注入常驻通道随 P8-2 接口化迁入 X11ScreenControl（kernel.screen.inputChannel）——
+  // 惰性建立/随 Box 失效重建/进程退出自动除名/dispose 兜底杀（孤儿纪律）全部内聚适配器；
+  // 通道不可用时命令面回退逐动作 act（与既有回退语义一致）。
 
   /**
    * 模型覆盖分流（backlog ③）：档案名指定 → 静态 provider 实例（resolve 时构造——运行中档案
@@ -596,34 +590,36 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 下一个动作）；注入走与 agent 同一条 xdotool 通路。release：交还。
     .register('v1.box.gui.frame', async (payload) => {
       const { boxId } = z.object({ boxId: z.string() }).parse(payload)
-      const r = await backend.exec(boxId, {
-        // 轮询兜底帧全尺寸（2026-09-04 用户反馈「初模糊后清晰」）：原 960 宽 q75 在大屏被
-        // 放大显糊，实况流（1920 原生）起流后落差肉眼可见——提到 1920x> q85 后两帧源无感
-        // 差异；UI 视图帧无 token 纪律（那是 LLM 回喂的约束），1.5s 单帧体量无谓
-      // 唯一临时文件（2026-09-06 用户报障 convert IDAT CRC error 间歇性失败）：固定文件名下
-      // 多路 pull（ctx 小屏/大屏双实例 1.5s 轮询）与慢 convert（1080p ~1.5-2.5s > 间隔）交叠——
-      // 后一轮 scrot 覆盖前一轮正在读的文件 → 半写 PNG。$$ = sh 进程 pid，每次 exec 天然隔离；
-      // 用后清理不留残骸。computer_screenshot（openbot-shot）同款修复
-      command: ['sh', '-c', "f=/tmp/.openbot-live-$$.png; g=/tmp/.openbot-live-$$.jpg; scrot --pointer -o \"$f\" && convert \"$f\" -resize '1920x>' -quality 85 \"$g\" && base64 -w0 \"$g\"; rm -f \"$f\" \"$g\""],
-        timeoutMs: 15_000,
-        env: { DISPLAY: process.env.OPENBOT_GUI_DISPLAY ?? '127.0.0.1:2' },
-      })
-      if (r.exitCode !== 0) return { image: null, reason: `截图失败：${r.stderr.trim().slice(0, 120)}` }
-      return { image: { base64: r.stdout.trim(), mime: 'image/jpeg' } }
+      // UI 档截图经适配器（P8-2）：1920 宽 q85（2026-09-04 用户反馈「初模糊后清晰」——
+      // 实况流原生分辨率的落差消解；UI 视图帧无 token 纪律）+ 光标入画 + 唯一临时文件
+      try {
+        const capture = await kernel.screen.capture(boxId, { maxWidth: 1920, quality: 85, pointer: true })
+        return { image: { base64: Buffer.from(capture.bytes).toString('base64'), mime: capture.mime } }
+      } catch (err) {
+        return { image: null, reason: `截图失败：${(err instanceof Error ? err.message : String(err)).slice(0, 120) }` }
+      }
     }, z.object({ boxId: z.string() }))
     .register('v1.box.gui.input', async (payload) => {
-      const { boxId, script } = z.object({ boxId: z.string(), script: z.string().max(500) }).parse(payload)
-      if (!takeoverHeld) guiTakeover(true) // 首笔用户输入即接管（挂起 agent 下一个动作）
-      // 常驻通道优先：行式写入 sh -s（容器内逐行执行，天然串行合并突发）；不可用回退逐事件 exec
-      if (guiInputChannel === null || guiInputChannel.boxId !== boxId) await ensureGuiInputChannel(boxId)
-      const channel = guiInputChannel !== null && guiInputChannel.boxId === boxId ? guiInputChannel.pipe : null
+      // 结构化动作批次（P8-2 接口化——renderer 不再拼 xdotool 串；坐标为真实屏幕坐标语义，
+      // 常驻通道原样注入）。首笔用户输入即接管（挂起 agent 下一个动作）
+      const { boxId, actions } = guiInputSchema.parse(payload)
+      if (!takeoverHeld) guiTakeover(true)
+      // 常驻通道优先（行式写入 sh -s——容器内逐行执行，天然串行合并突发）；不可用回退逐动作 act
+      const channel = kernel.screen.inputChannel !== undefined ? await kernel.screen.inputChannel(boxId) : null
       if (channel !== null) {
-        channel.write(`${script}\n`)
+        channel.write(actions)
         return { ok: true }
       }
-      const r = await backend.exec(boxId, { command: ['sh', '-c', script], timeoutMs: 10_000, env: { DISPLAY: guiDisplay() } })
-      return { ok: r.exitCode === 0 }
-    }, z.object({ boxId: z.string(), script: z.string().max(500) }))
+      let ok = true
+      for (const action of actions) {
+        try {
+          await kernel.screen.act(boxId, action)
+        } catch {
+          ok = false
+        }
+      }
+      return { ok }
+    }, guiInputSchema)
     .register('v1.box.gui.release', async () => {
       guiTakeover(false)
       return { ok: true }
@@ -772,6 +768,44 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     .filter((s) => s !== '')
   for (const agentId of extraAgents) {
     await kernel.addAgent({ agentId, llm: provider })
+  }
+
+  // ---- GUI 生产注册门（plan-image-firstclass P8-2 C4 兑现）：env 强制门之外，生产门 =
+  // GUI 工具集探测（B2——Box 内 xdotool/scrot 在场）∩ 主力 provider 视觉声明（档案级
+  // supportsImages）∩ 真实后端（mock 的 exec 应答恒成功，探测不构成事实）。探测需要 Box
+  // 在场，故在名册装配后、网关开启前执行——注册先于任何对话（工具 specs 进首轮请求）。
+  // 探测只在视觉 provider 在场时跑（零配置用户零启动开销）；能力三源合一（C6 不造假）：
+  // 缺一不注册，GUI 视图按 v1.box.gui.state 的 enabled 如实隐藏。
+  // P8-3 起第三源「镜像 GUI 声明」由镜像条目接管（探测届时仍作运行时事实校验）。
+  if (!computerEnabled && chosen.backendId !== 'mock') {
+    let supportsImages = false
+    try {
+      supportsImages = (await settings.resolve()).supportsImages === true
+    } catch {
+      /* 无默认 provider——门自然关着（不放假能力） */
+    }
+    if (supportsImages) {
+      const probeBoxId = (await backend.list())[0]?.boxId
+      if (probeBoxId !== undefined) {
+        computerEnabled = await probeX11Toolset(backend, probeBoxId)
+        if (!computerEnabled) {
+          console.log('[openbot] computer 工具族未注册：Box 内 GUI 工具集（xdotool/scrot）探测未通过')
+        }
+      }
+    }
+  }
+  if (computerEnabled) {
+    for (const tool of computerTools({
+      backend,
+      bus: kernel.bus,
+      onStream: kernel.onStream,
+      transcript: kernel.transcript,
+      screen: kernel.screen,
+      lock: guiLock,
+    })) {
+      kernel.tools.register(tool)
+    }
+    console.log('[openbot] computer 工具族已注册（GUI 工具集探测 ∩ 视觉 provider——生产门兑现）')
   }
 
   const gateway = await startGateway({
@@ -1002,7 +1036,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     async dispose() {
       kernel.shellService.dispose() // 杀全部 PTY 会话（不留后台 shell）
       kernel.guiStream.dispose() // 杀全部 GUI 采集管道（不留后台 ffmpeg——孤儿纪律同款）
-      guiInputChannel?.pipe.close() // 杀注入常驻 sh（同款孤儿纪律）
+      kernel.screen.dispose?.() // 杀全部常驻注入通道（P8-2 起内聚适配器——同款孤儿纪律）
       kernel.statsService.stop()
       kernel.stopWatchdog()
       clearInterval(automationTimer) // Scheduler 孤儿定时器不留

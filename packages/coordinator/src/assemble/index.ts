@@ -10,11 +10,11 @@ import { AgentStore, IdempotencyLedger, InMemoryFs, TranscriptStore, formatMemor
 import type { FsAdapter, MemoryStore } from '@openbot/state'
 import { MockChatProvider } from '@openbot/llm'
 import type { ChatProvider } from '@openbot/llm'
-import { BoxRegistry, BoxesErrorCodes, MockBoxBackend } from '@openbot/boxes'
-import type { BoxBackend } from '@openbot/boxes'
+import { BoxRegistry, BoxesErrorCodes, MockBoxBackend, X11ScreenControl } from '@openbot/boxes'
+import type { BoxBackend, ScreenControl } from '@openbot/boxes'
 import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
 import { AutoApprovalGate, computerTools, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner } from '@openbot/runner'
-import type { GuiTakeoverLock } from '@openbot/runner'
+import type { GuiTakeoverLock, RunStreamEvent } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
 import { StreamHub } from '../stream-hub/index.js'
@@ -49,8 +49,9 @@ export interface AssembleOptions {
   memory?: Pick<MemoryStore, 'append' | 'list' | 'listSync' | 'ensureLoaded'>
   /**
    * computer-use 工具族（plan-computer-use Step 4/5）：注入即注册 computer_* 工具族
-   * （沙箱 GUI 操作）。注册门（GUI 模板在场 ∩ 主力 provider 支持图像）在装配方判定——
-   * coordinator 只认锁接口。lock.waitTurn 在每个动作前等待（用户接管挂起）。
+   * （沙箱 GUI 操作）。注册门（工具集探测 ∩ provider 支持图像——P8-2 生产门）在装配方
+   * 判定，可后置注册（kernel.tools + kernel.onStream 暴露面）；coordinator 只认锁与
+   * ScreenControl 接口。lock.waitTurn 在每个动作前等待（用户接管挂起）。
    */
   computer?: { lock: Pick<GuiTakeoverLock, 'waitTurn'> }
   maxToolRounds?: number
@@ -91,6 +92,8 @@ export interface AssembledKernel {
   readonly transport: InProcessTransport
   readonly agentStore: AgentStore
   readonly transcript: TranscriptStore
+  /** 工具注册表（壳侧后置注册 computer 工具族——P8-2 生产门探测需要 Box 先在场） */
+  readonly tools: ToolRegistry
   /** 幂等账本（审批恢复扫描等观察面） */
   readonly ledger: IdempotencyLedger
   /** 实际装配的出 Box 闸门（Manual 时壳侧可拿引用注册 resolve 命令） */
@@ -108,6 +111,11 @@ export interface AssembledKernel {
   readonly shellService: ShellService
   /** GUI 桌面实况流（30fps mjpeg）管理与分发（gateway 回调三件套并联 attach + onStreamPause） */
   readonly guiStream: GuiStreamService
+  /** 桌面控制适配器（plan-image-firstclass P8-2）：工具族/实况/gui 命令面共用的单一实例
+   *  （几何缓存单源）——壳侧后置注册 computer 工具族与 gui 命令面换调都用它 */
+  readonly screen: ScreenControl
+  /** run 实况汇聚回调（壳侧后置注册 computer 工具族时回填同一依赖——与装配内注册同源） */
+  readonly onStream: (event: RunStreamEvent) => void
   /** Box 统计轮询与宿主磁盘压力判定（Step 6；生产经 startStats 定时驱动） */
   readonly statsService: StatsService
   readonly schedulers: ReadonlyMap<string, AgentScheduler>
@@ -209,12 +217,18 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const streamHub = new StreamHub()
   // 交互式 shell（PTY）：用户亲手操作，不经 run/审批/预算——与 agent exec 路线完全分离
   const shellService = new ShellService({ backend })
-  // GUI 桌面实况（三期双引擎）：采集在 Box 内 ffmpeg（backend.openPipe 二进制管道），
+  // 桌面控制适配器（plan-image-firstclass P8-2 接口化）：X11 适配器为缺省实现——display
+  // 装配参数化（env OPENBOT_GUI_DISPLAY 由装配读取传入，B3；P8-3 起由镜像条目接管）；
+  // 工具族/实况服务/gui 命令面三方共用同一实例（几何缓存单源）
+  const screen = new X11ScreenControl({
+    host: backend,
+    ...(process.env.OPENBOT_GUI_DISPLAY !== undefined ? { display: process.env.OPENBOT_GUI_DISPLAY } : {}),
+  })
+  // GUI 桌面实况（三期双引擎）：采集经适配器（Box 内 ffmpeg 管道，帧字节直出），
   // 帧走 WS /stream 的 gui 帧型；编码引擎 env OPENBOT_GUI_CODEC 覆盖（缺省 h264——
-  // x264 zerolatency + WebCodecs 硬解；'mjpeg' 回退一期路径）；显示地址 env
-  // OPENBOT_GUI_DISPLAY 与 computer 工具族同源
+  // x264 zerolatency + WebCodecs 硬解；'mjpeg' 回退一期路径）
   const guiStream = new GuiStreamService({
-    backend,
+    screen,
     ...(process.env.OPENBOT_GUI_CODEC === 'mjpeg' ? { codec: 'mjpeg' as const } : {}),
   })
   // Box 统计轮询与宿主磁盘压力判定（Step 6）：盒清单读装配层映射——零子进程开销；
@@ -246,10 +260,10 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   if (memory !== undefined) {
     tools.register(saveMemoryTool({ memory })).register(recallMemoryTool({ memory }))
   }
-  // computer-use 工具族（plan-computer-use）：注入即注册（门在装配方）；与 exec 共用
-  // backend/bus/onStream/transcript——CLI 即接口（xdotool/scrot 经 boxes.exec，后端零改动）
+  // computer-use 工具族（plan-computer-use）：注入即注册（生产门可后置——kernel.tools +
+  // kernel.onStream 暴露面供装配方探测后注册）；只认 ScreenControl 接口（P8-2 接口化）
   if (options.computer !== undefined) {
-    for (const tool of computerTools({ backend, bus, onStream, transcript, lock: options.computer.lock })) {
+    for (const tool of computerTools({ backend, bus, onStream, transcript, screen, lock: options.computer.lock })) {
       tools.register(tool)
     }
   }
@@ -487,9 +501,12 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     messaging,
     broadcast,
     groups,
+    tools,
     streamHub,
     shellService,
     guiStream,
+    screen,
+    onStream,
     statsService,
     schedulers,
     async addAgent(registration) {

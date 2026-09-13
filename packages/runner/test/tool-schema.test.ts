@@ -60,7 +60,7 @@ describe('工具 argsSchema 全覆盖（wire 参数结构）', () => {
     const exec = execTool(deps()).spec.description
     expect(exec).toContain('优先用本工具')
     expect(exec).toContain('computer_*')
-    const tools = computerTools({ backend: null as never, bus: null as never })
+    const tools = computerTools({ backend: null as never, bus: null as never, screen: null as never })
     const shot = tools.find((t) => t.spec.name === 'computer_screenshot')!.spec.description
     expect(shot).toContain('优先用 exec')
     expect(shot).toContain('登录/认证')

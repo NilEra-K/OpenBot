@@ -145,9 +145,11 @@ interface ProviderForm {
   proxyUrl: string
   /** 协议族（P4 Step 11）：anthropic 走 messages API，缺省 openai-compat */
   protocol: 'openai-compat' | 'anthropic'
+  /** 视觉（图像输入）声明（P8-2 生产门事实源）——勾选后主力为该端点时才可能注册 computer 工具族 */
+  supportsImages: boolean
 }
 
-const EMPTY_FORM: ProviderForm = { name: '', baseUrl: '', model: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat' }
+const EMPTY_FORM: ProviderForm = { name: '', baseUrl: '', model: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat', supportsImages: false }
 
 const formOpen = ref(false)
 const editingName = ref<string | null>(null)
@@ -183,6 +185,7 @@ const openEdit = (p: ProviderView): void => {
     apiKey: '', // 留空 = 保留原密文（服务端约定）
     proxyUrl: p.proxyUrl ?? '',
     protocol: p.protocol ?? 'openai-compat',
+    supportsImages: p.supportsImages === true,
   })
   formError.value = null
   formOpen.value = true
@@ -205,6 +208,7 @@ const save = async (): Promise<void> => {
       ...(form.apiKey.trim() !== '' ? { apiKey: form.apiKey.trim() } : {}),
       ...(form.proxyUrl.trim() !== '' ? { proxyUrl: form.proxyUrl.trim() } : {}),
       protocol: form.protocol,
+      supportsImages: form.supportsImages,
     })
     toast.push(`模型端点已保存：${form.name.trim()}`, 'success')
     formOpen.value = false
@@ -448,6 +452,13 @@ const wslHelpNeeded = computed(() => {
             <div class="field">
               <label class="field-label" for="pfModel">模型 ID</label>
               <input id="pfModel" v-model="form.model" class="field-input mono" placeholder="例：deepseek-chat" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field">
+              <label class="proto-opt" :class="{ 'is-on': form.supportsImages }" for="pfVision">
+                <input id="pfVision" type="checkbox" v-model="form.supportsImages" />
+                视觉（图像输入）
+              </label>
+              <p class="field-note">端点支持看图时勾选——GUI 沙箱工具集探测通过后，computer 工具族才会注册</p>
             </div>
             <div class="field">
               <label class="field-label" for="pfKey">API Key</label>
