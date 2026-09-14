@@ -44,6 +44,7 @@ import {
   probeAll,
   probeX11Toolset,
   runProcess,
+  scanEnvImages,
 } from '@openbot/boxes'
 import type { BackendProbe, BoxBackend, BoxCaps, BoxStats, PipeSession, PipeSpec, ScreenAction } from '@openbot/boxes'
 import { computerTools } from '@openbot/runner'
@@ -849,6 +850,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       if (entry === null) throw new KernelError('STATE_IMAGE_NOT_FOUND', `镜像条目不存在：${id}`)
       return testImageEntry(entry)
     }, z.object({ id: z.string() }))
+    // 可用镜像探测（2026-09-14）：环境里实际在场的镜像清单（宿主 docker/podman + WSL 发行版内
+    // docker）——注册表只含手动条目，此命令补「用户无从得知有哪些镜像」的发现面。
+    // 按需触发（设置页按钮），只报告事实不自动入库；装配期已就绪的 platform 从作用域注入
+    .register('v1.images.scan', async () => ({ sources: await scanEnvImages({ run: runProcess, platform }) }))
     .register('v1.sandbox.status', async () => ({
       preference: sandboxStatus.preference,
       stored: await settings.getSandbox(),

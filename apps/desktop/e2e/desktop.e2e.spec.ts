@@ -1614,6 +1614,51 @@ test('镜像注册表（P8-3）：CRUD 全链 + 连接测试如实报告 + 多�
   }
 })
 
+test('可用镜像探测：扫描报告来源事实（可用性 chip + 如实原因）+ 在场镜像注册预填', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-scan-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '镜像' }).click() // 切换式导航
+
+    // —— 扫描前无结果卡（按需触发——不自动跑用户机器上的 CLI） ——
+    await expect(page.locator('[data-role="image-scan-result"]')).toHaveCount(0)
+
+    // —— 点击扫描 → 结果卡出现：来源行（≥2）各带可用性 chip（事实因机器而异——语义断言环境无关） ——
+    await page.locator('[data-role="image-scan"]').click()
+    const resultCard = page.locator('[data-role="image-scan-result"]')
+    await expect(resultCard).toBeVisible({ timeout: 60_000 }) // WSL 冷启动放宽
+    const sourceRows = page.locator('[data-role="image-source"]')
+    expect(await sourceRows.count()).toBeGreaterThanOrEqual(2)
+    for (let i = 0; i < await sourceRows.count(); i++) {
+      await expect(sourceRows.nth(i).locator('.chip')).toHaveText(/可用|不可用/)
+    }
+
+    // —— 在场镜像行（环境相关）：有则「注册」预填模态（载体=容器、镜像名回填），无则跳过 ——
+    const scanRows = page.locator('[data-role="image-scan-row"]')
+    const scanCount = await scanRows.count()
+    if (scanCount > 0) {
+      const ref = await scanRows.first().locator('.cfg-name').innerText()
+      await scanRows.first().locator('[data-role="image-register"]').click()
+      const modal = page.locator('.wiz-card[role="dialog"]')
+      await expect(modal).toBeVisible()
+      await expect(page.locator('#ifImage')).toHaveValue(ref.trim())
+      await expect(modal.locator('label.proto-opt', { hasText: '容器镜像' })).toHaveClass(/is-on/)
+      await modal.getByRole('button', { name: '取消' }).click()
+      await expect(modal).toHaveCount(0)
+    }
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
 test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重启持久 → 删条目悬空如实回默认', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-bind-'))
   const app = await _electron.launch({

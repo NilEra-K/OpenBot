@@ -272,6 +272,46 @@ const imageSummary = (img: { carrier: 'container' | 'ssh'; image?: string; host?
   return out
 }
 
+// ---- 可用镜像探测（2026-09-14）：环境在场镜像清单 + 一键带入注册表（预填模态，用户把关后入库） ----
+/** 来源显示名（wsl-docker = WSL 默认发行版内独立安装的 docker，与 Docker Desktop 不同 daemon） */
+const SOURCE_LABELS: Record<string, string> = {
+  docker: 'Docker',
+  podman: 'Podman',
+  'wsl-docker': 'WSL 发行版内 Docker',
+}
+const scanAvailableImages = async (): Promise<void> => {
+  try {
+    await kernel.scanImages()
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+/** 该镜像引用是否已在注册表（已注册的扫描行不再给注册按钮——不重复入库） */
+const isImageRegistered = (ref: string): boolean => kernel.images.some((e) => e.carrier === 'container' && e.image === ref)
+/** 扫描结果的镜像行扁平化（来源随行呈现；不可用来源无行——原因在来源行） */
+const scannedImageRows = computed(() => {
+  const out: Array<{ source: string; ref: string; size?: string; created?: string }> = []
+  for (const src of kernel.imageScan ?? []) {
+    if (!src.ok) continue
+    for (const im of src.images ?? []) {
+      out.push({ source: src.source, ref: im.ref, ...(im.size !== undefined ? { size: im.size } : {}), ...(im.created !== undefined ? { created: im.created } : {}) })
+    }
+  }
+  return out
+})
+/** 扫描行「注册」：打开既有添加模态并预填（载体=容器；GUI 命名暗示预选 X11——最终以用户保存为准） */
+const registerScanned = (ref: string): void => {
+  imageEditingId.value = null
+  Object.assign(imageForm, IMAGE_EMPTY_FORM, {
+    carrier: 'container' as const,
+    name: ref,
+    image: ref,
+    controlProtocol: /gui/i.test(ref) ? ('x11' as const) : ('none' as const),
+  })
+  imageFormError.value = null
+  imageFormOpen.value = true
+}
+
 /** 应用版本（P4 Step 1）：main 经 preload 桥取 package.json version——不手写不过时 */
 const appVersion = ref<string | null>(null)
 // ---- 系统自启动（0.1.0 产品化）：注册表现状即真相——进页读、切换写（不另存偏好） ----
@@ -732,9 +772,35 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">镜像注册表</div>
         <HelpTip
-          text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 tools/provision-gui.sh 预置桌面工具集。"
+          text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。「扫描可用镜像」按需列出本机 Docker / Podman（含 WSL 发行版内独立安装的 docker——Docker Desktop 的镜像走宿主 CLI）实际在场的镜像，只报告事实；行上「注册」预填表单，保存后才入注册表。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 tools/provision-gui.sh 预置桌面工具集。"
         />
-        <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openImageCreate">＋ 添加镜像</button>
+        <button class="btn btn-secondary btn-sm" style="margin-left: auto" data-role="image-scan" :disabled="kernel.imageScanning" @click="scanAvailableImages">{{ kernel.imageScanning ? '扫描中…' : '⟳ 扫描可用镜像' }}</button>
+        <button class="btn btn-secondary btn-sm" style="margin-left: 8px" @click="openImageCreate">＋ 添加镜像</button>
+      </div>
+      <!-- 可用镜像探测结果（按需扫描后呈现）：来源行（可用性 + 如实原因）+ 镜像行（注册预填）——
+           只报告事实不自动入库；已注册引用不再给注册按钮 -->
+      <div v-if="kernel.imageScan !== null" class="settings-card" data-role="image-scan-result">
+        <div v-for="src in kernel.imageScan" :key="src.source" class="cfg-row" data-role="image-source">
+          <div class="cfg-main">
+            <div class="cfg-name">{{ SOURCE_LABELS[src.source] ?? src.source }}</div>
+            <div v-if="!src.ok" class="cfg-desc">{{ src.reason }}</div>
+            <div v-else-if="(src.images ?? []).length === 0" class="cfg-desc">引擎可用，尚未拉取/构建任何镜像</div>
+            <div v-else class="cfg-desc">在场 {{ (src.images ?? []).length }} 个镜像</div>
+          </div>
+          <div class="cfg-actions">
+            <span class="chip" :class="src.ok ? 'chip-success' : 'chip-danger'" :title="src.ok ? '' : src.reason">{{ src.ok ? '可用' : '不可用' }}</span>
+          </div>
+        </div>
+        <div v-for="im in scannedImageRows" :key="im.source + im.ref" class="cfg-row" data-role="image-scan-row">
+          <div class="cfg-main">
+            <div class="cfg-name mono">{{ im.ref }}</div>
+            <div class="cfg-desc">{{ SOURCE_LABELS[im.source] ?? im.source }}<template v-if="im.size"> · {{ im.size }}</template><template v-if="im.created"> · {{ im.created }}</template></div>
+          </div>
+          <div class="cfg-actions">
+            <span v-if="isImageRegistered(im.ref)" class="chip chip-success">已注册</span>
+            <button v-else class="btn btn-ghost btn-sm" data-role="image-register" @click="registerScanned(im.ref)">注册</button>
+          </div>
+        </div>
       </div>
       <div class="settings-card">
       <div v-for="img in kernel.images" :key="img.id" class="cfg-row" :data-image-id="img.id">
@@ -758,7 +824,7 @@ const wslHelpNeeded = computed(() => {
           </button>
         </div>
       </div>
-      <p v-if="kernel.images.length === 0" class="settings-empty">尚无镜像条目——SSH 主机（VMWare/云电脑）与容器镜像都可在此注册</p>
+      <p v-if="kernel.images.length === 0" class="settings-empty">尚无镜像条目——可先「扫描可用镜像」带入本机容器镜像，或手动注册 SSH 主机（VMWare/云电脑）与容器镜像</p>
 
       </div>
       <!-- 镜像条目表单（模态——provider 模态同款容器；字段 id 供 E2E 定位） -->

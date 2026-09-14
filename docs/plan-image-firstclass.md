@@ -421,3 +421,31 @@ P8-1 → P8-2 → P8-3 → P8-4 串行（每轮独立可交付）；P8-5 按需�
 | P8-2 | ScreenControl 接口化 + GUI 生产注册门兑现，行为等价零回退 |
 | P8-3 | 镜像注册表 + 命令面 + 设置页，多镜像并存 |
 | P8-4 | Agent ↔ 镜像绑定分流，云电脑/VMWare 与本地容器同台操控 |
+
+## 可用镜像探测（2026-09-14）：环境在场镜像的发现面——「用户无从得知有哪些镜像」补位
+
+- **动机**：镜像注册表只含手动注册条目，唯一验证手段是逐条目 v1.images.test——须先知道
+  镜像名才能添加条目（鸡生蛋）。用户报障「WSL2 中应该有一个镜像，但设置页不显示」。
+- **`v1.images.scan`（无参命令）**：`scanEnvImages`（`packages/boxes/src/images/index.ts`，
+  占位模块兑现）三来源并行、各自如实结算、单源失败不拖累他源——宿主 docker / 宿主 podman
+  （`images --format` 四列 TSV；引擎未运行是最常见不可用态，如实带指引）+ wsl-docker
+  （`wsl -- docker images`——WSL 默认发行版内独立安装的 docker，与 Docker Desktop 是不同
+  daemon，清单天然不重复；仅 win32 追查；45s 容忍 VM 冷启动；wsl.exe 自身报错是 UTF-16LE，
+  utf8 解码乱码截断呈现、行动指引由注记承担）。
+- **解析容错**：`parseOciImageLines` 纯函数——TSV 四列（Repository/Tag/Size/CreatedSince）；
+  悬空层（`<none>`）与无 tag 行过滤（引用不可 run/注册，报了也无法用）；坏行跳过不拖累
+  其余行（parseOciStats 同哲学）。Windows 上 Docker Desktop 的引擎跑在 WSL2 内——宿主
+  `docker images` 即「WSL2 中的镜像」。
+- **UI（设置页「容器与镜像」节）**：「⟳ 扫描可用镜像」按钮（按需触发——不自动跑用户机器
+  上的 CLI）→ 注册表卡上方结果卡：来源行（可用性 chip + 如实原因 title）+ 镜像行
+  （ref/体积/创建时间）。行上「注册」打开既有添加模态并预填（载体=容器、镜像名=ref、
+  名字含 gui 预选 X11）——**只报告事实不自动入库**，控制协议（GUI 声明）由用户在模态内
+  最终把关；已在注册表的引用呈「已注册」不再给按钮。空态文案补扫描引导。
+- **测试**：单测 +8（解析器样本/如实失败/故障隔离/平台门控）；E2E +1（扫描语义断言
+  环境无关：来源行 ≥2 各带可用性 chip；在场镜像行有则断言「注册」预填）。既有镜像
+  CRUD/绑定用例零回退。
+- **E2E 陷阱记档（历史地雷首次显形）**：Electron 入口 `dist/main/index.js` 由
+  `bundle:main`（esbuild）打包，而 `test:e2e` 脚本只跑 `pnpm -w build`（tsc -b 产出
+  逐文件 `dist/main/kernel.js`）+ `build:renderer`——**主进程 bundle 不随 E2E 重建**。
+  v0.1.28 时代恰好构建过 bundle 掩盖了此缺口；本期首个主进程命令面变更即触发
+  「未知命令：v1.images.scan」（E2E 跑的是旧 bundle）。跑 E2E 前须 `pnpm bundle:main`。

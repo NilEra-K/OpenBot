@@ -207,6 +207,23 @@ export interface ImageTestResult {
   reason?: string
 }
 
+/** 可用镜像探测（2026-09-14）：扫描到的单条镜像（CLI 行事实，ref 可直接注册） */
+export interface ScannedImageView {
+  ref: string
+  repository: string
+  tag: string
+  size?: string
+  created?: string
+}
+
+/** 可用镜像探测的单来源结果（如实报告：不可用必带 reason） */
+export interface ImageScanSourceView {
+  source: 'docker' | 'podman' | 'wsl-docker'
+  ok: boolean
+  images?: ScannedImageView[]
+  reason?: string
+}
+
 /** provider 表单输入（v1.settings.upsertProvider 载荷；apiKey 留空=保留原密文） */
 export interface ProviderInput {
   name: string
@@ -321,6 +338,10 @@ export const useKernelStore = defineStore('kernel', {
     images: [] as ImageEntryView[],
     /** 镜像清单已加载（ctx 档案悬空判定的前提——未加载不误报「已删除」） */
     imagesLoaded: false,
+    /** 可用镜像探测结果（settings 视图按需扫描；null = 从未扫过） */
+    imageScan: null as ImageScanSourceView[] | null,
+    /** 扫描进行中（按钮防重入 + 文案切换） */
+    imageScanning: false,
     /** Box 资源统计（Step 6）：每盒最新值；字段缺席=后端不可测（WSL 只有磁盘） */
     boxStats: {} as Record<string, { cpuPercent?: number; memoryMb?: number; diskMb?: number; at: number }>,
     /** 快照链（P4 Step 9）：全局快照目录事实（最近在前）；caps.snapshot=false 时空链 */
@@ -647,6 +668,17 @@ export const useKernelStore = defineStore('kernel', {
     },
     async testImage(id: string): Promise<ImageTestResult> {
       return await this.call<ImageTestResult>('v1.images.test', { id })
+    },
+    /** 可用镜像探测（按需——设置页按钮触发；只报告事实，注册仍走 addImage 全链） */
+    async scanImages(): Promise<void> {
+      if (this.imageScanning) return
+      this.imageScanning = true
+      try {
+        const state = await this.call<{ sources: ImageScanSourceView[] }>('v1.images.scan')
+        this.imageScan = state.sources
+      } finally {
+        this.imageScanning = false
+      }
     },
     /**
      * 会话历史懒加载（切换会话时调用一次）：transcript 是持久真相——内核重启后 SSE 事件流为空，
