@@ -7,6 +7,7 @@ import { MockChatProvider } from '@openbot/llm'
 import type { MockStep } from '@openbot/llm'
 import { MockBoxBackend } from '@openbot/boxes'
 import type { ExecResult, ExecSpec } from '@openbot/boxes'
+import type { Tool } from '../src/index.js'
 import {
   AutoApprovalGate,
   execTool,
@@ -28,6 +29,10 @@ interface HarnessOptions {
   exec?: (boxId: string, spec: ExecSpec) => ExecResult | Promise<ExecResult>
   /** 审批闸门注入（预算打穿问用户——批准续期/拒绝收尾的编排位） */
   gate?: import('../src/index.js').ApprovalGate
+  /** 额外工具注入（P8-4 截图分流测试：返回含图 ToolResult 的自定义工具） */
+  extraTool?: import('../src/index.js').Tool
+  /** 每 agent 视觉能力（截图回喂分流——缺席=有视觉） */
+  supportsImagesOf?: (agentId: string) => boolean
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -104,6 +109,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     .register(sendMessageTool(messaging))
     .register(sendBroadcastTool(broadcast))
     .register(gated(hostFetchTool(), { gate }))
+  if (options.extraTool) tools.register(options.extraTool)
 
   const runner = new TurnRunner({
     bus,
@@ -120,6 +126,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     maxToolRounds: options.maxToolRounds,
     gate: options.gate,
     onStream: options.onStream,
+    ...(options.supportsImagesOf !== undefined ? { supportsImagesOf: options.supportsImagesOf } : {}),
     // 与 assemble 同构（P5 Step 4 修复）：supersede 旧轮终答写入前拦截
     isGroupTurnStale: (p) => groups.isStale(p),
   })
@@ -629,5 +636,53 @@ describe('TurnRunner 流事件（onStream）', () => {
     await waitIdle([a1])
     const records = await h.transcript.readAll('a1')
     expect(records.map((r) => r.kind)).toEqual(['user', 'thinking', 'agent'])
+  })
+})
+
+describe('截图回喂分流（P8-4 后 UI 优化）：GUI 工具注册只看环境，模型视觉只决定回喂格式', () => {
+  const IMG = { base64: 'aW1n', mime: 'image/jpeg' }
+  const screenshotTool = (): Tool => ({
+    spec: { name: 'computer_screenshot' },
+    execute: async () => ({ text: '已截图。截图 1:1', image: IMG }),
+  })
+
+  it('有视觉（缺席=视为有视觉，向后兼容）：tool 消息含 image part', async () => {
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'computer_screenshot', args: {} }] },
+          { text: '看完了' },
+        ],
+      },
+      { extraTool: screenshotTool() },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '截图', nonce: 'n1' })
+    await waitIdle([a1])
+    const toolMsg = h.llms.get('a1')!.requests[1].messages.find((m) => m.role === 'tool') // 工具结果在第二轮 chat 的 messages 里
+    expect(toolMsg?.content).toEqual([
+      { type: 'text', text: '已截图。截图 1:1' },
+      { type: 'image', image: IMG },
+    ])
+  })
+
+  it('无视觉（supportsImagesOf=false）：image part 降级为文本说明（部分端点对 image part 会 400）', async () => {
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'computer_screenshot', args: {} }] },
+          { text: '拍好了' },
+        ],
+      },
+      { extraTool: screenshotTool(), supportsImagesOf: () => false },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '截图', nonce: 'n1' })
+    await waitIdle([a1])
+    const toolMsg = h.llms.get('a1')!.requests[1].messages.find((m) => m.role === 'tool') // 工具结果在第二轮 chat 的 messages 里
+    expect(typeof toolMsg?.content).toBe('string')
+    expect(toolMsg?.content as string).toContain('已截图。截图 1:1')
+    expect(toolMsg?.content as string).toContain('无视觉能力')
+    expect(JSON.stringify(toolMsg?.content)).not.toContain('"type":"image"')
   })
 })

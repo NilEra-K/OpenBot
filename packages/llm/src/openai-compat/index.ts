@@ -43,7 +43,11 @@ export interface OpenAiCompatProviderOptions {
   config: OpenAiCompatConfig
   /** 注入式 fetch（测试）；缺省用全局 fetch */
   fetchImpl?: FetchLike
+  /** 能力声明（P8-4 后 UI 优化） */
+  capabilities?: ProviderCapabilities
 }
+
+import type { ProviderCapabilities } from '../provider/index.js'
 
 // ---- wire 类型（chat completions 兼容面，只声明用到的字段） ----
 
@@ -77,11 +81,13 @@ function toWireContent(content: ChatMessage['content']): WireMessage['content'] 
 const DEFAULT_TIMEOUT_MS = 120_000
 
 export class OpenAiCompatProvider implements ChatProvider {
+  readonly capabilities: ProviderCapabilities
   readonly #config: OpenAiCompatConfig
   readonly #fetchImpl: FetchLike
 
   constructor(options: OpenAiCompatProviderOptions) {
     this.#config = options.config
+    this.capabilities = options.capabilities ?? {}
     this.#fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike)
   }
 

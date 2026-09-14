@@ -364,7 +364,12 @@ E2E 分流断言绿。
 - [ ] 2. **RDP 设计记档**（F1）：宿主 RDP 客户端注入 vs 镜像内探针 agent 两路线的取舍记录
   （连接模型/凭据/带宽/依赖面），真机接入时裁定——不实施
 
-## 设计要点
+## 门语义修正（2026-09-13，用户裁定）：GUI 能力是环境属性，模型视觉只定回喂格式
+
+- **依赖结构修正**：GUI 能用与否是「目标环境」（Box/镜像装没装 GUI 桌面 + 工具集）的属性，与模型能力正交——v0.1.23 生产门把「主力 provider 勾选视觉」捆进 GUI 注册门，让模型短板掩盖环境能力（用户报障「之前支持 GUI 现在看不到了」的根因之一）。修正后注册门 = 工具集探测 ∩ 真实后端（env 强制门保留）；**supportsImages 移出注册门，语义收窄为截图回喂格式**（视觉模型喂 image part；非视觉模型降级为文本说明——部分端点对 image part 会 400）。
+- **实现位**：TurnRunnerDeps.supportsImagesOf（per-agent 视觉查询，装配端从 provider.capabilities 取）+ TurnRunner 工具消息组装分流 + provider.capabilities 面（llm 包此前仅声明未实现——本期接真）+ provider 档案「视觉（图像输入）」勾选语义更新（设置页表单注记同步）。
+- **GUI 视图用户可见性**（注册门外，另两路独立存在）：GUI 视图本身（旁观/接管）只要 Box 可用即呈现——它不依赖模型视觉，用户可随时接管人工操作。
+
 
 1. **RoutingBackend 是改造面收敛的关键**：GuiStreamService/StatsService/ShellService/工具族
    全部持单一 `backend` 引用——多后端并存不逐服务改造，而是装配层一个按 image 路由的

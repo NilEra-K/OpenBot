@@ -50,6 +50,11 @@ export interface TurnRunnerDeps {
    */
   onStream?: (event: RunStreamEvent) => void
   /**
+   * 每 agent 的视觉能力（P8-4 后 UI 优化，可选注入）：截图回喂分流——有视觉喂 image part，
+   * 无视觉降级为文本说明（部分端点对 image part 会 400）。缺席 = 视为有视觉（向后兼容）。
+   */
+  supportsImagesOf?: (agentId: string) => boolean
+  /**
    * 群轮转代际过期判定（P5 Step 4 修复，装配注入 = GroupService.isStale）：
    * supersede 后旧轮 turn 的终答写入前拦截——不落群流不发事件（静默丢弃）。
    * 缺席时（测试最小注入）不做拦截——写入与编排层代际判定（onSettled）双层防线。
@@ -254,16 +259,25 @@ export class TurnRunner {
           signal: run.signal,
         }
         const result = await this.#deps.tools.execute(ctx, call)
-        // 含图回喂（plan-computer-use Step 3）：content parts（text+image）给多模态模型；
-        // 纯文本结果零变化（string 快路径）
+        // 含图回喂（plan-computer-use Step 3）+ 视觉分流（P8-4 后 UI 优化，用户裁定）：
+        // GUI 工具注册只看环境（工具集探测）；模型无视觉时截图降级为文本说明——
+        // 不喂 image part（部分端点对 image part 会 400），图像仍进 ToolRegistry.lastImageOf
+        // （GUI 视图旁观帧源不受影响）。纯文本结果零变化（string 快路径）
+        const image = typeof result === 'string' ? undefined : result.image
+        const vision = this.#deps.supportsImagesOf?.(agentId) ?? true
+        let toolText = typeof result === 'string' ? result : result.text
+        if (image !== undefined && !vision) {
+          toolText += '（截图已拍摄——当前模型无视觉能力，图像内容不可读；可在 GUI 视图查看画面。）'
+        }
+        const imagePart = image !== undefined && vision ? image : undefined
         messages.push({
           role: 'tool',
           content:
-            typeof result === 'string'
-              ? result
+            imagePart === undefined
+              ? toolText
               : [
-                  { type: 'text' as const, text: result.text },
-                  { type: 'image' as const, image: result.image },
+                  { type: 'text' as const, text: toolText },
+                  { type: 'image' as const, image: imagePart },
                 ],
           toolCallId: call.id,
         })

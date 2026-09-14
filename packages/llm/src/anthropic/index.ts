@@ -31,7 +31,11 @@ export interface AnthropicProviderOptions {
   config: AnthropicConfig
   /** 注入式 fetch（测试）；缺省用全局 fetch */
   fetchImpl?: FetchLike
+  /** 能力声明（P8-4 后 UI 优化） */
+  capabilities?: ProviderCapabilities
 }
+
+import type { ProviderCapabilities } from '../provider/index.js'
 
 // ---- wire 类型（messages API，只声明用到的字段） ----
 
@@ -52,11 +56,13 @@ const DEFAULT_MAX_TOKENS = 8192
 const ANTHROPIC_VERSION = '2023-06-01'
 
 export class AnthropicProvider implements ChatProvider {
+  readonly capabilities: ProviderCapabilities
   readonly #config: AnthropicConfig
   readonly #fetchImpl: FetchLike
 
   constructor(options: AnthropicProviderOptions) {
     this.#config = options.config
+    this.capabilities = options.capabilities ?? {}
     this.#fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike)
   }
 

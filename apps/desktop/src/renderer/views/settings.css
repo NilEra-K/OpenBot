@@ -27,10 +27,11 @@
   align-items: center;
   gap: 6px; /* 标题 + ⓘ 紧跟；右侧动作按钮由按钮自身 margin-left:auto 推（0.1.2：space-between 会把 ⓘ 推到最右） */
   margin-top: 26px;
+  margin-bottom: 10px; /* 标题行与卡片呼吸感（0.1.26 用户反馈：按钮几乎贴住卡片） */
 }
 
 .set-sec-row .set-sec {
-  margin-top: 0;
+  margin: 0; /* 行内居中对齐（0.1.26 用户反馈：继承的 margin-bottom 参与 flex 居中计算——标题被顶高、ⓘ 视觉下沉）；间距由行自身 margin 管 */
 }
 
 .set-sec-note {

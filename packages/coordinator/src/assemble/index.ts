@@ -284,6 +284,9 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     bus,
     transcript,
     llmOf: (agentId) => llms.get(agentId) ?? new MockChatProvider({ steps: [] }),
+    // 视觉能力（P8-4 后 UI 优化）：截图回喂分流——provider.capabilities.supportsImages 决定
+    // 图像 part 或文本降级（未声明按有视觉处理——向后兼容）
+    supportsImagesOf: (agentId) => llms.get(agentId)?.capabilities?.supportsImages === true,
     tools,
     boxOf: (agentId) => boxes.get(agentId) ?? null,
     nextMessageId,

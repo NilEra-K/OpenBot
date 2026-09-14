@@ -632,7 +632,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }
   }
 
-  /** 档案 → provider 实现（P4 Step 11）：protocol 分支 anthropic（messages API）/ openai-compat 缺省 */
+  /** 档案 → provider 实现（P4 Step 11）：protocol 分支 anthropic（messages API）/ openai-compat 缺省。
+   *  视觉声明（P8-4 后语义：只决定截图回喂格式——图像 part 或文本降级，不再决定 GUI 注册门） */
   const buildProvider = (resolved: ResolvedProvider): ChatProvider => {
     const config = {
       baseUrl: resolved.baseUrl,
@@ -643,9 +644,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
       ...(resolved.timeoutMs !== undefined ? { timeoutMs: resolved.timeoutMs } : {}),
     }
+    const capabilities = {
+      ...(resolved.supportsImages !== undefined ? { supportsImages: resolved.supportsImages } : {}),
+    }
     return resolved.protocol === 'anthropic'
-      ? new AnthropicProvider({ config })
-      : new OpenAiCompatProvider({ config })
+      ? new AnthropicProvider({ config, capabilities })
+      : new OpenAiCompatProvider({ config, capabilities })
   }
 
   /** settings 变更后热切换 provider 与回退实现（明文 key 只在本进程内存中存在） */
@@ -985,27 +989,18 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     await kernel.addAgent({ agentId, llm: provider })
   }
 
-  // ---- GUI 生产注册门（plan-image-firstclass P8-2 C4 兑现）：env 强制门之外，生产门 =
-  // GUI 工具集探测（B2——Box 内 xdotool/scrot 在场）∩ 主力 provider 视觉声明（档案级
-  // supportsImages）∩ 真实后端（mock 的 exec 应答恒成功，探测不构成事实）。探测需要 Box
-  // 在场，故在名册装配后、网关开启前执行——注册先于任何对话（工具 specs 进首轮请求）。
-  // 探测只在视觉 provider 在场时跑（零配置用户零启动开销）；能力三源合一（C6 不造假）：
-  // 缺一不注册，GUI 视图按 v1.box.gui.state 的 enabled 如实隐藏。
-  // P8-3 起第三源「镜像 GUI 声明」由镜像条目接管（探测届时仍作运行时事实校验）。
+  // ---- GUI 生产注册门（P8-4 后门语义修正，用户裁定）：env 强制门之外，生产门 =
+  // GUI 工具集探测（B2——Box 内 xdotool/scrot 在场）∩ 真实后端（mock 的 exec 应答恒成功，
+  // 探测不构成事实）。**模型视觉不进注册门**——GUI 能力是环境（Box/镜像）的属性，与模型
+  // 无关；模型视觉只决定截图回喂格式（TurnRunner.supportsImagesOf 分流：无视觉降级为文本）。
+  // 探测需要 Box 在场，故在名册装配后、网关开启前执行——注册先于任何对话（工具 specs 进
+  // 首轮请求）。探测失败如实 console 留痕。
   if (!computerEnabled && chosen.backendId !== 'mock') {
-    let supportsImages = false
-    try {
-      supportsImages = (await settings.resolve()).supportsImages === true
-    } catch {
-      /* 无默认 provider——门自然关着（不放假能力） */
-    }
-    if (supportsImages) {
-      const probeBoxId = (await routedBackend.list())[0]?.boxId
-      if (probeBoxId !== undefined) {
-        computerEnabled = await probeX11Toolset(backend, probeBoxId)
-        if (!computerEnabled) {
-          console.log('[openbot] computer 工具族未注册：Box 内 GUI 工具集（xdotool/scrot）探测未通过')
-        }
+    const probeBoxId = (await routedBackend.list())[0]?.boxId
+    if (probeBoxId !== undefined) {
+      computerEnabled = await probeX11Toolset(backend, probeBoxId)
+      if (!computerEnabled) {
+        console.log('[openbot] computer 工具族未注册：Box 内 GUI 工具集（xdotool/scrot）探测未通过')
       }
     }
   }

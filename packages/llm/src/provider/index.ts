@@ -91,4 +91,6 @@ export interface ChatResponse {
 
 export interface ChatProvider {
   chat(request: ChatRequest, signal?: AbortSignal): Promise<ChatResponse>
+  /** 能力声明（P8-4 后 UI 优化）：supportsImages 决定截图回喂格式（图像 part / 文本降级）；缺省视为无 */
+  readonly capabilities?: ProviderCapabilities
 }

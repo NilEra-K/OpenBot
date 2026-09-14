@@ -24,6 +24,9 @@ export interface MockChatProviderOptions {
 const MOCK_CHUNK_CODE_UNITS = 3
 
 export class MockChatProvider implements ChatProvider {
+  // mock 模拟的是完整端点（含视觉——E2E wire 断言依赖 image part 通行）
+  readonly capabilities = { supportsImages: true } as const
+
   readonly #steps: readonly MockStep[]
   readonly #model: string
   #cursor = 0

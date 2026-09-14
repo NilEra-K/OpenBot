@@ -661,7 +661,7 @@ const wslHelpNeeded = computed(() => {
                 <input id="pfVision" type="checkbox" v-model="form.supportsImages" />
                 视觉（图像输入）
               </label>
-              <p class="field-note">端点支持看图时勾选——GUI 沙箱工具集探测通过后，computer 工具族才会注册</p>
+              <p class="field-note">端点支持看图时勾选——GUI 操作的截图将以图像回喂给模型；不勾则降级为文本说明（GUI 工具族仍按环境可用）</p>
             </div>
             <div class="field">
               <label class="field-label" for="pfKey">API Key</label>
