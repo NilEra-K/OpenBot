@@ -448,4 +448,5 @@ P8-1 → P8-2 → P8-3 → P8-4 串行（每轮独立可交付）；P8-5 按需�
   `bundle:main`（esbuild）打包，而 `test:e2e` 脚本只跑 `pnpm -w build`（tsc -b 产出
   逐文件 `dist/main/kernel.js`）+ `build:renderer`——**主进程 bundle 不随 E2E 重建**。
   v0.1.28 时代恰好构建过 bundle 掩盖了此缺口；本期首个主进程命令面变更即触发
-  「未知命令：v1.images.scan」（E2E 跑的是旧 bundle）。跑 E2E 前须 `pnpm bundle:main`。
+  「未知命令：v1.images.scan」（E2E 跑的是旧 bundle）。已修：`test:e2e` 现于
+  `build:renderer` 前先跑 `bundle:main` + `bundle:preload`（preload 同类陈旧面一并闭环）。

@@ -15,7 +15,7 @@
     "bundle:main": "esbuild src/main/index.ts --bundle --platform=node --format=esm --external:electron --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/main/index.js",
     "bundle:preload": "esbuild src/preload/index.cts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/index.cjs",
     "dist": "node scripts/dist.mjs",
-    "test:e2e": "pnpm -w build && pnpm build:renderer && playwright test"
+    "test:e2e": "pnpm -w build && pnpm bundle:main && pnpm bundle:preload && pnpm build:renderer && playwright test"
   },
   "dependencies": {
     "@openbot/boxes": "workspace:*",
