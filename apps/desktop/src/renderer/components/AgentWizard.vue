@@ -30,7 +30,7 @@ const step = ref(0)
 const name = ref('')
 const roleIdx = ref(1) // 默认研究员（管家在职时选管家会被拒绝——默认避开高频失败路径）
 const color = ref<string>(COLORS[3])
-/** 模型覆盖（backlog ③）：空串=继承全局主力 */
+/** 模型覆盖（backlog ③）：空串=默认模型（自动） */
 const modelOverride = ref('')
 /** 镜像绑定（plan-image-firstclass P8-4）：空串=默认沙箱（装配选定的本机后端） */
 const imageBinding = ref('')
@@ -180,18 +180,18 @@ const onKeydown = (e: KeyboardEvent): void => {
         <p class="wiz-note">身份色同时用于消息署名与图谱节点（创建后可在档案中修改）。</p>
       </div>
 
-      <!-- 步 2：模型与沙箱（backlog ③：模型可选覆盖档案；未选继承全局主力） -->
+      <!-- 步 2：模型与沙箱（backlog ③：模型可选覆盖档案；未选默认模型（自动）） -->
       <div v-else-if="step === 1" class="wiz-body">
         <div class="wiz-kv wiz-kv-col">
           <span class="k">模型</span>
           <label class="wiz-field">
-            <span class="wiz-field-label">继承全局主力{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}——或为该 agent 指定端点：</span>
+            <span class="wiz-field-label">默认模型（自动）{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}——或为该 agent 指定端点：</span>
             <select v-model="modelOverride" class="wiz-select">
-              <option value="">继承全局主力</option>
+              <option value="">默认模型（自动）</option>
               <option v-for="p in kernel.providers" :key="p.name" :value="p.name">{{ p.name }}（{{ p.model }}）</option>
             </select>
           </label>
-          <p v-if="modelOverride !== ''" class="wiz-note">覆盖后该 agent 钉住所选端点——全局主力切换不影响它（改动重启生效）。</p>
+          <p v-if="modelOverride !== ''" class="wiz-note">覆盖后该 agent 钉住所选端点——默认模型切换不影响它（改动重启生效）。</p>
         </div>
         <div class="wiz-kv wiz-kv-col">
           <span class="k">沙箱镜像</span>
@@ -214,7 +214,7 @@ const onKeydown = (e: KeyboardEvent): void => {
           <span class="k">身份色</span>
           <span class="v"><span class="wiz-dot" :style="{ background: color }"></span>{{ color }}</span>
         </div>
-        <div class="wiz-kv"><span class="k">模型</span><span class="v">{{ modelOverride !== '' ? `覆盖：${modelOverride}` : `继承全局主力（${primaryModel}）` }}</span></div>
+        <div class="wiz-kv"><span class="k">模型</span><span class="v">{{ modelOverride !== '' ? `覆盖：${modelOverride}` : `默认模型（自动）（${primaryModel}）` }}</span></div>
         <div class="wiz-kv"><span class="k">沙箱镜像</span><span class="v">{{ imageBinding === '' ? '默认沙箱（注册即建专属 Box）' : '镜像：' + (kernel.images.find((i) => i.id === imageBinding)?.name ?? imageBinding) }}</span></div>
         <p class="wiz-note">创建后立即出现在成员名册、@提及与派单目标里；社交图谱会在下一条消息后连边。</p>
       </div>

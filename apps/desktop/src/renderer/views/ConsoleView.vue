@@ -856,7 +856,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             type="button"
             :class="{ 'is-on': ui.ctxSettings }"
             :aria-pressed="ui.ctxSettings"
-            :title="ui.ctxSettings ? '返回执行画面' : '会话档案（Settings）'"
+            :title="ui.ctxSettings ? '返回执行画面' : '会话档案'"
             @click="ui.toggleCtxSettings()"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" v-html="SLIDERS"></svg>
@@ -951,7 +951,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           </template>
 
           <p v-else-if="streamUnits.length === 0" class="placeholder">
-            {{ kernel.stewardId ? '开始对话——你的消息永远最先（user lane）' : '管家空缺：等待首个 agent 被任命' }}
+            {{ kernel.stewardId ? '开始对话——你的消息永远最先处理' : '管家空缺：等待首个 agent 被任命' }}
           </p>
 
           <template v-for="unit in streamUnits" :key="unit.key">

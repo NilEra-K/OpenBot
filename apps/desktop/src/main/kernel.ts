@@ -23,7 +23,7 @@ import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload 
 import { NodeFs, SettingsStore, MemoryStore, AutomationStore, ImageStore, nextAfter } from '@openbot/state'
 import type { SandboxPreference, RelaySettings, ImageEntry } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
-import type { ChatProvider, ChatRequest, ChatResponse } from '@openbot/llm'
+import type { ChatProvider, ChatRequest, ChatResponse, ProviderCapabilities } from '@openbot/llm'
 import type { ResolvedProvider } from '@openbot/state'
 import { AutoApprovalGate, ManualApprovalGate, SwitchableApprovalGate } from '@openbot/runner'
 import {
@@ -66,6 +66,11 @@ export class SwitchableChatProvider implements ChatProvider {
   #fallback: ChatProvider | null = null
   /** 最近一轮成功响应实际走的通道（状态栏「当轮生效端点」事实；null = 尚无成功轮） */
   #activeLane: 'primary' | 'fallback' | null = null
+
+  /** 能力透传（P8-4 后 UI 优化）：跟随当前主力实现——TurnRunner 截图回喂分流按它判定 */
+  get capabilities(): ProviderCapabilities {
+    return this.#current?.capabilities ?? {}
+  }
 
   swap(next: ChatProvider): void {
     this.#current = next
@@ -621,7 +626,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const providerOfAgent = async (modelProvider: string | undefined, silentFallback: boolean): Promise<ChatProvider> => {
     if (modelProvider === undefined || modelProvider === '') return provider
     try {
-      return buildProvider(await settings.resolve(modelProvider))
+      const own = buildProvider(await settings.resolve(modelProvider))
+      // 绑定模型的 Agent（0.1.28 默认语义）：主=X；X 上游失败（额度/过期等可重试错误）→
+      // 自动回退到默认模型实例（provider 原地热更，包装层自动跟随新默认）
+      const wrapped = new SwitchableChatProvider()
+      wrapped.swap(own)
+      wrapped.swapFallback(provider)
+      return wrapped
     } catch (err) {
       const msg = `模型覆盖档案「${modelProvider}」不可用（${err instanceof Error ? err.message : String(err)}）`
       if (silentFallback) {
@@ -659,12 +670,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     } catch {
       provider.clear() // 无默认 provider / 解析失败 → 空缺态（chat 抛 LLM_NO_PROVIDER，UI 引导配置）
     }
-    try {
-      const fallbackName = await settings.getFallback()
-      provider.swapFallback(fallbackName === null ? null : buildProvider(await settings.resolve(fallbackName)))
-    } catch {
-      provider.swapFallback(null) // 回退档案解析失败 → 无回退（主力路径不受影响）
-    }
+    // 独立回退档退役（0.1.28 默认语义）：回退统一走「默认模型」——绑定模型的 Agent 由
+    // providerOfAgent 包装层落到默认实例（provider.swap 原地热更，包装层自动跟随）
+    provider.swapFallback(null)
   }
 
   // ---- 命令面扩展（壳装配职责：CLI/E2E 用 Auto 闸门时不需要这些命令） ----

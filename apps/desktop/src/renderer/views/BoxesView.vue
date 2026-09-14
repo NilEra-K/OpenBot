@@ -162,7 +162,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
     <div class="view-head">
       <div class="view-title">本机沙箱 · Box 群</div>
       <div class="view-sub">
-        云电脑的本地替代：重活全部在本机 Box 内执行。按钮按后端能力声明（caps）渲染——后端不支持的操作永不出现。
+        云电脑的本地替代：重活全部在本机 Box 内执行。按钮按后端能力声明渲染——后端不支持的操作永不出现。
       </div>
       <div v-if="kernel.caps" class="view-toolbar mono">
         <span>caps：</span>

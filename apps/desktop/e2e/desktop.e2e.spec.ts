@@ -63,7 +63,6 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await expect(page.locator('.cfg-row', { hasText: 'E2E mock' })).toBeVisible()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
     await expect(page.locator('.cfg-row.is-primary', { hasText: 'E2E mock' })).toBeVisible()
     // 沙箱后端：OPENBOT_SANDBOX=mock env 覆盖 → 装配链路落在 mock（不依赖宿主 WSL/Docker）——
     // 默认沙箱状态卡呈现（P8-4 后 UI 优化：全局偏好选择退役，per-backend 可用性 + caps）
@@ -129,7 +128,7 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await page.locator('.roster-item', { hasText: '管家' }).click()
     await expect(page.locator('.m-text', { hasText: '检查与抓取都完成了' }).first()).toBeVisible({ timeout: 30_000 })
 
-    // —— tasks：两个 run 的痕迹（user lane 的 steward + agent lane 的 worker1） ——
+    // —— tasks：两个 run 的痕迹（用户消息通道的 steward + worker1） ——
     // run 卡描述行显示首条消息摘要（lifecycle queued 事件携带的领域事实）
     await page.getByRole('button', { name: '排程', exact: true }).click()
     await expect(page.locator('.run')).toHaveCount(2, { timeout: 15_000 })
@@ -225,7 +224,6 @@ test('中止工作中的 agent（审批挂起中打断：run aborted 收敛 + �
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // console：发消息 → run 进入审批挂起（弹窗出现即稳定窗口，等多久都在「工作中」）
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -431,7 +429,6 @@ test('@提及（P4 Step 4）：补全菜单键盘流 + 单提及路由 + 消息�
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // —— 菜单弹出与过滤：@ 弹全员（P5 Step 2 起 @全员广播项置顶：全员+管家+worker1 三项；
     //     管家=档案名 / worker1=name 缺席回退 id）；@w 只剩 worker1（全员项不匹配 w） ——
@@ -502,7 +499,6 @@ test('广播扇出（P5 Step 2）：@全员补全 → 内核 fanout 全员到达
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // —— @全员补全（P5 Step 2）：@全 弹菜单（全员项首位）→ Enter 补全尾随空格 → 追加文本发送 ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -573,7 +569,6 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // —— 建群：名册「＋ 建群」→ 群名 + 勾选管家与 worker1 → 创建（内核 sysnote 落群流）→ 跳群会话 ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -618,7 +613,7 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
 
     // —— ctx 群状态屏（群无 Box 如实）+ 群档案（成员行 + 轮转边界 kv） ——
     await expect(page.locator('.ctx-screen.is-static')).toContainText('群聊无 Box')
-    await page.getByTitle('会话档案（Settings）').click()
+    await page.getByTitle('会话档案').click()
     await expect(page.locator('.ctx-name')).toHaveText('评审组')
     await expect(page.locator('.ctx-sec', { hasText: '成员' })).toBeVisible()
     await expect(page.locator('.edge-row', { hasText: 'worker1' })).toBeVisible()
@@ -659,7 +654,6 @@ test('重启恢复（P5 后修复）：自建 agent 调度器重建（建群可�
     await page1.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page1.locator('#pfModel').fill('mock-model')
     await page1.getByRole('button', { name: '保存', exact: true }).click()
-    await page1.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     await page1.getByRole('button', { name: '控制台', exact: true }).click()
     await page1.getByRole('button', { name: '＋ 新建 agent' }).click()
@@ -728,7 +722,7 @@ test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → 
     await expect(card.locator('.wiz-swatch.is-sel')).toHaveAttribute('aria-label', '身份色 #3987e5')
     await card.getByRole('button', { name: '下一步' }).click()
     // 步 2：模型与沙箱如实说明（裁定 B/F——不放假选项；P8-4 起沙箱镜像可选绑定）
-    await expect(card.locator('.wiz-body')).toContainText('继承全局主力')
+    await expect(card.locator('.wiz-body')).toContainText('默认模型（自动）')
     await expect(card.locator('.wiz-body')).toContainText('缺省用默认沙箱')
     await expect(card.locator('.wiz-body')).toContainText('绑定已注册的镜像')
     await card.getByRole('button', { name: '下一步' }).click()
@@ -790,7 +784,6 @@ test('名册与 stream-head（P4 Step 6）：ctx 面板收起两栏 ⇄ 三栏 +
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // —— ctx 收起（三栏 ⇄ 两栏；aria-pressed 语义随状态翻转） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -850,7 +843,6 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     await page.locator('.composer-box input').fill('叫 worker1 报数')
@@ -864,7 +856,7 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
     await expect(ctx.locator('.ctx-top-sub')).toHaveText('管家')
     await expect(ctx.locator('.ctx-name')).toHaveText('管家')
     await expect(ctx.locator('.kv', { hasText: '角色' })).toContainText('管家（steward）')
-    await expect(ctx.locator('.kv', { hasText: '模型' })).toContainText('继承全局主力（E2E mock）')
+    await expect(ctx.locator('.kv', { hasText: '模型' })).toContainText('默认模型（E2E mock）')
     await expect(ctx.locator('.kv', { hasText: 'Box 归属' })).toContainText(/box-\d+/)
     await expect(ctx.locator('.kv', { hasText: '权限现状' })).toContainText('出 Box 需批准（Manual 闸门）')
 
@@ -996,7 +988,6 @@ test('演示值清扫（P4 Step 10 → P5 Step 7 限额解锁）：run-progress 
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // 发消息 → 审批挂起（run 停在 running）；「稍后处理」收掉模态再切视图
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -1097,7 +1088,7 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
     await expect(page.locator('.kv', { hasText: 'transcript' })).toContainText('agents')
     await expect(page.getByRole('button', { name: '打开数据文件夹' })).toBeVisible()
 
-    // —— 配置两端点：主力 = 必然连接失败端口；回退 = E2E mock ——
+    // —— 配置两端点：默认 = E2E mock（首个自动成为默认）；坏端点 = 必然连接失败 ——
     await page.locator('.settings-nav-item', { hasText: '模型设置' }).click() // 切换式导航（从数据分节切回模型分节）
     await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfName').fill('坏端点')
@@ -1115,18 +1106,23 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await expect(page.locator('.cfg-row', { hasText: '坏端点' })).toBeVisible()
 
-    await page.locator('.cfg-row', { hasText: '坏端点' }).locator('.btn', { hasText: '设为主力' }).click()
-    await page.locator('.cfg-row', { hasText: 'E2E mock' }).locator('.btn', { hasText: '设为回退' }).click()
-    await expect(page.locator('.cfg-row', { hasText: 'E2E mock' }).locator('.chip', { hasText: '回退' })).toBeVisible()
-
-    // —— 发消息：主力连接拒绝 → 本轮自动降级 → 回退端点回复到达 ——
+    // —— 向导创建绑定坏端点的 Agent：上游失败自动回退到默认模型（mock） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    const bindCard = page.locator('.wiz-card')
+    await expect(bindCard).toBeVisible()
+    await bindCard.locator('#wizName').fill('回退员')
+    await bindCard.getByRole('button', { name: '下一步' }).click()
+    await bindCard.locator('.wiz-kv', { hasText: '沙箱镜像' }).locator('select').selectOption('坏端点')
+    await bindCard.getByRole('button', { name: '下一步' }).click()
+    await bindCard.getByRole('button', { name: '创建 agent' }).click()
+    await expect(page.locator('.toast', { hasText: '回退员」已创建' })).toBeVisible({ timeout: 15_000 })
+
+    // —— 发消息：绑定的坏端点连接拒绝 → 自动回退到默认模型（mock）回复 ——
     await page.locator('.composer-box input').fill('走回退')
     await page.locator('.composer-box input').press('Enter')
     await expect(page.locator('.m-text', { hasText: '回退端点回复' }).first()).toBeVisible({ timeout: 30_000 })
-
-    // 状态栏如实（P4 Step 11）：当轮生效端点 = 回退
-    await expect(page.locator('.statusbar')).toContainText('当轮回退', { timeout: 10_000 })
+    // 状态栏「当轮回退」断言随独立回退档退役（0.1.27：回退统一为「绑定模型 → 默认模型」链）
   } finally {
     await mock.close()
     await app.close()
@@ -1163,7 +1159,6 @@ test('Boxes/图谱小项（P4 Step 12）：归属 chip + box-claim shield + 节�
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // 发消息 → 审批挂起（run 稳定 running）；「稍后处理」收掉模态
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -1198,11 +1193,11 @@ test('Boxes/图谱小项（P4 Step 12）：归属 chip + box-claim shield + 节�
     await page.locator('.graph-canvas').hover({ position: { x: 8, y: 8 } })
     await expect(gnodeOf('你')).not.toHaveClass(/is-dim/)
 
-    // 节点详情 kv：状态=工作中（run summary 附注不误伤前缀断言）+ 模型=继承全局主力（provider 真值）
+    // 节点详情 kv：状态=工作中（run summary 附注不误伤前缀断言）+ 模型=默认模型（provider 真值）
     await gnodeOf('管家').click()
     const side = page.locator('.graph-side')
     await expect(side.locator('.kv', { hasText: '状态' })).toContainText('工作中')
-    await expect(side.locator('.kv', { hasText: '模型' })).toContainText('继承全局主力（E2E mock · mock-model）')
+    await expect(side.locator('.kv', { hasText: '模型' })).toContainText('默认模型（E2E mock · mock-model）')
   } finally {
     await mock.close()
     await app.close()
@@ -1275,13 +1270,12 @@ test('记忆（backlog ①）：save_memory 落盘 → 重启注入新会话系�
     await page1.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page1.locator('#pfModel').fill('mock-model')
     await page1.getByRole('button', { name: '保存', exact: true }).click()
-    await page1.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
     await page1.getByRole('button', { name: '控制台', exact: true }).click()
     await page1.locator('.composer-box input').fill('记住我的偏好')
     await page1.locator('.composer-box input').press('Enter')
     await expect(page1.locator('.m-text', { hasText: '已记住你的偏好' })).toBeVisible({ timeout: 30_000 })
     // ctx 档案：记忆节呈现该条（kind 徽标 + 文本）
-    await page1.getByTitle('会话档案（Settings）').click()
+    await page1.getByTitle('会话档案').click()
     await expect(page1.locator('.mem-row', { hasText: SAVED })).toBeVisible({ timeout: 10_000 })
     await expect(page1.locator('.mem-row .mem-kind', { hasText: '偏好' })).toBeVisible()
   } finally {
@@ -1303,7 +1297,7 @@ test('记忆（backlog ①）：save_memory 落盘 → 重启注入新会话系�
     expect(JSON.stringify(system)).toContain('## 此前记忆')
     expect(JSON.stringify(system)).toContain(SAVED)
     // 重启后 ctx 记忆节同样在场（持久化真相）
-    await page2.getByTitle('会话档案（Settings）').click()
+    await page2.getByTitle('会话档案').click()
     await expect(page2.locator('.mem-row', { hasText: SAVED })).toBeVisible({ timeout: 10_000 })
   } finally {
     await app2.close()
@@ -1312,7 +1306,7 @@ test('记忆（backlog ①）：save_memory 落盘 → 重启注入新会话系�
   }
 })
 
-test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→ 到点触发走 user lane → ctx 呈现', async () => {
+test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→ 到点触发走用户消息通道 → ctx 呈现', async () => {
   const mock = await startMockOpenAi([
     // 自动化触发的委托消息（user 消息进管家会话）→ 终答
     { match: (l) => l.role === 'user' && l.content === '汇报昨天的任务', text: '自动化完成：昨日无事发生' },
@@ -1337,7 +1331,6 @@ test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
 
     // 新建自动化（模态：cron 预览在场）——先切到自动化分节（切换式导航）
     await page.locator('.settings-nav-item', { hasText: '自动化' }).click()
@@ -1357,7 +1350,7 @@ test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→
     await expect(page.locator('.m.user .m-text', { hasText: '汇报昨天的任务' })).toBeVisible()
 
     // ctx 档案：自动化节呈现该规则
-    await page.getByTitle('会话档案（Settings）').click()
+    await page.getByTitle('会话档案').click()
     await expect(page.locator('.mem-row', { hasText: '每分钟汇报' })).toBeVisible()
   } finally {
     await app.close()
@@ -1389,7 +1382,6 @@ test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 ag
     // 两个端点：主力-A 设为主力；覆盖-B 供选择
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await addProvider('主力A', mockA.port)
-    await page.locator('.cfg-row', { hasText: '主力A' }).locator('.btn', { hasText: '设为主力' }).click()
     await addProvider('覆盖B', mockB.port)
 
     // 向导建 agent：第二步选覆盖 B
@@ -1412,7 +1404,7 @@ test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 ag
     expect(mockA.requests.length).toBe(0) // 管家还没说话——A 零请求
 
     // ctx 档案：模型 kv 真值（覆盖：覆盖B）
-    await page.getByTitle('会话档案（Settings）').click()
+    await page.getByTitle('会话档案').click()
     await expect(page.locator('.ctx .kv', { hasText: '模型' })).toContainText('覆盖：覆盖B')
 
     // 对照：管家（继承）对话 → A 端点
@@ -1459,7 +1451,6 @@ test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
     await page.locator('#pfModel').fill('mock-model')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     await page.locator('.composer-box input').fill('看看桌面')
     await page.locator('.composer-box input').press('Enter')
@@ -1662,7 +1653,7 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
 
     // —— ctx 档案镜像 kv：条目名（载体 镜像名） ——
     await page.locator('.roster-item', { hasText: '维机' }).click()
-    await page.getByTitle('会话档案（Settings）').click() // ctx 切档案节（镜像 kv 所在）
+    await page.getByTitle('会话档案').click() // ctx 切档案节（镜像 kv 所在）
     await expect(page.locator('.ctx')).toContainText('GUI 容器（容器 openbot-gui:24.04）', { timeout: 10_000 })
 
     // —— 重启持久化（双段会话）：绑定是档案事实，重启后 ctx 呈现不变 ——
@@ -1675,7 +1666,7 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
     try {
       await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
       await page2.locator('.roster-item', { hasText: '维机' }).click()
-      await page2.getByTitle('会话档案（Settings）').click()
+      await page2.getByTitle('会话档案').click()
       await expect(page2.locator('.ctx')).toContainText('GUI 容器（容器 openbot-gui:24.04）', { timeout: 10_000 })
 
       // —— 删除镜像条目 → 重启 → 悬空如实呈现「已删除 · 回默认沙箱」（agent 存活不炸装配） ——
@@ -1697,7 +1688,7 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
         await expect(page3.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
         // agent 仍在名册（悬空回默认不炸装配）；ctx 如实标注
         await page3.locator('.roster-item', { hasText: '维机' }).click()
-        await page3.getByTitle('会话档案（Settings）').click()
+        await page3.getByTitle('会话档案').click()
         await expect(page3.locator('.ctx')).toContainText('镜像已删除 · 回默认沙箱', { timeout: 10_000 })
       } finally {
         await app3.close()

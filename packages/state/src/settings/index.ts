@@ -199,7 +199,9 @@ export class SettingsStore {
     }
     const providers = settings.providers.filter((p) => p.name !== input.name)
     providers.push(profile)
-    await this.#save({ ...settings, providers })
+    // 首个模型自动成为默认（0.1.28 默认语义）：免一步「设为默认」操作；已有默认时不抢占
+    const defaultProvider = settings.defaultProvider ?? input.name
+    await this.#save({ ...settings, providers, defaultProvider })
     return {
       name: profile.name,
       baseUrl: profile.baseUrl,

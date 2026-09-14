@@ -275,7 +275,7 @@ const lastAt = computed(() => {
           <span class="k">模型</span>
           <span class="v">
             <template v-if="activeAgent?.modelProvider">覆盖：{{ activeAgent.modelProvider }}<span class="kv-note">（重启后切换生效）</span></template>
-            <template v-else>继承全局主力{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}</template>
+            <template v-else>默认模型{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}</template>
           </span>
         </div>
         <div class="kv"><span class="k">镜像</span><span class="v">{{ activeImageDisplay }}</span></div>

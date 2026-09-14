@@ -322,11 +322,13 @@ interface ProviderForm {
   proxyUrl: string
   /** 协议族（P4 Step 11）：anthropic 走 messages API，缺省 openai-compat */
   protocol: 'openai-compat' | 'anthropic'
-  /** 视觉（图像输入）声明（P8-2 生产门事实源）——勾选后主力为该端点时才可能注册 computer 工具族 */
+  /** 视觉（图像输入）声明（0.1.28 语义）——决定截图回喂格式：勾选喂图像 part，不勾降级文本说明 */
   supportsImages: boolean
+  /** 设为默认模型（0.1.28 默认语义）——全场唯一；其他模型上游失败时回退到它 */
+  isDefault: boolean
 }
 
-const EMPTY_FORM: ProviderForm = { name: '', baseUrl: '', model: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat', supportsImages: false }
+const EMPTY_FORM: ProviderForm = { name: '', baseUrl: '', model: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat', supportsImages: false, isDefault: false }
 
 const formOpen = ref(false)
 const editingName = ref<string | null>(null)
@@ -363,6 +365,7 @@ const openEdit = (p: ProviderView): void => {
     proxyUrl: p.proxyUrl ?? '',
     protocol: p.protocol ?? 'openai-compat',
     supportsImages: p.supportsImages === true,
+    isDefault: p.name === kernel.defaultProvider,
   })
   formError.value = null
   formOpen.value = true
@@ -387,6 +390,8 @@ const save = async (): Promise<void> => {
       protocol: form.protocol,
       supportsImages: form.supportsImages,
     })
+    // 设为默认（0.1.28 默认语义）：勾选即转移全场唯一默认；上游故障时其他模型回退到它
+    if (form.isDefault) await kernel.setDefaultProvider(form.name.trim())
     toast.push(`模型端点已保存：${form.name.trim()}`, 'success')
     formOpen.value = false
   } catch (err) {
@@ -394,15 +399,6 @@ const save = async (): Promise<void> => {
   } finally {
     saving.value = false
   }
-}
-
-const setDefault = (name: string): void => {
-  confirmingRemove.value = null
-  void kernel.setDefaultProvider(name).then(() => {
-    toast.push(`主力模型已切换：${name}——管家与全部 agent 下轮对话生效`, 'success')
-  }).catch((err: unknown) => {
-    formError.value = err instanceof Error ? err.message : String(err)
-  })
 }
 
 const removeProvider = (name: string): void => {
@@ -413,20 +409,6 @@ const removeProvider = (name: string): void => {
   confirmingRemove.value = null
   void kernel.removeProvider(name).then(() => {
     toast.push(`已删除模型端点：${name}`, 'info')
-  }).catch((err: unknown) => {
-    formError.value = err instanceof Error ? err.message : String(err)
-  })
-}
-
-/** 设置/清除回退端点（P4 Step 11）：toggle——已是回退再点即清除；per-request 降级不粘滞 */
-const setFallback = (name: string): void => {
-  confirmingRemove.value = null
-  const next = kernel.fallbackProvider === name ? null : name
-  void kernel.setFallbackProvider(next).then(() => {
-    toast.push(
-      next === null ? '已清除回退端点' : `回退端点已设置：${next}——主力失败时本轮自动降级`,
-      'success',
-    )
   }).catch((err: unknown) => {
     formError.value = err instanceof Error ? err.message : String(err)
   })
@@ -586,35 +568,29 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">模型设置</div>
         <HelpTip
-          text="接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个；设为主力后对管家与全部 agent 下轮对话生效；可设一个回退端点——主力请求失败（网络/超时/过载）时本轮自动降级，主力恢复后下轮自然切回。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。"
+          text="接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个。全场唯一一个「默认」模型：未指定模型的 Agent 直接使用它；其他模型上游失败（额度不足、订阅过期等）时自动回退到它。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。"
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openCreate">＋ 添加模型</button>
       </div>
       <div class="settings-card">
       <div class="kv">
-        <span class="k">当前主力</span>
-        <span class="v mono">{{ kernel.defaultProvider ?? '未配置（对话将失败）' }}</span>
+        <span class="k">当前默认</span>
+        <span class="v mono">{{ kernel.defaultProvider ?? '未设置（对话将失败）' }}</span>
       </div>
 
       <div v-for="p in kernel.providers" :key="p.name" class="cfg-row" :class="{ 'is-primary': p.name === kernel.defaultProvider }">
         <div class="cfg-mark">{{ markOf(p.name) }}</div>
         <div class="cfg-main">
           <div class="cfg-name">
-            {{ p.name }}<span class="cfg-model mono">{{ p.model }}</span>
+            {{ p.name }}<span class="cfg-model mono">{{ p.model }}</span><span v-if="p.name === kernel.defaultProvider" class="chip chip-accent">默认</span>
           </div>
           <div class="cfg-desc mono">{{ p.baseUrl }}<template v-if="p.proxyUrl"> · 代理 {{ p.proxyUrl }}</template></div>
         </div>
         <div class="cfg-actions">
           <button class="btn btn-ghost btn-sm" @click="openEdit(p)">编辑</button>
-          <button v-if="p.name !== kernel.defaultProvider" class="btn btn-secondary btn-sm" @click="setDefault(p.name)">设为主力</button>
-          <button class="btn btn-ghost btn-sm" @click="setFallback(p.name)">
-            {{ kernel.fallbackProvider === p.name ? '取消回退' : '设为回退' }}
-          </button>
           <button class="btn btn-ghost btn-sm btn-danger" @click="removeProvider(p.name)">
             {{ confirmingRemove === p.name ? '确认删除？' : '删除' }}
           </button>
-          <span v-if="p.name === kernel.defaultProvider" class="chip chip-accent">主力</span>
-          <span v-if="p.name === kernel.fallbackProvider" class="chip">回退</span>
           <span v-if="p.protocol === 'anthropic'" class="chip">Anthropic</span>
           <span class="chip" :class="p.hasKey ? 'chip-success' : ''">{{ p.hasKey ? '已存 key' : '无 key' }}</span>
         </div>
@@ -662,6 +638,18 @@ const wslHelpNeeded = computed(() => {
                 视觉（图像输入）
               </label>
               <p class="field-note">端点支持看图时勾选——GUI 操作的截图将以图像回喂给模型；不勾则降级为文本说明（GUI 工具族仍按环境可用）</p>
+            </div>
+            <div class="field">
+              <label class="proto-opt" :class="{ 'is-on': form.isDefault }" for="pfDefault">
+                <input
+                  id="pfDefault"
+                  type="checkbox"
+                  v-model="form.isDefault"
+                  :disabled="editingName !== null && editingName === kernel.defaultProvider"
+                />
+                设为默认模型
+              </label>
+              <p class="field-note">全场唯一默认：其他模型上游失败（额度不足、订阅过期等）时自动回退到它。已是默认的模型不可在此取消——在别的模型上勾选即可转移</p>
             </div>
             <div class="field">
               <label class="field-label" for="pfKey">API Key</label>
@@ -990,6 +978,16 @@ const wslHelpNeeded = computed(() => {
           </div>
           <select v-model="themeChoice" class="appearance-select" aria-label="界面主题">
             <option v-for="opt in THEME_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+        </div>
+        <div class="appearance-row">
+          <div class="appearance-main">
+            <div class="appearance-name">界面语言</div>
+            <div class="appearance-desc">界面文案的显示语言。English 完整翻译筹备中。</div>
+          </div>
+          <select class="appearance-select" aria-label="界面语言" disabled>
+            <option selected>简体中文</option>
+            <option disabled>English（翻译筹备中）</option>
           </select>
         </div>
       </div>

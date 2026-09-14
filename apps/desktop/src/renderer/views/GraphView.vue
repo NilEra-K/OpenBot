@@ -176,10 +176,10 @@ const statusTextOf = (agentId: string): string => {
   return run ? `工作中${run.summary ? ` · ${run.summary}` : ''}` : '空闲'
 }
 
-/** 节点详情模型行：per-agent 覆盖后置（裁定 F）——继承全局主力，如实呈现 */
+/** 节点详情模型行：per-agent 覆盖后置（裁定 F）——默认模型（自动），如实呈现 */
 const modelLabel = computed(() => {
   const p = kernel.providers.find((x) => x.name === kernel.defaultProvider)
-  return p ? `继承全局主力（${p.name} · ${p.model}）` : '未配置'
+  return p ? `默认模型（${p.name} · ${p.model}）` : '未配置'
 })
 
 // ---- 聚焦与退隐（点击节点/连线进侧栏详情 + 无关元素退隐；点空白/Esc 退出；
