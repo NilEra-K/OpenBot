@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- L2 帧泵页面（plan-screen-firstclass P9-2）：getUserMedia 桌面采集 → canvas JPEG → preload 泵。
+     只由主进程加载（hostscreen-pump.ts），无外来内容；contextIsolation 关闭下
+     window.__hsPump（hs-pump.cjs 注入）直达 IPC。 -->
+<html>
+<head><meta charset="utf-8" /><title>openbot-hs-pump</title></head>
+<body>
+<script>
+  let __stream = null
+  let __timer = null
+  window.__hsStart = async (cfg) => {
+    __stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: cfg.sourceId,
+          maxWidth: cfg.maxWidth,
+          frameRate: { ideal: 30, max: 30 },
+        },
+      },
+    })
+    const video = document.createElement('video')
+    video.srcObject = __stream
+    video.muted = true
+    await video.play()
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    // 定时节拍（33ms ≈ 30fps；videoWidth=0 时跳过——源未就绪）
+    __timer = setInterval(() => {
+      if (video.videoWidth === 0 || video.videoHeight === 0) return
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+      }
+      ctx.drawImage(video, 0, 0)
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return
+          blob.arrayBuffer().then((ab) => {
+            window.__hsPump.send(new Uint8Array(ab), canvas.width, canvas.height)
+          })
+        },
+        'image/jpeg',
+        0.7,
+      )
+    }, 33)
+  }
+  window.__hsStop = () => {
+    if (__timer) { clearInterval(__timer); __timer = null }
+    if (__stream) { __stream.getTracks().forEach((t) => t.stop()); __stream = null }
+  }
+  window.addEventListener('beforeunload', () => window.__hsStop())
+</script>
+</body>
+</html>

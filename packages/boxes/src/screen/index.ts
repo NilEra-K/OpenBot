@@ -428,15 +428,16 @@ export async function probeX11Toolset(host: ScreenControlHost, boxId: string): P
 // ---------------------------------------------------------------------------
 
 export interface ScreenControlRouterOptions {
-  /** boxId → 适配器（路由键与 RoutingBoxBackend 同源：BoxSpec.image / 宿主屏幕常量 id） */
+  /** boxId → 适配器（路由键与 RoutingBoxBackend 同源：BoxSpec.image / 宿主屏幕 boxId） */
   resolve: (boxId: string) => ScreenControl
-  /** 全量适配器清单（dispose 兜底遍历——孤儿纪律） */
-  adapters: ScreenControl[]
+  /** 全量适配器清单（dispose 兜底遍历——孤儿纪律）；函数形态 = 运行时可变清单（P9-2
+   *  per-entry 宿主屏幕适配器按条目增删——数组快照会漏 dispose） */
+  adapters: ScreenControl[] | (() => ScreenControl[])
 }
 
 export class ScreenControlRouter implements ScreenControl {
   readonly #resolve: (boxId: string) => ScreenControl
-  readonly #adapters: ScreenControl[]
+  readonly #adapters: ScreenControl[] | (() => ScreenControl[])
 
   constructor(options: ScreenControlRouterOptions) {
     this.#resolve = options.resolve
@@ -470,7 +471,8 @@ export class ScreenControlRouter implements ScreenControl {
   }
 
   dispose(): void {
-    for (const adapter of this.#adapters) adapter.dispose?.()
+    const all = typeof this.#adapters === 'function' ? this.#adapters() : this.#adapters
+    for (const adapter of all) adapter.dispose?.()
   }
 }
 

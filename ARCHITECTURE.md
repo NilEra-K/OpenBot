@@ -140,10 +140,12 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
   + 显示地址；路由后端（RoutingBoxBackend）按 `BoxSpec.image`（条目 id）分发到对应后端实例，
   'default' 落全局后端——**Agent 绑定镜像而非后端实例**（P8-4 已兑现：`AgentProfile.imageId`，
   addAgent 即按绑定分发创建 Box；悬空回默认 + 告警；命令面悬空显式拒绝），services/工具族持
-  单一 backend 引用零改动。**宿主屏幕载体（P9-1）**：纯屏幕 Box（零连接事实，一期恒主屏，
-  稳定 boxId `hostscreen-main`，多条目共享一台「屏幕设备」）——无命令执行面（exec/fs 稳定码
-  拒绝），桌面控制经 HostScreenControl（desktopCapturer 截屏 + PowerShell SendInput 注入，
-  Electron 面由装配层 bridge 注入、boxes 零 electron 依赖）；**输入注入恒过审批闸**（runner
+  单一 backend 引用零改动。**宿主屏幕载体（P9-1/P9-2）**：纯屏幕 Box（零连接事实，稳定
+  boxId `hostscreen-<entryId>`——每条目一 box，窗口绑定条目是不同的桌面面）——无命令执行面
+  （exec/fs 稳定码拒绝），桌面控制经 HostScreenControl（desktopCapturer 截屏 + PowerShell
+  SendInput 注入 + 窗口绑定 EnumWindows/GetWindowRect，Electron 面由装配层 bridge 注入、
+  boxes 零 electron 依赖）；实况流三档探测（L1 ffmpeg h264 > L2 getUserMedia 帧泵 > L0
+  desktopCapturer 轮询——`streamTier` 单一事实源）；**输入注入恒过审批闸**（runner
   actionGate——「Box 内自由」在用户本机屏幕上不成立）；kernel.screen 为 ScreenControlRouter
   （按 boxId 分发 X11/宿主屏幕），消费方零载体感知。
 - **全局 settings.json v2（2026-09-15 供应商 1:N 模型）**：供应商 = 端点事实（baseUrl/协议/key/代理）

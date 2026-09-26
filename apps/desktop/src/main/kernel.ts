@@ -39,7 +39,8 @@ import {
   HostScreenControl,
   ScreenControlRouter,
   X11ScreenControl,
-  HOST_SCREEN_BOX_ID,
+  entryIdOfBoxId,
+  isHostScreenBoxId,
   MOCK_BOX_CAPS,
   NSPAWN_BOX_CAPS,
   OCI_BOX_CAPS,
@@ -62,6 +63,7 @@ import type {
   ScreenAction,
 } from '@openbot/boxes'
 import { computerTools } from '@openbot/runner'
+import { startHostScreenFramePump } from './hostscreen-pump.js'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
 
@@ -227,6 +229,8 @@ const imageInputBase = z.object({
   keyPath: z.string().trim().min(1).max(500).optional(),
   controlProtocol: z.enum(['x11', 'none', 'host']),
   display: z.string().trim().max(40).optional(),
+  /** host-screen 专属（P9-2 裁定 B）：绑定窗口标题子串；空缺=整屏 */
+  windowTitle: z.string().trim().max(200).optional(),
 })
 const imageInputSchema = imageInputBase.superRefine((v, ctx) => {
   if (v.carrier === 'container' && (v.image === undefined || v.image === '')) {
@@ -483,62 +487,80 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // 路由表运行时可变（add/remove 即时生效——按调用分发无状态，与沙箱偏好的装配期决策不同）
   const imageStore = new ImageStore({ fs, root: dataRoot, now: Date.now })
   const routingBackend = new RoutingBoxBackend({ fallback: backend })
-  // ---- 宿主屏幕载体（plan-screen-firstclass P9-1）----
+  // ---- 宿主屏幕载体（plan-screen-firstclass P9-1/P9-2）----
   // 纯屏幕 Box（记账面）+ 内置注入适配器 + 路由器：kernel.screen 按 boxId 分发（宿主屏幕 →
   // HostScreenControl；其余 → X11 经 routedBackend exec）——消费方（工具族/实况/gui 命令面）
-  // 零载体感知。Electron 面（desktopCapturer/screen API）收口 bridge 注入，boxes 零 electron 依赖。
+  // 零载体感知。Electron 面（desktopCapturer/screen API/帧泵）收口 bridge 注入，boxes 零
+  // electron 依赖。P9-2 起每条目一 box 一适配器（窗口绑定条目是不同的桌面面）。
   const hostScreenBackend = new HostScreenBoxBackend({ now: Date.now })
   let hasHostScreenRoute = false
+  const hostScreenControls = new Map<string, HostScreenControl>()
+  const primaryPhysical = (): { width: number; height: number } | null => {
+    try {
+      const d = electronScreen.getPrimaryDisplay()
+      return { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) }
+    } catch {
+      return null // 桌面会话不可用——如实（act/采集路径各自给出可见错误）
+    }
+  }
   const hostScreenBridge: HostScreenBridge = {
     // 主屏物理像素（DIP × scaleFactor——desktopCapturer 采集与 SendInput 同一坐标系）
-    geometry: () => {
-      try {
-        const d = electronScreen.getPrimaryDisplay()
-        return { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) }
-      } catch {
-        return null // 桌面会话不可用——如实（act/采集路径各自给出可见错误）
-      }
-    },
-    captureFrame: async ({ maxWidth, quality }) => {
-      const geo = (() => {
-        try {
-          const d = electronScreen.getPrimaryDisplay()
-          return { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) }
-        } catch {
-          return null
-        }
-      })()
+    geometry: () => primaryPhysical(),
+    captureFrame: async ({ maxWidth, quality, crop }) => {
+      const geo = primaryPhysical()
       if (geo === null) throw new KernelError('SCREEN_CAPTURE_FAILED', '桌面会话不可用——无法采集主屏')
       const width = Math.min(maxWidth, geo.width)
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: { width, height: Math.max(1, Math.round((geo.height * width) / geo.width)) },
       })
-      const img = sources[0]?.thumbnail
+      let img = sources[0]?.thumbnail
       if (img === undefined || img.isEmpty()) {
         throw new KernelError('SCREEN_CAPTURE_FAILED', '无可用屏幕采集源（thumbnail 为空）')
+      }
+      if (crop !== undefined) {
+        // 窗口绑定裁剪（P9-2）：物理像素矩形 → 缩略图坐标（缩略图按 width/geo.width 缩放）
+        const k = img.getSize().width / geo.width
+        const rx = Math.max(0, Math.round(crop.x * k))
+        const ry = Math.max(0, Math.round(crop.y * k))
+        const rw = Math.min(Math.round(crop.width * k), img.getSize().width - rx)
+        const rh = Math.min(Math.round(crop.height * k), img.getSize().height - ry)
+        if (rw <= 0 || rh <= 0) throw new KernelError('SCREEN_CAPTURE_FAILED', '绑定窗口区域不在屏幕内（可能已最小化）')
+        img = img.crop({ x: rx, y: ry, width: rw, height: rh }) // 普通 Rectangle 形状对象
+        if (img.isEmpty()) throw new KernelError('SCREEN_CAPTURE_FAILED', '窗口裁剪后为空（窗口不可见？）')
       }
       const size = img.getSize()
       return { bytes: new Uint8Array(img.toJPEG(quality)), width: size.width, height: size.height }
     },
+    // L2 零依赖帧泵（P9-2 裁定 D）：隐藏窗口 getUserMedia → JPEG 帧序列（mjpeg 管线直用）
+    startFrameStream: (onFrame) => startHostScreenFramePump({ maxWidth: 1600, onFrame }),
   }
-  const hostScreenControl = new HostScreenControl({ bridge: hostScreenBridge })
+  /** 每条目一适配器（窗口绑定 per-entry；同 id 重注册 = 替换旧实例——windowTitle 可能已改） */
+  const hostScreenControlFor = (entry: ImageEntry): HostScreenControl => {
+    const existing = hostScreenControls.get(entry.id)
+    if (existing !== undefined) return existing
+    const ctrl = new HostScreenControl({
+      bridge: hostScreenBridge,
+      ...(entry.windowTitle !== undefined ? { windowTitle: entry.windowTitle } : {}),
+    })
+    hostScreenControls.set(entry.id, ctrl)
+    return ctrl
+  }
   const x11ScreenControl = new X11ScreenControl({
     host: routingBackend,
     ...(process.env.OPENBOT_GUI_DISPLAY !== undefined ? { display: process.env.OPENBOT_GUI_DISPLAY } : {}),
   })
   const screenRouter = new ScreenControlRouter({
-    resolve: (boxId) => (boxId === HOST_SCREEN_BOX_ID ? hostScreenControl : x11ScreenControl),
-    adapters: [x11ScreenControl, hostScreenControl],
+    resolve: (boxId) => {
+      const entryId = entryIdOfBoxId(boxId)
+      const hit = entryId !== null ? hostScreenControls.get(entryId) : undefined
+      return hit ?? x11ScreenControl
+    },
+    adapters: () => [x11ScreenControl, ...hostScreenControls.values()],
   })
-  /** 宿主 ffmpeg 在场性（v1.images.test 报告 L1/L0 档位——探测一次即时结算，不缓存跨调用） */
-  const probeHostFfmpeg = async (): Promise<boolean> => {
-    try {
-      return (await runProcess({ command: ['ffmpeg', '-version'], timeoutMs: 5_000 })).exitCode === 0
-    } catch {
-      return false
-    }
-  }
+  /** 窗口清单探测（v1.hostscreen.windows——懒建单例通道，随应用退出 dispose） */
+  let windowProbe: HostScreenControl | null = null
+  /** 宿主 ffmpeg 在场性已内聚 HostScreenControl.streamTier（P9-2 三档判定单一来源） */
   const registerImageRoute = (entry: ImageEntry): void => {
     if (entry.carrier === 'ssh') {
       routingBackend.registerRoute(entry.id, {
@@ -552,7 +574,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         }),
       })
     } else if (entry.carrier === 'host-screen') {
-      // 多条目共享同一台「屏幕设备」（一期恒主屏）——同一后端实例记账多对一
+      // P9-2：每条目一 box 一适配器（窗口绑定 per-entry）；同 id 重注册替换旧适配器
+      const old = hostScreenControls.get(entry.id)
+      if (old !== undefined) {
+        old.dispose()
+        hostScreenControls.delete(entry.id)
+      }
+      hostScreenControlFor(entry)
       routingBackend.registerRoute(entry.id, { backend: hostScreenBackend })
       hasHostScreenRoute = true
     } else if (chosen.backendId === 'docker' || chosen.backendId === 'podman') {
@@ -569,18 +597,27 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
    *  container = 按 CLI 查镜像在场（docker inspect / podman exists）；底座非 OCI 如实报告不可路由 */
   const testImageEntry = async (entry: ImageEntry): Promise<{ ok: boolean; detail?: string; reason?: string }> => {
     if (entry.carrier === 'host-screen') {
-      // 宿主屏幕：几何 + ffmpeg 档位报告（L0/L1 如实——无真实注入，测试零副作用）
-      const geo = hostScreenBridge.geometry()
+      // 宿主屏幕：几何（窗口绑定=窗口矩形）+ 实况三档如实报告（无真实注入，测试零副作用）
+      const ctrl = hostScreenControlFor(entry)
+      const geo = await ctrl.geometry(entry.id)
       if (geo === null) {
-        return { ok: false, reason: '宿主屏幕几何不可用（桌面会话未就绪）' }
+        return {
+          ok: false,
+          reason:
+            entry.windowTitle !== undefined
+              ? `绑定窗口未在场（标题含「${entry.windowTitle}」）`
+              : '宿主屏幕几何不可用（桌面会话未就绪）',
+        }
       }
-      const ff = await probeHostFfmpeg()
-      return {
-        ok: true,
-        detail: `宿主屏幕就绪（主屏 ${geo.width}×${geo.height} 物理像素）；实况流 ${
-          ff ? 'h264（ffmpeg 在场）' : 'mjpeg 轮询（ffmpeg 缺席——安装后自动升级）'
-        }`,
-      }
+      const tier = await ctrl.streamTier()
+      const tierText =
+        tier === 'l1'
+          ? 'h264（L1·ffmpeg 在场）'
+          : tier === 'l2'
+            ? 'mjpeg 帧泵（L2·零依赖）'
+            : 'mjpeg 轮询（L0·兜底）'
+      const surface = entry.windowTitle !== undefined ? `窗口「${entry.windowTitle}」 ${geo.width}×${geo.height}` : `主屏 ${geo.width}×${geo.height}`
+      return { ok: true, detail: `宿主屏幕就绪（${surface} 物理像素）；实况流 ${tierText}` }
     }
     if (entry.carrier === 'ssh') {
       const probe = new SshBoxBackend({
@@ -1000,6 +1037,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       const { id } = z.object({ id: z.string() }).parse(payload)
       await imageStore.remove(id)
       routingBackend.removeRoute(id)
+      // P9-2：宿主屏幕条目删除 → 同步清其适配器（常驻 PS 通道——孤儿纪律）
+      const gone = hostScreenControls.get(id)
+      if (gone !== undefined) {
+        gone.dispose()
+        hostScreenControls.delete(id)
+      }
       return { ok: true }
     }, z.object({ id: z.string() }))
     .register('v1.images.test', async (payload) => {
@@ -1008,6 +1051,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       if (entry === null) throw new KernelError('STATE_IMAGE_NOT_FOUND', `镜像条目不存在：${id}`)
       return testImageEntry(entry)
     }, z.object({ id: z.string() }))
+    // 宿主屏幕窗口清单（plan-screen-firstclass P9-2 裁定 E）：设置页绑定窗口下拉的事实源——
+    // EnumWindows 全量顶层窗口（标题子串匹配由用户在表单选定）。懒建单例 PS 通道，零注入面
+    .register('v1.hostscreen.windows', async () => {
+      windowProbe ??= new HostScreenControl({ bridge: hostScreenBridge })
+      return { windows: await windowProbe.listWindows() }
+    })
     // 可用镜像探测（2026-09-14）：环境里实际在场的镜像清单（宿主 docker/podman + WSL 发行版内
     // docker）——注册表只含手动条目，此命令补「用户无从得知有哪些镜像」的发现面。
     // 按需触发（设置页按钮），只报告事实不自动入库；装配期已就绪的 platform 从作用域注入
@@ -1193,11 +1242,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       transcript: kernel.transcript,
       screen: kernel.screen,
       lock: guiLock,
-      // 载体级动作闸（P9-1 裁定 F）：宿主屏幕上 computer 动作恒过审批闸——「Box 内自由」
-      // 在用户本机屏幕上不成立；截图不进闸（注册条目本身即「可看」的授权，注入才是主权面）
+      // 载体级动作闸（P9-1 裁定 F；P9-2 前缀判定——每条目一 box）：宿主屏幕上 computer
+      // 动作恒过审批闸——「Box 内自由」在用户本机屏幕上不成立；截图不进闸（注册条目本身
+      // 即「可看」的授权，注入才是主权面）
       actionGate: {
         gate: switchableGate,
-        appliesTo: (boxId: string) => boxId === HOST_SCREEN_BOX_ID,
+        appliesTo: (boxId: string) => isHostScreenBoxId(boxId),
         reason: () => '宿主屏幕输入注入——agent 将在你的本机屏幕上执行鼠标/键盘动作',
       },
     })) {
@@ -1434,7 +1484,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     async dispose() {
       kernel.shellService.dispose() // 杀全部 PTY 会话（不留后台 shell）
       kernel.guiStream.dispose() // 杀全部 GUI 采集管道（不留后台 ffmpeg——孤儿纪律同款）
-      kernel.screen.dispose?.() // 杀全部常驻注入通道（P8-2 起内聚适配器——同款孤儿纪律）
+      kernel.screen.dispose?.() // 杀全部常驻注入通道（P8-2 起内聚适配器——同款孤儿纪律；P9-2 路由器动态清单含 per-entry 宿主屏幕适配器）
+      windowProbe?.dispose() // 窗口清单探测通道（v1.hostscreen.windows 单例）
       kernel.statsService.stop()
       kernel.stopWatchdog()
       clearInterval(automationTimer) // Scheduler 孤儿定时器不留

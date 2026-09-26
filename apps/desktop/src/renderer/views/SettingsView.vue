@@ -147,7 +147,21 @@ const imageForm = reactive<{
   keyPath: string
   controlProtocol: ImageFormProtocol
   display: string
-}>({ name: '', carrier: 'ssh', image: '', host: '', port: null, user: '', keyPath: '', controlProtocol: 'x11', display: '' })
+  windowTitle: string
+}>({ name: '', carrier: 'ssh', image: '', host: '', port: null, user: '', keyPath: '', controlProtocol: 'x11', display: '', windowTitle: '' })
+/** 窗口绑定（P9-2）：顶层窗口清单（⟳ 枚举按钮按需拉取）+ 枚举中态 */
+const hostWindows = ref<Array<{ title: string; width: number; height: number }>>([])
+const hostWindowsLoading = ref(false)
+const enumHostWindows = async (): Promise<void> => {
+  hostWindowsLoading.value = true
+  try {
+    hostWindows.value = await kernel.listHostWindows()
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  } finally {
+    hostWindowsLoading.value = false
+  }
+}
 /** 载体切换联动（P9-1）：host-screen 协议恒 host；切回他载体时 host 协议回落 x11 */
 watch(imageForm.carrier, (c) => {
   if (c === 'host-screen') imageForm.controlProtocol = 'host'
@@ -170,6 +184,7 @@ const IMAGE_EMPTY_FORM = {
   keyPath: '',
   controlProtocol: 'x11' as const,
   display: '',
+  windowTitle: '',
 }
 
 const openImageCreate = (): void => {
@@ -179,7 +194,7 @@ const openImageCreate = (): void => {
   imageFormOpen.value = true
 }
 
-const openImageEdit = (img: { id: string; name: string; carrier: ImageFormCarrier; image?: string; host?: string; port?: number; user?: string; keyPath?: string; controlProtocol: ImageFormProtocol; display?: string }): void => {
+const openImageEdit = (img: { id: string; name: string; carrier: ImageFormCarrier; image?: string; host?: string; port?: number; user?: string; keyPath?: string; controlProtocol: ImageFormProtocol; display?: string; windowTitle?: string }): void => {
   imageEditingId.value = img.id
   Object.assign(imageForm, {
     name: img.name,
@@ -191,6 +206,7 @@ const openImageEdit = (img: { id: string; name: string; carrier: ImageFormCarrie
     keyPath: img.keyPath ?? '',
     controlProtocol: img.controlProtocol,
     display: img.display ?? '',
+    windowTitle: img.windowTitle ?? '',
   })
   imageFormError.value = null
   imageFormOpen.value = true
@@ -216,6 +232,7 @@ const saveImage = async (): Promise<void> => {
     name: imageForm.name.trim(),
     carrier: imageForm.carrier,
     controlProtocol: imageForm.carrier === 'host-screen' ? ('host' as const) : imageForm.controlProtocol,
+    ...(imageForm.carrier === 'host-screen' && imageForm.windowTitle.trim() !== '' ? { windowTitle: imageForm.windowTitle.trim() } : {}),
     ...(imageForm.carrier === 'host-screen'
       ? {}
       : imageForm.carrier === 'container'
@@ -272,8 +289,10 @@ const testImage = async (img: { id: string }): Promise<void> => {
 }
 
 const carrierLabel = (c: 'container' | 'ssh' | 'host-screen'): string => (c === 'ssh' ? 'SSH' : c === 'host-screen' ? '宿主屏幕' : '容器')
-const imageSummary = (img: { carrier: 'container' | 'ssh' | 'host-screen'; image?: string; host?: string; port?: number; user?: string; keyPath?: string }): string => {
-  if (img.carrier === 'host-screen') return '本机主屏（内置注入）'
+const imageSummary = (img: { carrier: 'container' | 'ssh' | 'host-screen'; image?: string; host?: string; port?: number; user?: string; keyPath?: string; windowTitle?: string }): string => {
+  if (img.carrier === 'host-screen') {
+    return img.windowTitle !== undefined ? `窗口「${img.windowTitle}」（内置注入）` : '本机主屏（内置注入）'
+  }
   if (img.carrier !== 'ssh') return img.image ?? ''
   let out = ''
   if (img.user) out += img.user + '@'
@@ -1091,6 +1110,17 @@ const wslHelpNeeded = computed(() => {
                 把本机屏幕（主屏）注册为可操控载体：Agent 可截图查看与注入鼠标键盘（远程控制窗口里的一切都落在宿主屏幕上）。
                 屏幕上的一切输入注入都会先经审批确认（默认「变更前确认」模式逐次弹窗）；本载体无命令执行面。
               </p>
+            </div>
+            <div v-if="imageForm.carrier === 'host-screen'" class="field">
+              <label class="field-label" for="ifWindow">绑定窗口（可选——空缺 = 整屏）</label>
+              <div class="cfg-inline">
+                <select id="ifWindow" v-model="imageForm.windowTitle" class="field-input">
+                  <option value="">整屏（主屏全部）</option>
+                  <option v-for="w in hostWindows" :key="w.title" :value="w.title">{{ w.title }}（{{ w.width }}×{{ w.height }}）</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" type="button" data-role="enum-windows" :disabled="hostWindowsLoading" @click="enumHostWindows">{{ hostWindowsLoading ? '枚举中…' : '⟳ 枚举窗口' }}</button>
+              </div>
+              <p class="field-note">绑定后几何/截图/注入域收敛到该窗口（标题子串匹配——窗口重开同名即恢复）；窗口未在场时操作如实拒绝。键入仍需目标窗口在前台（不自动抢焦点）。</p>
             </div>
             <template v-else-if="imageForm.carrier === 'ssh'">
               <div class="field">

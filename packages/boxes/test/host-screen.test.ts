@@ -238,15 +238,16 @@ describe('HostScreenBoxBackend（纯屏幕载体记账面）', () => {
     })
   })
 
-  it('create=attach 幂等记账；teardown 只清账；list/stats 如实', async () => {
+  it('create=attach 每条目一 box（P9-2：hostscreen-<entryId>）；teardown 只清账；list/stats 如实', async () => {
     const b = new HostScreenBoxBackend({ now: () => 42 })
     expect(await b.list()).toEqual([])
-    expect(await b.create({ image: 'img-1' })).toBe(HOST_SCREEN_BOX_ID)
-    expect(await b.create({ image: 'img-2' })).toBe(HOST_SCREEN_BOX_ID) // 幂等——多路由共享一台屏幕
-    expect(await b.list()).toHaveLength(1)
-    expect(await b.stats(HOST_SCREEN_BOX_ID)).toEqual({})
-    await b.teardown(HOST_SCREEN_BOX_ID)
-    expect(await b.list()).toEqual([])
+    expect(await b.create({ image: 'img-1' })).toBe('hostscreen-img-1')
+    expect(await b.create({ image: 'img-1' })).toBe('hostscreen-img-1') // 幂等——同条目重复 create
+    expect(await b.create({ image: 'img-2' })).toBe('hostscreen-img-2') // 不同条目不同 box（窗口绑定=不同桌面面）
+    expect(await b.list()).toHaveLength(2)
+    expect(await b.stats('hostscreen-img-1')).toEqual({})
+    await b.teardown('hostscreen-img-1')
+    expect((await b.list()).map((x) => x.boxId)).toEqual(['hostscreen-img-2'])
   })
 
   it('exec/fs/snapshot 稳定码拒绝（BOX_UNSUPPORTED——纯屏幕载体零命令面）', async () => {
@@ -285,5 +286,168 @@ describe('ScreenControlRouter（按 boxId 分发——消费方零载体感知�
     const spy = vi.spyOn(host, 'dispose' as never)
     router.dispose()
     expect(spy).toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P9-2：窗口绑定 / L2 零依赖帧泵 / 通道侧合帧
+// ---------------------------------------------------------------------------
+
+import { coalesceMoves } from '../src/screen/host-screen.js'
+import type { HostScreenBridge } from '../src/screen/host-screen.js'
+
+describe('coalesceMoves（通道侧合帧）', () => {
+  it('批次内连续 move 只留最后一个；click/key 打断合帧', () => {
+    const merged = coalesceMoves([
+      { kind: 'move', x: 1, y: 1 },
+      { kind: 'move', x: 2, y: 2 },
+      { kind: 'move', x: 3, y: 3 },
+      { kind: 'key', key: 'a' },
+      { kind: 'move', x: 4, y: 4 },
+    ])
+    expect(merged).toEqual([
+      { kind: 'move', x: 3, y: 3 },
+      { kind: 'key', key: 'a' },
+      { kind: 'move', x: 4, y: 4 },
+    ])
+    expect(coalesceMoves([])).toEqual([])
+  })
+})
+
+describe('窗口绑定（P9-2 裁定 B）', () => {
+  const pumpRect = (proc: RecProc, rect: string): void => {
+    proc.emit(`R|${rect}\n`)
+  }
+
+  it('act：rect 现查 → 本地坐标+原点偏移 → 屏幕绝对归一化；ok 后返回', async () => {
+    const { procs, spawner } = spawnerOf()
+    const ctrl = new HostScreenControl({
+      bridge: bridgeOf(),
+      spawner,
+      windowTitle: '记事本',
+      readyTimeoutMs: 500,
+      actAckTimeoutMs: 500,
+    })
+    const done = ctrl.act('hostscreen-img-1', { kind: 'click', button: 1, x: 10, y: 20 })
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit("ready\n")
+    await new Promise((r) => setTimeout(r, 10))
+    // rect 查询行（标题 base64）
+    expect(procs[0].written.some((w) => w === `rect|${Buffer.from('记事本', 'utf8').toString('base64')}\n`)).toBe(true)
+    pumpRect(procs[0], '100|200|640|480')
+    procs[0].emit("ok\n") // rect 请求的 ack
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit("ok\nok\n") // move + c 两条动作行的 ack
+    await expect(done).resolves.toBeUndefined()
+    // 本地 (10,20) → 绝对 (110,220)，对全屏 1920×1080 归一化
+    const moveLine = procs[0].written.find((w) => w.includes('m|'))
+    expect(moveLine).toBe(`m|${Math.round((110 * 65536) / 1920)}|${Math.round((220 * 65536) / 1080)}\nc|1|1|0\n`)
+  })
+
+  it('窗口未在场（R|-）：act 抛「绑定窗口未在场」（如实拒绝——不静默回整屏）', async () => {
+    const { procs, spawner } = spawnerOf()
+    const ctrl = new HostScreenControl({
+      bridge: bridgeOf(),
+      spawner,
+      windowTitle: '不存在的窗',
+      readyTimeoutMs: 500,
+      actAckTimeoutMs: 500,
+    })
+    const done = ctrl.act('hostscreen-img-1', { kind: 'key', key: 'Return' })
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit("ready\n")
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit("R|-\nok\n")
+    await expect(done).rejects.toThrowError(/绑定窗口未在场/)
+  })
+
+  it('geometry：窗口绑定 → 窗口矩形尺寸；未在场 → null', async () => {
+    const { procs, spawner } = spawnerOf()
+    const ctrl = new HostScreenControl({ bridge: bridgeOf(), spawner, windowTitle: '记事本', readyTimeoutMs: 500 })
+    const g = ctrl.geometry('hostscreen-img-1')
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit("ready\n")
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit("R|0|0|640|480\nok\n")
+    await expect(g).resolves.toEqual({ width: 640, height: 480 })
+    // TTL 内命中缓存（第二次查询不再写 rect 行）
+    const writtenBefore = procs[0].written.filter((w) => w.startsWith('rect|')).length
+    await ctrl.geometry('hostscreen-img-1')
+    expect(procs[0].written.filter((w) => w.startsWith('rect|')).length).toBe(writtenBefore)
+  })
+
+  it('listWindows：wlist → W 行清单解码（W|end 收齐）', async () => {
+    const { procs, spawner } = spawnerOf()
+    const ctrl = new HostScreenControl({ bridge: bridgeOf(), spawner, readyTimeoutMs: 500 })
+    const p = ctrl.listWindows()
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit("ready\n")
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit(
+      `W|0x1|0|0|1920|1080|${Buffer.from('桌面', 'utf8').toString('base64')}\n` +
+        `W|0x2|100|100|800|600|${Buffer.from('记事本', 'utf8').toString('base64')}\n` +
+        'W|end\nok\n',
+    )
+    await expect(p).resolves.toEqual([
+      { x: 0, y: 0, width: 1920, height: 1080, title: '桌面' },
+      { x: 100, y: 100, width: 800, height: 600, title: '记事本' },
+    ])
+  })
+})
+
+describe('L2 零依赖帧泵（P9-2 裁定 A/D）', () => {
+  const pumpBridge = (opts?: { failPump?: boolean }): { bridge: HostScreenBridge; frames: number[]; stopped: number[] } => {
+    const frames: number[] = []
+    const stopped: number[] = []
+    const bridge: HostScreenBridge = {
+      geometry: () => GEO,
+      captureFrame: bridgeOf().captureFrame,
+      startFrameStream: (onFrame) => {
+        if (opts?.failPump) return Promise.reject(new Error('无可用屏幕采集源'))
+        void Promise.resolve().then(() => {
+          onFrame({ bytes: new Uint8Array([1]), width: 1600, height: 900 })
+          onFrame({ bytes: new Uint8Array([2]), width: 1600, height: 900 })
+        })
+        return Promise.resolve({ stop: () => stopped.push(1) })
+      },
+    }
+    return { bridge, frames, stopped }
+  }
+  const noFfmpeg = async () => ({ exitCode: 1, stdout: '', stderr: '' }) as never
+
+  it('stream：无 ffmpeg + 泵在场 → L2 会话（mjpeg 编码、帧直通、close → stop）', async () => {
+    const { bridge, stopped } = pumpBridge()
+    const ctrl = new HostScreenControl({ bridge, spawner: spawnerOf().spawner, runner: noFfmpeg })
+    const s = await ctrl.stream('hostscreen-img-1', { codec: 'h264' })
+    expect(s.codec).toBe('mjpeg') // 帧序列走 mjpeg 管线（裁定 D——零新 wire codec）
+    const got: number[] = []
+    s.onData((b) => got.push(b[0]!))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(got).toEqual([1, 2])
+    s.close()
+    expect(stopped).toHaveLength(1)
+  })
+
+  it('泵起不来 → 会话内自愈降级 L0 轮询（帧仍到）', async () => {
+    const { bridge } = pumpBridge({ failPump: true })
+    const ctrl = new HostScreenControl({ bridge, spawner: spawnerOf().spawner, runner: noFfmpeg })
+    const s = await ctrl.stream('hostscreen-img-1', { codec: 'h264' })
+    expect(s.codec).toBe('mjpeg')
+    const got: number[] = []
+    s.onData((b) => got.push(b[0]!))
+    await new Promise((r) => setTimeout(r, 200))
+    expect(got.length).toBeGreaterThanOrEqual(1) // L0 帧照流
+    s.close()
+  })
+
+  it('streamTier：ffmpeg 在场 l1 > 泵在场 l2 > 兜底 l0（v1.images.test 三档报告的事实源）', async () => {
+    const okRunner = async () => ({ exitCode: 0, stdout: '', stderr: '' }) as never
+    const l1 = new HostScreenControl({ bridge: pumpBridge().bridge, runner: okRunner })
+    await expect(l1.streamTier()).resolves.toBe('l1')
+    const l2 = new HostScreenControl({ bridge: pumpBridge().bridge, runner: noFfmpeg })
+    await expect(l2.streamTier()).resolves.toBe('l2')
+    const plain = bridgeOf()
+    const l0 = new HostScreenControl({ bridge: plain, runner: noFfmpeg })
+    await expect(l0.streamTier()).resolves.toBe('l0')
   })
 })

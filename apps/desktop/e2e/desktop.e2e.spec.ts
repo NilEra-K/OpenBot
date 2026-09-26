@@ -1675,10 +1675,31 @@ test('宿主屏幕载体（P9-1）：注册 + 内置注入协议呈现 + 真实�
     await expect(row.locator('.chip-success')).toBeVisible({ timeout: 30_000 })
     await expect(row.locator('.chip-success')).toHaveAttribute('title', /宿主屏幕就绪.*实况流/)
 
-    // —— 编辑往返：协议 chip 恒 host（表单回填不破坏载体语义） ——
+    // —— 编辑往返：协议 chip 恒 host（表单回填不破坏载体语义）+ 窗口绑定枚举（P9-2） ——
     await row.locator('[data-role="image-edit"]').click()
     await expect(page.locator('span.chip', { hasText: '宿主内置注入' })).toBeVisible()
-    await page.getByRole('button', { name: '取消', exact: true }).click()
+    // 枚举窗口（真实 EnumWindows——桌面会话必有顶层窗口；本应用窗口标题含 OpenBot）
+    await page.locator('[data-role="enum-windows"]').click()
+    await expect(page.locator('#ifWindow option')).not.toHaveCount(0)
+    const winOptions = await page.locator('#ifWindow option').count()
+    if (winOptions > 1) {
+      // 环境相关：有窗口可选则绑定（子串匹配——窗口重开同名即恢复），无则保持整屏
+      const openbotOption = page.locator('#ifWindow option', { hasText: 'OpenBot' })
+      if ((await openbotOption.count()) > 0) {
+        await page.locator('#ifWindow').selectOption({ label: (await openbotOption.textContent())! })
+        await page.getByRole('button', { name: '保存', exact: true }).click()
+        await expect(row).toContainText('窗口「OpenBot', { timeout: 10_000 })
+        // 改回整屏（空选项 = 清除绑定）
+        await row.locator('[data-role="image-edit"]').click()
+        await page.locator('#ifWindow').selectOption('')
+        await page.getByRole('button', { name: '保存', exact: true }).click()
+        await expect(row).toContainText('本机主屏（内置注入）', { timeout: 10_000 })
+      } else {
+        await page.getByRole('button', { name: '取消', exact: true }).click()
+      }
+    } else {
+      await page.getByRole('button', { name: '取消', exact: true }).click()
+    }
 
     // —— 重启持久化（双段会话）+ 删除二段确认 ——
     await app.close()

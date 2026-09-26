@@ -44,7 +44,7 @@
 |---|---|---|---|
 | L0（一期兜底） | desktopCapturer 轮询快照 → mjpeg 帧序列 | 5–10fps、延迟 150–400ms——看清 agent 在干什么没问题，拖动跳帧。**不承诺丝滑** | 零（Electron 自带） |
 | L1（探测自动升级） | ffmpeg gdigrab → h264（X11 适配器同构 argv 换采集源） | 30–60fps、延迟 <100ms——与 X11 载体同档丝滑 | 宿主 ffmpeg（探测缺席如实降级 + GUI 呈现档位与指引；开发机 2026-09-26 实测无 ffmpeg） |
-| L2（P9-2） | 隐藏 BrowserWindow + getUserMedia 桌面采集（Chromium WGC 底层）+ MediaRecorder | 20–30fps | 零外部依赖，+1 轮工程量 |
+| L2（P9-2 已实施） | 隐藏 BrowserWindow + getUserMedia 桌面采集（Chromium WGC 底层）→ canvas JPEG 帧泵 | 20–30fps（mjpeg 编码） | 零外部依赖 |
 
 - **agent 侧（computer 截图/点击）无此顾虑**：agent 秒级节奏——单帧 100–200ms、动作 5–30ms 足够；
 - 输入侧（GUI 内接管注入）：单击/按键 5–30ms 可接受；连续拖拽跟手性一期一般（逐动作注入），move
@@ -188,6 +188,55 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
 
 | 轮 | 交付判据 |
 |---|---|
-| P9-1 | 宿主注册「宿主屏幕」条目 → agent 绑定 → 对话内 computer_screenshot 看到本机屏幕 → computer_click/type 真实生效（门控套件验收）→ GUI 视图实况流按 L0/L1 档位呈现（**档位 + 实测 fps/延迟如实可见，未达高档带原因与指引**）；既有 X11/SSH/容器链路零回退 |
-| P9-2 | 窗口区域绑定 + L2 零依赖流式 + move 合帧 |
+| P9-1 | 宿主注册「宿主屏幕」条目 → agent 绑定 → 对话内 computer_screenshot 看到本机屏幕 → computer_click/type 真实生效（门控套件验收）→ GUI 视图实况流按 L0/L1 档位呈现（**档位 + 实测 fps/延迟如实可见，未达高档带原因与指引**）；既有 X11/SSH/容器链路零回退（已实施，v0.1.32） |
+| P9-2 | L2 零依赖流式（getUserMedia 帧泵）+ 窗口区域绑定（EnumWindows/GetWindowRect）+ 通道侧 move 合帧（已实施，2026-09-26） |
 | P9-3 | Android adb / Windows 机内 / RDP 随真机接入定形 |
+
+## P9-2 实施记档（2026-09-26，用户批准后实施）
+
+- [x] 1. PS 协议扩展：EnumWindows C#（wlist/rect + R/W 回包行 + DPI 感知）+ 单测
+- [x] 2. state：`windowTitle?`（host-screen 专属校验 + 切载体清除 + 读取端兼容）+ 单测
+- [x] 3. HostScreenControl 窗口模式：geometry/act/capture 窗口感知（原点换算/裁剪/rect TTL
+   + 每动作现查）+ 未在场如实拒绝 + 单测
+- [x] 4. L2 采集管线：hostscreen-pump.ts（隐藏窗口 + 专用 preload + getUserMedia 帧泵 +
+   首帧就绪/出错 reject 语义）+ 探测序 L1>L2>L0 + 单测（fake 泵 + 降级自愈）
+- [x] 5. kernel：`v1.hostscreen.windows` 窗口清单命令 + `v1.images.test` 三档如实报告
+   （streamTier 单一事实源）+ bridge crop 扩展
+- [x] 6. 设置页：绑定窗口下拉（⟳ 枚举按钮 + 可清空回整屏）+ 摘要呈现
+- [x] 7. 通道侧 move 合帧（coalesceMoves——renderer 60Hz 合帧的第二级）+ 单测
+- [x] 8. E2E：窗口绑定常规段（条件断言）+ 门控套件档位报告打点
+- [ ] 9. 真机监督验收：门控套件跑一轮（三档 fps 实测回填本表 + L2/窗口模式真链验证）
+- [x] 10. 文档：plan 记档 + ARCHITECTURE §3.2 语义同步 + backlog ⑥ 状态
+
+### P9-2 实施要点
+
+- **L2 帧泵（核心工程量）**：`apps/desktop/src/main/hostscreen-pump.ts`——隐藏 BrowserWindow
+  （show:false + skipTaskbar + **backgroundThrottling:false**——隐藏态不降速是本档位的全部意义）
+  + 极简专用 preload（`resources/hs-pump.cjs`——不污染主 renderer 桥）+ `resources/hs-pump.html`
+  （内联脚本 getUserMedia desktop → canvas 33ms 节拍 → JPEG 帧经 IPC 泵回主进程）。
+  **就绪语义 = 首帧才 resolve、出错/10s 无帧即 reject**——HostScreenControl 据此在会话内
+  自愈降级 L0（同会话换引擎，用户零感知）。固定 IPC 频道 + event.sender 过滤（多泵窗口不串线）。
+- **档位优先序（裁定 A）**：L1 ffmpeg > L2 泵 > L0 轮询；`streamTier()` 是 v1.images.test
+  三档报告的单一事实源（l1/l2/l0 如实——不再只报「有/无 ffmpeg」）。
+- **窗口绑定（裁定 B/E）**：PS 脚本扩展 EnumWindows（C# `ListWindows`/`FindWindowRect`）+
+  DPI 感知（`SetProcessDpiAwarenessContext(-4)`——GetWindowRect 物理像素与 desktopCapturer
+  同坐标系，**这是窗口裁剪正确性的前提**）；行协议加 `wlist`（W|…回包 + W|end 收齐）与
+  `rect|<b64>`（R|x|y|w|h / R|- 回包）；标题子串匹配，窗口重开同名即恢复；**未在场如实拒绝**
+  （act/capture/test 三路径统一话术），不静默回整屏。
+- **窗口模式坐标链**：截图 = 全屏缩略图 NativeImage.crop（rect 按缩放系数折算+钳界）；act =
+  本地域校验（agent 拒/user 钳）→ 原点偏移 + 1280 契约缩放 → 屏幕绝对归一化（对全屏 span）；
+  rect 每动作现查（注入不容陈旧），geometry/capture 走 250ms TTL 缓存。
+- **每条目一 box（语义修正）**：P9-1 的「多条目共享 hostscreen-main」改为 `hostscreen-<entryId>`
+  ——窗口绑定条目是**不同的桌面面**（几何/域各归窗口），记账/路由/适配器按条目区分；
+  `HOST_SCREEN_BOX_ID` 常量退役（外部引用迁移期保留）；路由器 adapters 改函数形态
+  （运行时可变清单——dispose 兜底遍历不漏 per-entry 适配器）。
+- **通道侧 move 合帧**：`coalesceMoves` 批次内连续 move 只留最新（renderer 60Hz 合帧的第二级
+  ——两级节流拖拽不洪泛）。
+- **E2E 边界**：常规用例窗口绑定段为条件断言（枚举到窗口才断言绑定/摘要/改回整屏——环境无关
+  纪律）；门控套件加档位报告打点（三档实测 fps 一并 stdout）。
+- **坑（实施中）**：①初版重写引入 `serializeBatchAbs/__batch` 半成品设计（死代码 + 类型欺诈）
+  ——立即收敛为 `serializeHostActionAbs` 单核心 + `serializeHostAction` 本地坐标薄包装；
+  ②rect/wlist 只等回包没写请求行——单测首抓（「请求-回包成对」语义无测试锁不住）；
+  ③user 钳制的 span 选错（窗口宽 vs 屏幕宽——abs 坐标按窗口宽钳会截掉屏边）——窗口模式
+  统一对屏幕 span 钳制、本地域校验独立做；④pump 早期帧早于 onData 挂接——加 pending 缓冲
+  挂接即回放。

@@ -33,6 +33,10 @@ test('宿主屏幕真机全链：注册 → 绑定 → GUI 实况真帧 → 接�
     await page.locator('#ifName').fill('本机屏幕')
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await expect(page.locator('.cfg-row[data-image-id="img-1"]')).toBeVisible()
+    // 实况档位实测打点（三档如实——L1 ffmpeg / L2 帧泵 / L0 轮询，回填记档依据）
+    await page.locator('[data-role="image-test"]').click()
+    await expect(page.locator('.cfg-row[data-image-id="img-1"] .chip-success')).toBeVisible({ timeout: 30_000 })
+    console.log('[hostscreen-real] 实况档位：', await page.locator('.cfg-row[data-image-id="img-1"] .chip-success').getAttribute('title'))
 
     // —— 向导绑定（注册即连接——宿主屏幕 attach 零副作用，创建必成功） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()

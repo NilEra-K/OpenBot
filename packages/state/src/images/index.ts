@@ -46,6 +46,8 @@ export interface ImageEntry {
   controlProtocol: ImageControlProtocol
   /** X 显示地址（controlProtocol=x11 时；缺省装配默认——P8-2 B3 镜像条目接管位） */
   display?: string
+  /** carrier=host-screen：绑定窗口标题子串（P9-2 裁定 B；空缺=整屏。窗口重开同名即恢复） */
+  windowTitle?: string
   createdAt: number
 }
 
@@ -59,6 +61,7 @@ export interface ImageInput {
   keyPath?: string
   controlProtocol: ImageControlProtocol
   display?: string
+  windowTitle?: string
 }
 
 export interface ImageStoreOptions {
@@ -120,6 +123,9 @@ function validateEntry(entry: ImageEntry): void {
     // host-screen（P9-1）：纯屏幕载体——连接事实为零（一期恒主屏），控制协议恒 host
     if (entry.controlProtocol !== 'host') {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '宿主屏幕载体控制协议恒为 host（内置注入）')
+    }
+    if (entry.windowTitle !== undefined && (entry.windowTitle === '' || entry.windowTitle.length > 200)) {
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '绑定窗口标题须为 1-200 字（空缺=整屏）')
     }
   }
 }
@@ -193,6 +199,7 @@ export class ImageStore {
       ...(input.keyPath !== undefined ? { keyPath: input.keyPath } : {}),
       controlProtocol: input.controlProtocol,
       ...(input.display !== undefined && input.display !== '' ? { display: input.display } : {}),
+      ...(input.windowTitle !== undefined && input.windowTitle !== '' ? { windowTitle: input.windowTitle } : {}),
       createdAt: this.#now(),
     }
     validateEntry(entry)
@@ -219,6 +226,13 @@ export class ImageStore {
       keyPath: patch.keyPath ?? (patch.carrier === undefined ? entry.keyPath : undefined),
       controlProtocol: patch.controlProtocol ?? entry.controlProtocol,
       display: patch.display !== undefined ? (patch.display === '' ? undefined : patch.display) : entry.display,
+      // 窗口绑定随载体切换清除（host-screen 专属事实）；空串 = 清除回整屏
+      windowTitle:
+        patch.windowTitle !== undefined
+          ? patch.windowTitle === ''
+            ? undefined
+            : patch.windowTitle
+          : entry.windowTitle,
     }
     if (next.image === undefined) delete (next as Partial<ImageEntry>).image
     if (next.host === undefined) delete (next as Partial<ImageEntry>).host
@@ -226,6 +240,9 @@ export class ImageStore {
     if (next.user === undefined) delete (next as Partial<ImageEntry>).user
     if (next.keyPath === undefined) delete (next as Partial<ImageEntry>).keyPath
     if (next.display === undefined) delete (next as Partial<ImageEntry>).display
+    // 窗口绑定是 host-screen 专属事实——他载体一律清除（切载体即失效）
+    if (next.carrier !== 'host-screen') delete (next as Partial<ImageEntry>).windowTitle
+    if (next.windowTitle === undefined) delete (next as Partial<ImageEntry>).windowTitle
     validateEntry(next)
     file.images.splice(file.images.indexOf(entry), 1, next)
     await this.#save(file)

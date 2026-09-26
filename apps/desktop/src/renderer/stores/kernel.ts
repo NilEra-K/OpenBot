@@ -191,6 +191,8 @@ export interface ImageEntryView {
   keyPath?: string
   controlProtocol: 'x11' | 'none' | 'host'
   display?: string
+  /** carrier=host-screen：绑定窗口标题子串（P9-2；空缺=整屏） */
+  windowTitle?: string
   createdAt: number
 }
 
@@ -198,6 +200,7 @@ export interface ImageEntryView {
 export interface ImageInputView {
   name: string
   carrier: 'container' | 'ssh' | 'host-screen'
+  windowTitle?: string
   image?: string
   host?: string
   port?: number
@@ -687,6 +690,11 @@ export const useKernelStore = defineStore('kernel', {
     },
     async testImage(id: string): Promise<ImageTestResult> {
       return await this.call<ImageTestResult>('v1.images.test', { id })
+    },
+    /** 宿主屏幕顶层窗口清单（P9-2——设置页绑定窗口下拉的事实源；按需枚举零常驻开销） */
+    async listHostWindows(): Promise<Array<{ title: string; x: number; y: number; width: number; height: number }>> {
+      const state = await this.call<{ windows: Array<{ title: string; x: number; y: number; width: number; height: number }> }>('v1.hostscreen.windows')
+      return state.windows
     },
     /** 可用镜像探测（按需——设置页按钮触发；只报告事实，注册仍走 addImage 全链） */
     async scanImages(): Promise<void> {

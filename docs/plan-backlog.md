@@ -246,6 +246,9 @@ P9-3 随真机接入定形。
 **P9-1（宿主屏幕载体）已实施**（2026-09-26）——纯屏幕 Box + PowerShell SendInput 注入
 （恒过审批闸）+ L0/L1 双档实况流 + ScreenControlRouter；实施记档见 plan-screen-firstclass
 P9-1 节；真机门控套件（`OPENBOT_TEST_HOSTSCREEN=1`）与流畅度实测回填待设备监督验收。
+**P9-2（L2 零依赖流式 + 窗口区域绑定）已实施**（2026-09-26）——getUserMedia 隐藏窗口帧泵
+（档位序 L1>L2>L0）、EnumWindows 窗口绑定（标题子串、未在场如实拒绝）、每条目一 box 语义
+修正；记档见 plan-screen-firstclass P9-2 节。
 
 ---
 
