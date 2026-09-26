@@ -2,7 +2,8 @@
 /**
  * ctx 面板（prototype.html 迁移，语义：Box 的显示器——VMware 操作区的本地替身）：
  * 一块屏幕——当前会话 agent 的专属 Box（roster 事实，注册即有——任意时刻可点开操作台；
- * 屏幕内容是 exec 流实况，无执行史时诚实显示 IDLE 空缺态；思考过程在对话流内呈现，
+ * 屏幕内容是 exec 流实况；顶栏状态点=绿呼吸执行中/灰空闲（文字徽标退役，语义进 title）；
+ * 思考过程在对话流内呈现，
  * llm 是 agent 进程不在 Box 内，不冒充屏幕内容——诚实分层）。
  * 底部「cs-hint 提示条」：接管的去向提示（caps 分流文案——interactive 才承诺键盘接管）。
  * 档案模式（P4 Step 7，原型 ctxMode='settings'）：该会话的 Settings——档案 kv / 协作对象（edges 事实，
@@ -333,9 +334,14 @@ const lastAt = computed(() => {
       :aria-label="`群 ${activeGroup.name} 状态屏（${groupBusy ? '轮转中' : '空闲'}）`"
     >
       <div class="cs-bar">
-        <span class="cs-live" :class="{ asleep: !groupBusy }">
-          <span v-if="groupBusy" class="stat-dot working"></span>
-          {{ groupBusy ? '轮转中' : '空闲' }}
+        <!-- 状态点（与 agent 屏同款——文字徽标退役，语义进 title/aria） -->
+        <span
+          class="cs-live"
+          :class="{ asleep: !groupBusy }"
+          :title="groupBusy ? '轮转中' : '空闲'"
+          :aria-label="groupBusy ? '轮转中' : '空闲'"
+        >
+          <span class="stat-dot" :class="{ working: groupBusy }"></span>
         </span>
         <span class="mono">{{ activeGroup.name }}</span>
         <span class="mono">{{ activeGroup.members.length }} 成员</span>
@@ -358,9 +364,16 @@ const lastAt = computed(() => {
       @keydown.enter.prevent="openOps"
     >
       <div class="cs-bar">
-        <span class="cs-live" :class="{ asleep: !liveExec }">
-          <span v-if="liveExec" class="stat-dot working"></span>
-          {{ liveExec ? 'LIVE' : boxAsleep ? '休眠中' : screenBlocks.length > 0 ? '空闲' : 'IDLE' }}
+        <!-- 状态点（用户裁定 2026-09-26）：文字徽标退役——绿点呼吸=执行中（stat-dot working
+             全应用惯例）、灰=空闲/休眠（屏幕区灰化已有休眠呈现）；语义进 title/aria（色盲补偿）。
+             红态预留：待真实错误信号源（如最近 exec 非零退出角标）立项再接，不放假状态 -->
+        <span
+          class="cs-live"
+          :class="{ asleep: !liveExec }"
+          :title="liveExec ? '执行中' : boxAsleep ? '休眠中' : '空闲'"
+          :aria-label="liveExec ? '执行中' : boxAsleep ? '休眠中' : '空闲'"
+        >
+          <span class="stat-dot" :class="{ working: liveExec }"></span>
         </span>
         <span class="mono">{{ screenBoxId ?? 'no box' }}</span>
         <span class="mono">{{ lastAt }}</span>

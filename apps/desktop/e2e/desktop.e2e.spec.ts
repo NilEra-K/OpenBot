@@ -922,7 +922,8 @@ test('Box 休眠/唤醒（P4 Step 8）：卡按钮状态机 + toast + ctx 屏灰
     // —— console ctx 屏同源灰化（v1.box.state 事件单一信号源） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     await expect(page.locator('.ctx-screen.is-asleep')).toBeVisible()
-    await expect(page.locator('.cs-live')).toContainText('休眠中')
+    // 状态点（v0.1.36 文字徽标退役）——语义进 title：休眠 → title 文字断言
+    await expect(page.locator('.cs-live')).toHaveAttribute('title', '休眠中')
 
     // —— 唤醒闭环：按钮文案随状态翻转，chip 回「运行中」，ctx 恢复 ——
     await page.getByRole('button', { name: 'Box', exact: true }).click()

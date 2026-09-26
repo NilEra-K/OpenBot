@@ -77,7 +77,8 @@
   color: var(--ink3);
 }
 
-/* 状态点（与 roster/boxes 同款：working = 脉冲） */
+/* 状态点（与 roster/boxes 同款：working = 脉冲）。红态（.err）预留——待真实错误信号源
+ * 立项再接（boxes.css 有同款 .stat-dot.err 样式可抄），不放假状态 */
 .stat-dot {
   width: 7px;
   height: 7px;
