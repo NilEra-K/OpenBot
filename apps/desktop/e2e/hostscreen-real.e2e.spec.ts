@@ -56,18 +56,12 @@ test('宿主屏幕真机全链：注册 → 绑定 → GUI 实况真帧 → 接�
     await expect(page.locator('.gui-toggle')).toBeVisible({ timeout: 10_000 })
     await page.locator('.gui-toggle').click()
     await expect(page.locator('.ctx-screen .gui-screen')).toBeVisible()
-    // 真实 desktopCapturer 帧（L0 mjpeg / L1 h264——由 ffmpeg 探测决定）：
+    // 真实 desktopCapturer 帧（小屏 = gui.frame 轮询帧源——只断言到达，帧率测不得）：
     const framesOf = async (sel: string): Promise<number> =>
       Number((await page.locator(sel).getAttribute('data-frames')) ?? '0')
     await expect
       .poll(async () => framesOf('.ctx-screen .gui-viewport canvas'), { timeout: 30_000 })
       .toBeGreaterThanOrEqual(2)
-    // 流畅度实测（纪律 1——实测回填依据）：5s 窗口帧计数
-    const f0 = await framesOf('.ctx-screen .gui-viewport canvas')
-    await page.waitForTimeout(5_000)
-    const f1 = await framesOf('.ctx-screen .gui-viewport canvas')
-    const fps = ((f1 - f0) / 5).toFixed(1)
-    console.log(`[hostscreen-real] L0/L1 实况帧率实测：${fps} fps（窗口 5s，帧 ${f0}→${f1}）`)
 
     // —— 大屏接管：真实注入通道建立（SendInput）+ 实况流帧续到 ——
     await page.locator('.ctx-screen .gui-viewport').click({ position: { x: 100, y: 60 } }) // 注意：接管点击会真实注入
@@ -79,6 +73,13 @@ test('宿主屏幕真机全链：注册 → 绑定 → GUI 实况真帧 → 接�
       .poll(async () => framesOf('.boxops .gui-viewport canvas'), { timeout: 30_000 })
       .toBeGreaterThanOrEqual(2)
     console.log('[hostscreen-real] 接管实况流帧到达——注入通道已在场（SendInput 已派发真实键鼠事件）')
+    // 流畅度实测（纪律 1——实测回填依据）：**大屏真流** 5s 窗口帧计数（小屏是 gui.frame
+    // 轮询源——首轮验收 0.6fps 实为轮询周期，测不得）
+    const f0 = await framesOf('.boxops .gui-viewport canvas')
+    await page.waitForTimeout(5_000)
+    const f1 = await framesOf('.boxops .gui-viewport canvas')
+    const fps = ((f1 - f0) / 5).toFixed(1)
+    console.log(`[hostscreen-real] 实况真流帧率实测：${fps} fps（窗口 5s，帧 ${f0}→${f1}）`)
 
     // —— 交还 agent → 停流 ——
     await page.locator('.boxops').getByRole('button', { name: '交还 agent' }).click()

@@ -503,6 +503,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // electron 依赖。P9-2 起每条目一 box 一适配器（窗口绑定条目是不同的桌面面）。
   const hostScreenBackend = new HostScreenBoxBackend({ now: Date.now })
   let hasHostScreenRoute = false
+  /** 网关开启标记（P9-3a 真机验收修正）：开启后 registerImageRoute 的在场性门可运行时
+   *  翻转（ensureComputerTools 补注册）——装配期的注册归装配尾段静态分支（switchableGate 时序） */
+  let gatewayStarted = false
   const hostScreenControls = new Map<string, HostScreenControl>()
   const primaryPhysical = (): { width: number; height: number } | null => {
     try {
@@ -596,6 +599,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       hostScreenControlFor(entry)
       routingBackend.registerRoute(entry.id, { backend: hostScreenBackend })
       hasHostScreenRoute = true
+      if (gatewayStarted) ensureComputerTools('宿主屏幕条目运行中注册（内置注入）')
     } else if (entry.carrier === 'windows') {
       // Windows 机内（P9-3a）：per-entry 后端（同主机 boxId 收敛——同一桌面面同一适配器）
       const boxId = windowsBoxId(entry.host ?? '')
@@ -615,7 +619,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         winScreens.set(boxId, new SshWindowsScreenControl({ host: backend }))
       }
       routingBackend.registerRoute(entry.id, { backend })
-      if (entry.controlProtocol === 'win') hasWindowsRoute = true
+      if (entry.controlProtocol === 'win') {
+        hasWindowsRoute = true
+        if (gatewayStarted) ensureComputerTools('Windows 机内条目运行中注册（PowerShell SendInput）')
+      }
     } else if (chosen.backendId === 'docker' || chosen.backendId === 'podman') {
       routingBackend.registerRoute(entry.id, {
         backend,
@@ -1303,19 +1310,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       }
     }
   }
-  // 宿主屏幕分支（P9-1）：条目在场即开注册——内置注入不依赖 X11 工具集（跳过探测）。
-  // 门语义仍是装配期布尔（全局门）：运行中新注册的宿主屏幕条目重启后才生效（与 X11 门一致）。
-  if (!computerEnabled && hasHostScreenRoute) {
+  // 宿主屏幕/Windows 机内分支（P9-1/P9-3a）：条目在场即开注册——内置注入不依赖 X11 工具集。
+  // **门是运行时可翻转**（P9-3a 真机验收修正：装配期布尔让运行中注册的条目重启才生效——
+  // 在场性门天然可运行时翻转）：registerImageRoute 在网关开启后发现首批条目时调
+  // ensureComputerTools 补注册（幂等）；装配期仍走下方静态分支（switchableGate 时序）。
+  const ensureComputerTools = (reason: string): void => {
+    if (computerEnabled) return
     computerEnabled = true
-    console.log('[openbot] computer 工具族已注册：宿主屏幕条目在场（内置注入，无需 X11 工具集）')
-  }
-  // Windows 机内分支（P9-3a）：win 协议条目在场即开注册（mirror 宿主屏幕门——SendInput
-  // 随 Windows 在场近乎普适；powershell 在场性由 v1.images.test 如实报告）
-  if (!computerEnabled && hasWindowsRoute) {
-    computerEnabled = true
-    console.log('[openbot] computer 工具族已注册：Windows 机内条目在场（PowerShell SendInput）')
-  }
-  if (computerEnabled) {
     for (const tool of computerTools({
       backend: routedBackend, // 路由面——P8-4 起 agent 绑定的镜像 Box 也能 exec 到位
       bus: kernel.bus,
@@ -1334,8 +1335,19 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     })) {
       kernel.tools.register(tool)
     }
-    console.log('[openbot] computer 工具族已注册（GUI 工具集探测 ∩ 视觉 provider——生产门兑现）')
+    console.log(`[openbot] computer 工具族已注册：${reason}`)
   }
+  if (!computerEnabled && hasHostScreenRoute) {
+    ensureComputerTools('宿主屏幕条目在场（内置注入，无需 X11 工具集）')
+  }
+  if (!computerEnabled && hasWindowsRoute) {
+    ensureComputerTools('Windows 机内条目在场（PowerShell SendInput）')
+  }
+  if (computerEnabled) {
+    console.log('[openbot] computer 工具族注册门通过（GUI 工具集探测 ∩ 在场性条目——生产门兑现）')
+  }
+
+  gatewayStarted = true // 网关已开——此后 registerImageRoute 的在场性门可运行时补注册
 
   const gateway = await startGateway({
     transport: kernel.transport,

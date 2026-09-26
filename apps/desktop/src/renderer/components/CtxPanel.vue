@@ -136,6 +136,11 @@ watch(
     if (on) fetchComputerState()
   },
 )
+// box 归属变化即重拉（P9-3a 真机验收修正）：注册门可运行时翻转（宿主屏幕/Windows 条目
+// 运行中注册即补注册 computer 工具族）——切换 agent 不重拉会把过期的 false 缓存给新 box
+watch(screenBoxId, () => {
+  if (screenBoxId.value !== null) fetchComputerState()
+})
 
 // ---- 记忆（backlog ①）：ctx 档案打开时现拉（易态呈现——写入经 agent 工具，无事件推送；
 //      拉取失败如实空，不放假条目） ----

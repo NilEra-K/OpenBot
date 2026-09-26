@@ -8,10 +8,18 @@
  * 生命周期：stop() 停采集 + 销毁窗口 + 摘监听（三重清场——孤儿纪律）；
  * backgroundThrottling 关闭（隐藏态 rAF/interval 不降速——帧率是本档位的全部意义）。
  */
-import { BrowserWindow, desktopCapturer, ipcMain } from 'electron'
+import { BrowserWindow, app, desktopCapturer, ipcMain } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { HostScreenFrame } from '@openbot/boxes'
+
+// 隐藏窗口视频节流的根治（P9-3a 验收实测：L2 帧泵 0.6fps vs 预估 20-30fps——根因是
+// Chromium 对 occluded 窗口的视频帧投递节流，backgroundThrottling 管不到视频管线）：
+// 关窗口遮挡检测（主窗口失去 occlusion 优化的代价 = 遮挡时仍合成——桌面应用可接受，记档）。
+// appendSwitch 必须在 app ready 前调用——模块顶层即装配期，满足时序。
+if (!app.isReady()) {
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url)) // apps/desktop/dist/main
 const APP_ROOT = join(HERE, '..', '..') // apps/desktop
@@ -33,10 +41,16 @@ export async function startHostScreenFramePump(options: HostScreenFramePumpOptio
   const maxWidth = options.maxWidth ?? 1600
   seq += 1
   const win = new BrowserWindow({
-    show: false,
+    // show:true + 屏外坐标（P9-3a 验收实测二轮：show:false 即使关 occlusion 检测，
+    // Chromium 对 hidden 页面的 video/timer 节流仍压到 ~1fps——页面必须处于 visible 态；
+    // 屏外 + skipTaskbar + focusable:false = 用户零感知）
+    show: true,
+    x: -32000,
+    y: -32000,
     width: 2,
     height: 2,
     skipTaskbar: true,
+    focusable: false,
     webPreferences: {
       preload: PUMP_PRELOAD,
       contextIsolation: false, // 页面内联脚本直接用 window.__hsPump（本仓自加载页面——无外来内容）
