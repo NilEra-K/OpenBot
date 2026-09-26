@@ -14,7 +14,7 @@ const kernel = useKernelStore()
 const ui = useUiStore()
 const toast = useToastStore()
 
-const stateChip = (state: 'active' | 'sleeping' | 'snapshot'): { cls: string; label: string } => {
+const stateChip = (state: string): { cls: string; label: string } => {
   switch (state) {
     case 'active':
       return { cls: 'chip-accent', label: '运行中' }
@@ -22,6 +22,9 @@ const stateChip = (state: 'active' | 'sleeping' | 'snapshot'): { cls: string; la
       return { cls: '', label: '休眠' }
     case 'snapshot':
       return { cls: 'chip-success', label: '快照态' }
+    // 未知状态兜底（v0.1.36 修：后端引入联合外值时整页炸——渲染层如实显示原始值不崩溃）
+    default:
+      return { cls: '', label: state }
   }
 }
 

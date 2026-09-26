@@ -16,7 +16,6 @@ import type {
   BoxCaps,
   BoxId,
   BoxInstance,
-  BoxInstanceState,
   BoxSpec,
   BoxStats,
   ExecResult,
@@ -93,7 +92,7 @@ export class HostScreenBoxBackend implements BoxBackend {
     return [...this.#attached].map((boxId) => ({
       boxId,
       spec: { image: isHostScreenBoxId(boxId) ? boxId.slice('hostscreen-'.length) : boxId },
-      state: 'running' as BoxInstanceState,
+      state: 'active', // attach 后即在运行（v0.1.36 修：曾误写 'running' as 联合外值——boxes 视图 stateChip switch 无 default 直接炸）
       createdAt: this.#now(),
     }))
   }

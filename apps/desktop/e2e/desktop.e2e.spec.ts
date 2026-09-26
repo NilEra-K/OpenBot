@@ -1676,6 +1676,27 @@ test('宿主屏幕载体（P9-1）：注册 + 内置注入协议呈现 + 真实�
     await expect(row.locator('.chip-success')).toBeVisible({ timeout: 30_000 })
     await expect(row.locator('.chip-success')).toHaveAttribute('title', /宿主屏幕就绪.*实况流/)
 
+    // —— 绑定 agent（真实路径：创建即 attach——backend.list 才有 box，boxes 页才有行） ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    const wizCard = page.locator('.wiz-card')
+    await expect(wizCard).toBeVisible()
+    await page.locator('#wizName').fill('维屏')
+    await wizCard.getByRole('button', { name: '下一步' }).click()
+    await wizCard.locator('.wiz-kv', { hasText: '沙箱镜像' }).locator('select').selectOption('img-1')
+    await wizCard.getByRole('button', { name: '下一步' }).click()
+    await wizCard.getByRole('button', { name: '创建 agent' }).click()
+    await expect(page.locator('.toast', { hasText: '维屏」已创建' })).toBeVisible({ timeout: 15_000 })
+
+    // —— boxes 视图渲染（v0.1.36 回归补盲：宿主屏幕 box 一度因联合外 state 值炸整页——
+    //     渲染层无类型检查，视图覆盖是唯一防线） ——
+    await page.getByRole('button', { name: 'Box', exact: true }).click()
+    await expect(page.locator('.box-name', { hasText: 'hostscreen-img-1' })).toBeVisible({ timeout: 10_000 })
+
+    // 回设置页继续编辑往返（Boxes 视图切换后导航回落控制台）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '镜像' }).click()
+
     // —— 编辑往返：协议 chip 恒 host（表单回填不破坏载体语义）+ 窗口绑定枚举（P9-2） ——
     await row.locator('[data-role="image-edit"]').click()
     await expect(page.locator('span.chip', { hasText: '宿主内置注入' })).toBeVisible()
