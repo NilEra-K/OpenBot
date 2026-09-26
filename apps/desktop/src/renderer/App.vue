@@ -130,11 +130,12 @@ const BACKEND_LABELS: Record<string, string> = {
  *  LLM 行（P4 Step 11）：当轮实际走回退时如实标注；配置了回退未触发时标「回退就绪」 */
 const llmLabel = computed(() => {
   const p = kernel.providers.find((x) => x.name === kernel.defaultProvider)
-  const base = p ? `${p.name} · ${p.model}` : '未配置'
+  const model = kernel.defaultModel ?? p?.models[0]?.id
+  const base = p ? `${p.name}${model ? ' · ' + model : ''}` : '未配置'
   const s = kernel.llmStatus
   if (s?.activeLane === 'fallback' && s.fallback !== null) {
     const fb = kernel.providers.find((x) => x.name === s.fallback)
-    return `${base}（当轮回退：${fb ? fb.model : s.fallback}）`
+    return `${base}（当轮回退：${fb ? (fb.models[0]?.id ?? s.fallback) : s.fallback}）`
   }
   return kernel.fallbackProvider !== null ? `${base} · 回退就绪` : base
 })

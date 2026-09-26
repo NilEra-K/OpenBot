@@ -40,8 +40,21 @@ const nameEl = ref<HTMLInputElement | null>(null)
 
 const roleLabel = computed(() => ROLES[roleIdx.value]!.label)
 const isSteward = computed(() => ROLES[roleIdx.value]!.role === 'steward')
-/** 当前主力（复核如实显示继承对象；未配置时如实标注） */
-const primaryModel = computed(() => kernel.defaultProvider ?? '未配置')
+/** 当前主力（复核如实显示继承对象；未配置时如实标注）——v2 呈现「供应商 · 模型」 */
+const primaryModel = computed(() =>
+  kernel.defaultProvider === null
+    ? '未配置'
+    : `${kernel.defaultProvider}${kernel.defaultModel ? ' · ' + kernel.defaultModel : ''}`,
+)
+
+/** 模型覆盖选项（v2 供应商 1:N 模型）：拉平为「供应商::模型」复合值——agent 覆盖粒度到模型级 */
+const modelOptions = computed(() =>
+  kernel.providers.flatMap((p) =>
+    p.models.map((m) => ({ value: `${p.name}::${m.id}`, label: `${p.name} · ${m.id}` })),
+  ),
+)
+/** 复合键呈现：'供应商::模型' → '供应商 · 模型'（复核步展示用） */
+const formatModelRef = (ref: string): string => ref.replace('::', ' · ')
 
 /** 每次打开都是干净会话（原型 openAgentWizard 同语义） */
 watch(
@@ -185,10 +198,10 @@ const onKeydown = (e: KeyboardEvent): void => {
         <div class="wiz-kv wiz-kv-col">
           <span class="k">模型</span>
           <label class="wiz-field">
-            <span class="wiz-field-label">默认模型（自动）{{ kernel.defaultProvider ? `（${kernel.defaultProvider}）` : '' }}——或为该 agent 指定端点：</span>
+            <span class="wiz-field-label">默认模型（自动）{{ primaryModel !== '未配置' ? `（${primaryModel}）` : '' }}——或为该 agent 指定模型：</span>
             <select v-model="modelOverride" class="wiz-select">
               <option value="">默认模型（自动）</option>
-              <option v-for="p in kernel.providers" :key="p.name" :value="p.name">{{ p.name }}（{{ p.model }}）</option>
+              <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
           </label>
           <p v-if="modelOverride !== ''" class="wiz-note">覆盖后该 agent 钉住所选端点——默认模型切换不影响它（改动重启生效）。</p>
@@ -214,7 +227,7 @@ const onKeydown = (e: KeyboardEvent): void => {
           <span class="k">身份色</span>
           <span class="v"><span class="wiz-dot" :style="{ background: color }"></span>{{ color }}</span>
         </div>
-        <div class="wiz-kv"><span class="k">模型</span><span class="v">{{ modelOverride !== '' ? `覆盖：${modelOverride}` : `默认模型（自动）（${primaryModel}）` }}</span></div>
+        <div class="wiz-kv"><span class="k">模型</span><span class="v">{{ modelOverride !== '' ? `覆盖：${formatModelRef(modelOverride)}` : `默认模型（自动）（${primaryModel}）` }}</span></div>
         <div class="wiz-kv"><span class="k">沙箱镜像</span><span class="v">{{ imageBinding === '' ? '默认沙箱（注册即建专属 Box）' : '镜像：' + (kernel.images.find((i) => i.id === imageBinding)?.name ?? imageBinding) }}</span></div>
         <p class="wiz-note">创建后立即出现在成员名册、@提及与派单目标里；社交图谱会在下一条消息后连边。</p>
       </div>

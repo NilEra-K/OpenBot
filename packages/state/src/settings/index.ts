@@ -10,16 +10,27 @@ import type { FsAdapter } from '../fs/index.js'
 export const SettingsErrorCodes = {
   SETTINGS_PROVIDER_NOT_FOUND: 'SETTINGS_PROVIDER_NOT_FOUND',
   SETTINGS_NO_DEFAULT_PROVIDER: 'SETTINGS_NO_DEFAULT_PROVIDER',
+  /** 供应商至少要有一个可调用模型（图例语义：添加供应商前须先添加模型） */
+  SETTINGS_PROVIDER_NO_MODEL: 'SETTINGS_PROVIDER_NO_MODEL',
 } as const
 
 /** 协议族：openai-compat（chat completions 兼容面）/ anthropic（messages API）；缺省前者（旧档案读取端兼容） */
 export type ProviderProtocol = 'openai-compat' | 'anthropic'
 
+/** 模型条目（v2，2026-09-15 供应商 1:N 模型）：供应商（端点事实）下的一个可调用模型 */
+export interface ProviderModel {
+  /** 模型 ID（如 glm-5.3-flash）——供应商内唯一键 */
+  id: string
+  /** 视觉（图像输入）声明——从供应商级下沉到模型级（0.1.28 截图回喂格式语义随迁）；缺省 false */
+  supportsImages?: boolean
+}
+
 /** 存储形状：apiKey 恒为密文 */
 export interface StoredProviderProfile {
   name: string
   baseUrl: string
-  model: string
+  /** 供应商下的模型列表（v2）——至少一个（写入端强制；旧档案迁移容错可空） */
+  models: ProviderModel[]
   /** 密文（加密回调的输出原样） */
   apiKey?: string
   headers?: Record<string, string>
@@ -28,8 +39,6 @@ export interface StoredProviderProfile {
   timeoutMs?: number
   /** 协议族（P4 Step 11）；缺省 openai-compat */
   protocol?: ProviderProtocol
-  /** 视觉（图像输入）声明（plan-image-firstclass P8-2 生产注册门的事实源之一）——缺省 false */
-  supportsImages?: boolean
 }
 
 /** 沙箱后端偏好：auto = 按平台序择优（win: wsl→docker→podman / linux: nspawn→docker→podman /
@@ -52,8 +61,10 @@ export interface RelaySettings {
 }
 
 export interface AppSettings {
-  version: 1
+  version: 2
   defaultProvider?: string
+  /** 默认模型（v2）：defaultProvider 下的模型 id；缺省 resolve 回落该供应商 models[0] */
+  defaultModel?: string
   providers: StoredProviderProfile[]
   /** 沙箱后端偏好；缺省 auto（可选字段：旧文件读取端兼容，version 不动） */
   sandbox?: SandboxPreference
@@ -69,15 +80,13 @@ export interface AppSettings {
 export interface ProviderProfileView {
   name: string
   baseUrl: string
-  model: string
+  models: ProviderModel[]
   hasKey: boolean
   proxyUrl?: string
   protocol?: ProviderProtocol
-  /** 视觉（图像输入）声明——设置页「视觉」徽标呈现 */
-  supportsImages?: boolean
 }
 
-/** 解析形状：装配 provider 用，apiKey 为明文 */
+/** 解析形状：装配 provider 用，apiKey 为明文；model = 已解析的可调用模型 */
 export interface ResolvedProvider {
   name: string
   baseUrl: string
@@ -88,14 +97,21 @@ export interface ResolvedProvider {
   temperature?: number
   timeoutMs?: number
   protocol?: ProviderProtocol
-  /** 视觉（图像输入）声明——computer 工具族生产注册门的事实源之一 */
+  /** 视觉（图像输入）声明——computer 工具族生产注册门的事实源之一（模型级，v2 起随模型走） */
+  supportsImages?: boolean
+}
+
+export interface ProviderModelInput {
+  id: string
+  /** 视觉（图像输入）声明——缺省 false（不放假能力） */
   supportsImages?: boolean
 }
 
 export interface ProviderInput {
   name: string
   baseUrl: string
-  model: string
+  /** 模型列表（v2）——至少一个 */
+  models: ProviderModelInput[]
   /** 明文 key；提供则加密后落盘，省略则保留原密文（改配置不动 key） */
   apiKey?: string
   headers?: Record<string, string>
@@ -103,8 +119,6 @@ export interface ProviderInput {
   temperature?: number
   timeoutMs?: number
   protocol?: ProviderProtocol
-  /** 视觉（图像输入）声明（P8-2）——缺省 false（不放假能力） */
-  supportsImages?: boolean
 }
 
 export interface SettingsStoreOptions {
@@ -115,7 +129,7 @@ export interface SettingsStoreOptions {
   decrypt?: (cipher: string) => string
 }
 
-const DEFAULT_SETTINGS: AppSettings = { version: 1, providers: [] }
+const DEFAULT_SETTINGS: AppSettings = { version: 2, providers: [] }
 
 export class SettingsStore {
   readonly #fs: FsAdapter
@@ -144,16 +158,16 @@ export class SettingsStore {
     return settings.providers.map((p) => ({
       name: p.name,
       baseUrl: p.baseUrl,
-      model: p.model,
+      models: structuredClone(p.models),
       hasKey: p.apiKey !== undefined && p.apiKey !== '',
       ...(p.proxyUrl !== undefined ? { proxyUrl: p.proxyUrl } : {}),
       ...(p.protocol !== undefined ? { protocol: p.protocol } : {}),
-      ...(p.supportsImages !== undefined ? { supportsImages: p.supportsImages } : {}),
     }))
   }
 
-  /** 解析供装配：显式 name > defaultProvider；明文 key 只在返回值里 */
-  async resolve(name?: string): Promise<ResolvedProvider> {
+  /** 解析供装配：显式 name > defaultProvider；模型 = 显式 model > 默认模型（默认供应商时）> models[0]。
+   *  明文 key 只在返回值里；视觉声明随解析到的模型条目走（v2 模型级） */
+  async resolve(name?: string, model?: string): Promise<ResolvedProvider> {
     const settings = await this.load()
     const targetName = name ?? settings.defaultProvider
     if (targetName === undefined) {
@@ -163,22 +177,40 @@ export class SettingsStore {
     if (!profile) {
       throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NOT_FOUND, `provider 不存在：${targetName}`)
     }
+    const defaultModel = targetName === settings.defaultProvider ? settings.defaultModel : undefined
+    const targetModel = model ?? defaultModel ?? profile.models[0]?.id
+    const modelEntry = profile.models.find((m) => m.id === targetModel)
+    if (targetModel === undefined || modelEntry === undefined) {
+      throw new KernelError(
+        SettingsErrorCodes.SETTINGS_PROVIDER_NO_MODEL,
+        model !== undefined
+          ? `provider ${targetName} 下不存在模型：${model}`
+          : `provider ${targetName} 没有可调用模型——先添加模型`,
+      )
+    }
     return {
       name: profile.name,
       baseUrl: profile.baseUrl,
-      model: profile.model,
+      model: modelEntry.id,
       ...(profile.apiKey ? { apiKey: this.#decrypt(profile.apiKey) } : {}),
       ...(profile.headers ? { headers: profile.headers } : {}),
       ...(profile.proxyUrl ? { proxyUrl: profile.proxyUrl } : {}),
       ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
       ...(profile.timeoutMs !== undefined ? { timeoutMs: profile.timeoutMs } : {}),
       ...(profile.protocol !== undefined ? { protocol: profile.protocol } : {}),
-      ...(profile.supportsImages !== undefined ? { supportsImages: profile.supportsImages } : {}),
+      ...(modelEntry.supportsImages !== undefined ? { supportsImages: modelEntry.supportsImages } : {}),
     }
   }
 
-  /** 新增/更新（同名替换）；省略 apiKey 时保留既有密文 */
+  /** 新增/更新（同名替换）；省略 apiKey 时保留既有密文。模型列表全量替换且须非空；
+   *  默认模型悬空（不在新列表内）时回落首个——不产生悬空引用 */
   async upsert(input: ProviderInput): Promise<ProviderProfileView> {
+    const models = input.models
+      .map((m) => ({ id: m.id, ...(m.supportsImages !== undefined ? { supportsImages: m.supportsImages } : {}) }))
+      .filter((m) => m.id !== '')
+    if (models.length === 0) {
+      throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NO_MODEL, '供应商至少要有一个模型')
+    }
     const settings = await this.load()
     const existing = settings.providers.find((p) => p.name === input.name)
     const apiKey =
@@ -188,27 +220,32 @@ export class SettingsStore {
     const profile: StoredProviderProfile = {
       name: input.name,
       baseUrl: input.baseUrl,
-      model: input.model,
+      models,
       ...(apiKey !== undefined ? { apiKey } : {}),
       ...(input.headers ? { headers: input.headers } : {}),
       ...(input.proxyUrl ? { proxyUrl: input.proxyUrl } : {}),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.protocol !== undefined ? { protocol: input.protocol } : {}),
-      ...(input.supportsImages !== undefined ? { supportsImages: input.supportsImages } : {}),
     }
     const providers = settings.providers.filter((p) => p.name !== input.name)
     providers.push(profile)
     // 首个模型自动成为默认（0.1.28 默认语义）：免一步「设为默认」操作；已有默认时不抢占
     const defaultProvider = settings.defaultProvider ?? input.name
-    await this.#save({ ...settings, providers, defaultProvider })
+    // 默认模型随默认供应商的模型列表维护：缺省取首个；不在列表内（被改掉）回落首个
+    const defaultModel =
+      defaultProvider === input.name
+        ? (settings.defaultModel !== undefined && models.some((m) => m.id === settings.defaultModel)
+            ? settings.defaultModel
+            : models[0]!.id)
+        : settings.defaultModel
+    await this.#save({ ...settings, providers, defaultProvider, defaultModel })
     return {
       name: profile.name,
       baseUrl: profile.baseUrl,
-      model: profile.model,
+      models: structuredClone(profile.models),
       hasKey: apiKey !== undefined,
       ...(profile.protocol !== undefined ? { protocol: profile.protocol } : {}),
-      ...(profile.supportsImages !== undefined ? { supportsImages: profile.supportsImages } : {}),
     }
   }
 
@@ -217,18 +254,45 @@ export class SettingsStore {
     const providers = settings.providers.filter((p) => p.name !== name)
     const defaultProvider =
       settings.defaultProvider === name ? undefined : settings.defaultProvider
-    // 回退档案随删除联动清空（悬空引用会让装配层空转）；undefined 键序列化时自然消失
+    // 默认模型随默认供应商联动清空；回退档案随删除联动清空（悬空引用会让装配层空转）
+    const defaultModel = defaultProvider === undefined ? undefined : settings.defaultModel
     const fallbackProvider =
       settings.fallbackProvider === name ? undefined : settings.fallbackProvider
-    await this.#save({ ...settings, providers, defaultProvider, fallbackProvider })
+    await this.#save({ ...settings, providers, defaultProvider, defaultModel, fallbackProvider })
   }
 
-  async setDefault(name: string): Promise<void> {
+  /** 设为默认（v2 粒度 = 供应商 + 模型）：model 省略取该供应商首个模型 */
+  async setDefault(name: string, model?: string): Promise<void> {
     const settings = await this.load()
-    if (!settings.providers.some((p) => p.name === name)) {
+    const profile = settings.providers.find((p) => p.name === name)
+    if (profile === undefined) {
       throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NOT_FOUND, `provider 不存在：${name}`)
     }
-    await this.#save({ ...settings, defaultProvider: name })
+    const targetModel = model ?? profile.models[0]?.id
+    if (targetModel === undefined || !profile.models.some((m) => m.id === targetModel)) {
+      throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NO_MODEL, `provider ${name} 下不存在模型：${model ?? '<空>'}`)
+    }
+    await this.#save({ ...settings, defaultProvider: name, defaultModel: targetModel })
+  }
+
+  /** 重排供应商（左栏拖拽排序，2026-09-15）：names 须为既有档案名的全排列（同集合），否则显式拒绝 */
+  async reorder(names: string[]): Promise<void> {
+    const settings = await this.load()
+    const byName = new Map(settings.providers.map((p) => [p.name, p]))
+    const sameSet =
+      names.length === settings.providers.length &&
+      new Set(names).size === names.length &&
+      names.every((n) => byName.has(n))
+    if (!sameSet) {
+      throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NOT_FOUND, '重排清单与既有供应商不一致')
+    }
+    const providers: StoredProviderProfile[] = []
+    for (const n of names) {
+      const p = byName.get(n)
+      if (p === undefined) throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NOT_FOUND, `provider 不存在：${n}`)
+      providers.push(p)
+    }
+    await this.#save({ ...settings, providers })
   }
 
   /** 沙箱后端偏好（缺省 auto） */
@@ -283,18 +347,67 @@ export class SettingsStore {
   }
 }
 
-/** 解析容错：缺失/损坏/版本不识 → 默认空设置（设置可重建，不值得为此拒启）；可选字段透传（读取端兼容） */
+/** 模型列表规范化（v1→v2 读取端迁移核心，纯函数可测）：
+ *  v2 models 数组优先（过滤坏条目）；缺失/空时回退 v1 单模型字段 model（supportsImages 随迁下沉）；
+ *  两者皆无 → 空数组（读取容错——resolve 时如实报 NO_MODEL） */
+function normalizeModels(p: { model?: unknown; supportsImages?: unknown; models?: unknown }): ProviderModel[] {
+  if (Array.isArray(p.models)) {
+    const models = p.models
+      .filter((m): m is { id: string; supportsImages?: boolean } =>
+        typeof m === 'object' && m !== null && typeof (m as { id?: unknown }).id === 'string' && (m as { id: string }).id !== '')
+      .map((m) => ({ id: m.id, ...(m.supportsImages === true ? { supportsImages: true } : {}) }))
+    if (models.length > 0) return models
+  }
+  if (typeof p.model === 'string' && p.model !== '') {
+    return [p.supportsImages === true ? { id: p.model, supportsImages: true } : { id: p.model }]
+  }
+  return []
+}
+
+/** 解析容错：缺失/损坏 → 默认空设置（设置可重建，不值得为此拒启）；
+ *  version 1 = 旧单模型形状——model → models[0] 下沉迁移（读取端兼容，写回即 v2，零破坏）；
+ *  version 2 = 现行形状；可选字段透传。wire 类型刻意宽松（盘上文件不受编译期形状约束） */
 function parseLoose(raw: string | null): AppSettings {
   if (raw === null) return structuredClone(DEFAULT_SETTINGS)
+  const asStr = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined)
+  const asNum = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
   try {
-    const parsed = JSON.parse(raw) as AppSettings
-    if (parsed && parsed.version === 1 && Array.isArray(parsed.providers)) {
+    const parsed = JSON.parse(raw) as {
+      version?: number
+      defaultProvider?: unknown
+      defaultModel?: unknown
+      sandbox?: unknown
+      fallbackProvider?: unknown
+      relays?: RelaySettings[]
+      relay?: RelaySettings
+      providers?: Array<Record<string, unknown>>
+    }
+    if (parsed && (parsed.version === 1 || parsed.version === 2) && Array.isArray(parsed.providers)) {
+      const providers = parsed.providers
+        .filter((p) => typeof p['name'] === 'string' && typeof p['baseUrl'] === 'string')
+        .map((p) => {
+          const headers = typeof p['headers'] === 'object' && p['headers'] !== null ? (p['headers'] as Record<string, string>) : undefined
+          const protocol = p['protocol'] === 'anthropic' || p['protocol'] === 'openai-compat' ? (p['protocol'] as ProviderProtocol) : undefined
+          const profile: StoredProviderProfile = {
+            name: p['name'] as string,
+            baseUrl: p['baseUrl'] as string,
+            models: normalizeModels(p),
+            ...(asStr(p['apiKey']) !== undefined ? { apiKey: asStr(p['apiKey']) } : {}),
+            ...(headers !== undefined ? { headers } : {}),
+            ...(asStr(p['proxyUrl']) !== undefined ? { proxyUrl: asStr(p['proxyUrl']) } : {}),
+            ...(asNum(p['temperature']) !== undefined ? { temperature: asNum(p['temperature']) } : {}),
+            ...(asNum(p['timeoutMs']) !== undefined ? { timeoutMs: asNum(p['timeoutMs']) } : {}),
+            ...(protocol !== undefined ? { protocol } : {}),
+          }
+          return profile
+        })
       return {
-        version: 1,
-        providers: parsed.providers,
-        ...(parsed.defaultProvider !== undefined ? { defaultProvider: parsed.defaultProvider } : {}),
-        ...(parsed.sandbox !== undefined ? { sandbox: parsed.sandbox } : {}),
-        ...(parsed.fallbackProvider !== undefined ? { fallbackProvider: parsed.fallbackProvider } : {}),
+        version: 2,
+        providers,
+        ...(asStr(parsed.defaultProvider) !== undefined ? { defaultProvider: asStr(parsed.defaultProvider) } : {}),
+        ...(asStr(parsed.defaultModel) !== undefined ? { defaultModel: asStr(parsed.defaultModel) } : {}),
+        ...(asStr(parsed.sandbox) !== undefined ? { sandbox: parsed.sandbox as SandboxPreference } : {}),
+        ...(asStr(parsed.fallbackProvider) !== undefined ? { fallbackProvider: asStr(parsed.fallbackProvider) } : {}),
         ...(parsed.relays !== undefined ? { relays: parsed.relays } : {}),
         // P7 早期单房间字段：读兼容保留（getRelays 回退），写入走 relays
         ...(parsed.relay !== undefined ? { relay: parsed.relay } : {}),

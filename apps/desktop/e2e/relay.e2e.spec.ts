@@ -93,12 +93,15 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
 
     // 2) 配 provider → console 发消息（管家会话）
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+    // v2（供应商 1:N 模型）：首个供应商自动成为默认——对齐 desktop 用例形态，断言默认状态点点亮
+    await expect(page.locator('.llm-nav-item[data-provider="E2E mock"] .llm-nav-dot.on')).toBeVisible()
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     await page.locator('.composer-box input').fill('本地说一句')
     await page.locator('.composer-box input').press('Enter')

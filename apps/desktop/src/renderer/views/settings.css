@@ -903,3 +903,381 @@
   background: var(--bg3);
   color: var(--ink);
 }
+
+/* ---- 模型设置主从卡（UI 优化 2026-09-15，对照用户图例）：左供应商列表 + 右原设计详情 ----
+   视觉语言镜像 .settings-nav（组标 + 条目 + 选中态）；状态点语义 = 是否全场默认（唯一状态事实）。
+   右栏内容沿用既有 kv/cfg-row（原设计），左栏只负责选择。 */
+.llm-card {
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  /* 常态高度恒定：模型/供应商稀少时不塌缩，表单再高也不撑大分节（内部滚动） */
+  height: max(520px, calc(100vh - 340px));
+}
+
+.llm-nav {
+  flex: none;
+  width: 216px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--line);
+}
+
+.llm-nav-group-label {
+  font-size: 11px;
+  color: var(--ink3);
+  letter-spacing: 0.05em;
+  padding: 0 10px 6px;
+}
+
+.llm-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.llm-nav-item:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.llm-nav-item.is-active {
+  background: var(--bg3);
+  border-color: var(--line);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.llm-nav-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg2);
+  color: var(--ink2);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.llm-nav-item.is-active .llm-nav-mark {
+  color: var(--accent);
+}
+
+.llm-nav-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-nav-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.llm-nav-dot.on {
+  background: var(--success);
+}
+
+.llm-nav-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  margin-top: 8px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink3);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.llm-nav-add:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.llm-detail {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.llm-detail > .settings-empty {
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+/* 表单字段区：占满剩余高度并在内部滚动（底栏钉底） */
+.llm-detail .llm-form-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+/* ---- 内联供应商表单（v2 供应商 1:N 模型，2026-09-15）：模型行内增删 + 视觉 chip 可点切换 ---- */
+.chip-click {
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.chip-click:not(.chip-success) {
+  opacity: 0.55;
+}
+
+.model-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.model-add-row .field-input {
+  flex: 1;
+}
+
+.llm-form-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: auto -16px 0;
+  padding: 12px 16px 0;
+  border-top: 1px solid var(--line);
+}
+
+.llm-form-foot .kv-note {
+  margin-right: auto;
+}
+
+
+/* 模型列表空态（对照用户图例：虚线提示框） */
+.model-empty-box {
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 14px 16px;
+  color: var(--ink3);
+  font-size: 12.5px;
+}
+
+/* ---- 主从卡视觉打磨（2026-09-15，对照用户图例）：标题头 + 圆角模型行 + 描边添加项 ---- */
+.llm-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.llm-detail-head .cfg-actions {
+  margin-left: auto;
+}
+
+.llm-detail-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.llm-sec-label {
+  margin-top: 6px;
+}
+
+.llm-model-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg1);
+  padding: 8px 12px;
+  /* 定高：纯 chip 行与带「设为默认/移除」按钮行（btn-sm 24px）等高（用户反馈行高不一致） */
+  height: 44px;
+}
+
+.llm-model-row + .llm-model-row {
+  margin-top: 8px;
+}
+
+.llm-model-id {
+  font-weight: 600;
+}
+
+.llm-model-action {
+  margin-left: auto;
+}
+
+.llm-nav-add {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg1);
+}
+
+.llm-nav-add:hover {
+  border-color: var(--line-strong);
+}
+
+.llm-nav-add.is-active {
+  border-color: var(--accent);
+  color: var(--ink);
+  background: var(--bg3);
+}
+
+/* 详情信息行不带分隔线（图例为纯标签字段——kv 的 dashed 线在主从卡里视觉过重，用户反馈 2026-09-15） */
+.llm-detail .kv {
+  border-bottom: none;
+  padding: 2px 0;
+}
+
+/* 模型行图标动作（测试/编辑/删除/设默认——图例交互 2026-09-15） */
+.llm-model-actions {
+  margin-left: auto;
+}
+
+.llm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+}
+
+.llm-icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.llm-icon-btn:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}
+
+.llm-icon-danger:hover {
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.1);
+}
+
+/* 图标精修（用户反馈：过大不优雅）——22px 命中区 + 12px 细描边图标 + 收紧间距 */
+.llm-model-actions {
+  gap: 2px;
+}
+
+.llm-icon-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+.llm-icon-btn svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.5;
+}
+
+/* ---- 模型列表终版（对照用户图例）：外容器套内行，测试/编辑/删除图标悬挂在行外右侧 ---- */
+.llm-model-list {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg1);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.llm-model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  padding: 0;
+  height: auto;
+}
+
+.llm-model-row + .llm-model-row {
+  margin-top: 0;
+}
+
+.llm-model-box {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg1);
+  padding: 10px 14px;
+  min-height: 48px;
+}
+
+.llm-model-id {
+  font-size: 14px;
+  font-weight: 500;
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-model-actions {
+  margin-left: 0;
+  gap: 10px;
+}
+
+.llm-icon-btn {
+  width: 28px;
+  height: 28px;
+  background: none;
+  color: var(--ink2);
+}
+
+.llm-icon-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.4;
+}
+
+.llm-icon-btn:hover {
+  background: var(--bg3);
+  color: var(--ink);
+}

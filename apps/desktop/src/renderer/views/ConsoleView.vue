@@ -671,8 +671,13 @@ const setApprovalMode = (mode: 'manual' | 'auto'): void => {
   modeMenuOpen.value = false
 }
 
-const pickModel = (name: string): void => {
-  void kernel.setDefaultProvider(name).then(() => {
+/** 模型菜单项（v2 供应商 1:N 模型）：拉平「供应商 · 模型」——默认粒度到模型级 */
+const modelMenuItems = computed(() =>
+  kernel.providers.flatMap((p) => p.models.map((m) => ({ provider: p.name, model: m.id }))),
+)
+
+const pickModel = (provider: string, model?: string): void => {
+  void kernel.setDefaultProvider(provider, model).then(() => {
     void kernel.refreshLlmStatus()
   })
   modelMenuOpen.value = false
@@ -1168,15 +1173,15 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                   <div v-if="modelMenuOpen" class="cb-menu" @click.stop>
                     <div class="cb-menu-head">模型档案</div>
                     <button
-                      v-for="p in kernel.providers"
-                      :key="p.name"
+                      v-for="it in modelMenuItems"
+                      :key="it.provider + '::' + it.model"
                       class="cb-menu-item"
-                      :class="{ on: kernel.defaultProvider === p.name }"
-                      @click="pickModel(p.name)"
+                      :class="{ on: kernel.defaultProvider === it.provider && (kernel.defaultModel === it.model || kernel.defaultModel === null) }"
+                      @click="pickModel(it.provider, it.model)"
                     >
                       <span class="mt">
-                        <span class="ti">{{ p.name }}</span>
-                        <span class="ts">{{ p.model }}</span>
+                        <span class="ti">{{ it.provider }}</span>
+                        <span class="ts">{{ it.model }}</span>
                       </span>
                       <svg v-if="kernel.defaultProvider === p.name" class="mk" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>
                     </button>

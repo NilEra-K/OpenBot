@@ -179,7 +179,9 @@ const statusTextOf = (agentId: string): string => {
 /** 节点详情模型行：per-agent 覆盖后置（裁定 F）——默认模型（自动），如实呈现 */
 const modelLabel = computed(() => {
   const p = kernel.providers.find((x) => x.name === kernel.defaultProvider)
-  return p ? `默认模型（${p.name} · ${p.model}）` : '未配置'
+  if (!p) return '未配置'
+  const model = kernel.defaultModel ?? p.models[0]?.id
+  return `默认模型（${p.name}${model ? ' · ' + model : ''}）`
 })
 
 // ---- 聚焦与退隐（点击节点/连线进侧栏详情 + 无关元素退隐；点空白/Esc 退出；

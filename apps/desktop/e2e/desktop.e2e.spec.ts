@@ -57,13 +57,15 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     // —— settings：表单配置 provider（真实走 v1.settings.* 命令面与 safeStorage 密文链路） ——
     // 侧栏是图标 rail,按钮文字只在 aria-label——按可访问名定位
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await expect(page.locator('.cfg-row', { hasText: 'E2E mock' })).toBeVisible()
-    await expect(page.locator('.cfg-row.is-primary', { hasText: 'E2E mock' })).toBeVisible()
+    await expect(page.locator('.llm-nav-item[data-provider="E2E mock"]')).toBeVisible()
+    await expect(page.locator('.llm-nav-item[data-provider="E2E mock"] .llm-nav-dot.on')).toBeVisible() // 默认 = 状态点点亮
     // 沙箱后端：OPENBOT_SANDBOX=mock env 覆盖 → 装配链路落在 mock（不依赖宿主 WSL/Docker）——
     // 默认沙箱状态卡呈现（P8-4 后 UI 优化：全局偏好选择退役，per-backend 可用性 + caps）
     await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click() // 切换式导航
@@ -219,10 +221,12 @@ test('中止工作中的 agent（审批挂起中打断：run aborted 收敛 + �
 
     // settings：配置 provider（mock 端点）
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // console：发消息 → run 进入审批挂起（弹窗出现即稳定窗口，等多久都在「工作中」）
@@ -424,10 +428,12 @@ test('@提及（P4 Step 4）：补全菜单键盘流 + 单提及路由 + 消息�
 
     // —— settings：配 provider（发送链路前置） ——
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // —— 菜单弹出与过滤：@ 弹全员（P5 Step 2 起 @全员广播项置顶：全员+管家+worker1 三项；
@@ -494,10 +500,12 @@ test('广播扇出（P5 Step 2）：@全员补全 → 内核 fanout 全员到达
 
     // 配 provider
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // —— @全员补全（P5 Step 2）：@全 弹菜单（全员项首位）→ Enter 补全尾随空格 → 追加文本发送 ——
@@ -564,10 +572,12 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
 
     // 配 provider
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // —— 建群：名册「＋ 建群」→ 群名 + 勾选管家与 worker1 → 创建（内核 sysnote 落群流）→ 跳群会话 ——
@@ -649,10 +659,12 @@ test('重启恢复（P5 后修复）：自建 agent 调度器重建（建群可�
     await expect(page1.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
 
     await page1.getByRole('button', { name: '设置', exact: true }).click()
-    await page1.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page1.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page1.locator('#pfName').fill('E2E mock')
     await page1.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page1.getByRole('button', { name: '＋ 添加模型' }).click()
     await page1.locator('#pfModel').fill('mock-model')
+    await page1.locator('#pfModel').press('Enter')
     await page1.getByRole('button', { name: '保存', exact: true }).click()
 
     await page1.getByRole('button', { name: '控制台', exact: true }).click()
@@ -779,10 +791,12 @@ test('名册与 stream-head（P4 Step 6）：ctx 面板收起两栏 ⇄ 三栏 +
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // —— ctx 收起（三栏 ⇄ 两栏；aria-pressed 语义随状态翻转） ——
@@ -838,10 +852,12 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -983,10 +999,12 @@ test('演示值清扫（P4 Step 10 → P5 Step 7 限额解锁）：run-progress 
 
     // 配 provider（真走 settings 命令面与 safeStorage 链路）
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // 发消息 → 审批挂起（run 停在 running）；「稍后处理」收掉模态再切视图
@@ -1090,21 +1108,25 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
 
     // —— 配置两端点：默认 = E2E mock（首个自动成为默认）；坏端点 = 必然连接失败 ——
     await page.locator('.settings-nav-item', { hasText: '模型设置' }).click() // 切换式导航（从数据分节切回模型分节）
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('坏端点')
     await page.locator('#pfUrl').fill('http://127.0.0.1:9/v1')
-    await page.locator('#pfModel').fill('x')
-    await page.getByRole('button', { name: '保存', exact: true }).click()
     await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('x')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     // 协议分段（P4 Step 11）：切 Anthropic 再切回——表单协议面可交互（wire 层由 anthropic 单测覆盖）
     await page.locator('.proto-opt', { hasText: 'Anthropic' }).click()
     await expect(page.locator('.proto-opt.is-on', { hasText: 'Anthropic' })).toBeVisible()
     await page.locator('.proto-opt', { hasText: 'OpenAI 兼容' }).click()
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await expect(page.locator('.cfg-row', { hasText: '坏端点' })).toBeVisible()
+    await expect(page.locator('.llm-nav-item[data-provider="坏端点"]')).toBeVisible()
 
     // —— 向导创建绑定坏端点的 Agent：上游失败自动回退到默认模型（mock） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -1154,10 +1176,12 @@ test('Boxes/图谱小项（P4 Step 12）：归属 chip + box-claim shield + 节�
 
     // 配 provider（真走 settings 命令面与 safeStorage 链路）
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // 发消息 → 审批挂起（run 稳定 running）；「稍后处理」收掉模态
@@ -1265,10 +1289,12 @@ test('记忆（backlog ①）：save_memory 落盘 → 重启注入新会话系�
     await expect(page1.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
     // 配 provider（mock 端点）——其余用例同款
     await page1.getByRole('button', { name: '设置', exact: true }).click()
-    await page1.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page1.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page1.locator('#pfName').fill('E2E mock')
     await page1.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page1.getByRole('button', { name: '＋ 添加模型' }).click()
     await page1.locator('#pfModel').fill('mock-model')
+    await page1.locator('#pfModel').press('Enter')
     await page1.getByRole('button', { name: '保存', exact: true }).click()
     await page1.getByRole('button', { name: '控制台', exact: true }).click()
     await page1.locator('.composer-box input').fill('记住我的偏好')
@@ -1326,10 +1352,12 @@ test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
     // 配 provider
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // 新建自动化（模态：cron 预览在场）——先切到自动化分节（切换式导航）
@@ -1370,12 +1398,14 @@ test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 ag
   })
   const page = await app.firstWindow()
   const addProvider = async (name: string, port: number): Promise<void> => {
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill(name)
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await expect(page.locator('.cfg-row', { hasText: name })).toBeVisible()
+    await expect(page.locator('.llm-nav-item[data-provider="' + name + '"]')).toBeVisible()
   }
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
@@ -1389,7 +1419,7 @@ test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 ag
     await page.getByRole('button', { name: '新建 agent' }).click()
     await page.locator('#wizName').fill('专属模型员')
     await page.getByRole('button', { name: '下一步' }).click()
-    await page.locator('.wiz-kv', { hasText: '模型' }).locator('select').selectOption('覆盖B') // 限定模型下拉（P8-4 起向导有镜像下拉）
+    await page.locator('.wiz-kv', { hasText: '模型' }).locator('select').selectOption('覆盖B::mock-model') // v2 复合键：供应商::模型（限定模型下拉——P8-4 起向导有镜像下拉）
     await expect(page.locator('.wiz-note', { hasText: '钉住所选端点' })).toBeVisible()
     await page.getByRole('button', { name: '下一步' }).click()
     await page.getByRole('button', { name: '创建 agent' }).click()
@@ -1446,10 +1476,12 @@ test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     await page.locator('.composer-box input').fill('看看桌面')

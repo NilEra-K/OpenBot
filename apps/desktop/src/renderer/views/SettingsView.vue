@@ -352,34 +352,31 @@ const themeChoice = computed({
   set: (v: ThemePref) => ui.setTheme(v),
 })
 
-// ---- provider 表单（添加/编辑共用；编辑时 name 锁定——name 是档案键，改名=新建） ----
+// ---- provider 表单（右栏内联——v2 供应商 1:N 模型；编辑时 name 锁定——name 是档案键，改名=新建） ----
 
-interface ProviderForm {
-  name: string
-  baseUrl: string
-  model: string
-  apiKey: string
-  proxyUrl: string
-  /** 协议族（P4 Step 11）：anthropic 走 messages API，缺省 openai-compat */
-  protocol: 'openai-compat' | 'anthropic'
-  /** 视觉（图像输入）声明（0.1.28 语义）——决定截图回喂格式：勾选喂图像 part，不勾降级文本说明 */
+interface ProviderFormModel {
+  id: string
+  /** 视觉（图像输入）声明——模型级（0.1.28 截图回喂格式语义随模型走） */
   supportsImages: boolean
-  /** 设为默认模型（0.1.28 默认语义）——全场唯一；其他模型上游失败时回退到它 */
-  isDefault: boolean
 }
 
-const EMPTY_FORM: ProviderForm = { name: '', baseUrl: '', model: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat', supportsImages: false, isDefault: false }
-
-const formOpen = ref(false)
-const editingName = ref<string | null>(null)
-const form = reactive<ProviderForm>({ ...EMPTY_FORM })
+/** 右栏模式：detail=供应商详情 / add=添加（内联表单）/ edit=编辑（内联表单） */
+const pane = ref<'detail' | 'add' | 'edit'>('detail')
+const form = reactive<{ name: string; baseUrl: string; apiKey: string; proxyUrl: string; protocol: 'openai-compat' | 'anthropic'; models: ProviderFormModel[] }>({
+  name: '',
+  baseUrl: '',
+  apiKey: '',
+  proxyUrl: '',
+  protocol: 'openai-compat',
+  models: [],
+})
 const saving = ref(false)
 const formError = ref<string | null>(null)
 /** 删除二段确认（进行中的名字；再点确认，点其他名字/取消则复位） */
 const confirmingRemove = ref<string | null>(null)
 
 const formValid = computed(() => {
-  if (form.name.trim() === '' || form.model.trim() === '') return false
+  if (form.name.trim() === '' || form.models.length === 0) return false
   try {
     new URL(form.baseUrl.trim())
     return true
@@ -388,32 +385,117 @@ const formValid = computed(() => {
   }
 })
 
-const openCreate = (): void => {
-  editingName.value = null
-  Object.assign(form, EMPTY_FORM)
+const resetForm = (): void => {
+  Object.assign(form, { name: '', baseUrl: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat', models: [] })
   formError.value = null
-  formOpen.value = true
+  modelTestResults.value = {}
+}
+
+const openCreate = (): void => {
+  resetForm()
+  pane.value = 'add'
 }
 
 const openEdit = (p: ProviderView): void => {
-  editingName.value = p.name
   Object.assign(form, {
     name: p.name,
     baseUrl: p.baseUrl,
-    model: p.model,
     apiKey: '', // 留空 = 保留原密文（服务端约定）
     proxyUrl: p.proxyUrl ?? '',
     protocol: p.protocol ?? 'openai-compat',
-    supportsImages: p.supportsImages === true,
-    isDefault: p.name === kernel.defaultProvider,
+    models: p.models.map((m) => ({ id: m.id, supportsImages: m.supportsImages === true })),
   })
   formError.value = null
-  formOpen.value = true
+  modelTestResults.value = {}
+  pane.value = 'edit'
 }
 
 const closeForm = (): void => {
-  formOpen.value = false
+  pane.value = 'detail'
   confirmingRemove.value = null
+}
+
+// ---- 模型弹窗（添加/编辑模型行——图例交互）：模型 ID + 视觉声明，Enter/保存双确认 ----
+const modelModal = reactive<{ open: boolean; editingId: string | null; provider: string | null; id: string; supportsImages: boolean }>({
+  open: false,
+  editingId: null,
+  provider: null,
+  id: '',
+  supportsImages: false,
+})
+const modelModalValid = computed(() => {
+  const id = modelModal.id.trim()
+  if (id === '') return false
+  const list = modelModal.provider !== null
+    ? (kernel.providers.find((p) => p.name === modelModal.provider)?.models ?? [])
+    : form.models
+  return !list.some((m) => m.id === id && m.id !== modelModal.editingId)
+})
+const openModelModal = (editingId: string | null, provider: string | null): void => {
+  if (provider !== null) {
+    const m = kernel.providers.find((p) => p.name === provider)?.models.find((x) => x.id === editingId)
+    if (m === undefined) return
+    Object.assign(modelModal, { open: true, editingId, provider, id: m.id, supportsImages: m.supportsImages === true })
+  } else if (editingId !== null) {
+    const m = form.models.find((x) => x.id === editingId)
+    if (m === undefined) return
+    Object.assign(modelModal, { open: true, editingId, provider: null, id: m.id, supportsImages: m.supportsImages })
+  } else {
+    Object.assign(modelModal, { open: true, editingId: null, provider: null, id: '', supportsImages: false })
+  }
+}
+const confirmModelModal = (): void => {
+  const id = modelModal.id.trim()
+  if (id === '' || !modelModalValid.value) return
+  const supportsImages = modelModal.supportsImages
+  if (modelModal.provider !== null) {
+    // 已存档供应商：改模型 = 档案全量重写（key 省略保留）
+    const profile = kernel.providers.find((p) => p.name === modelModal.provider)
+    if (profile === undefined) return
+    const models = profile.models.map((m) => (m.id === modelModal.editingId ? { id, supportsImages } : { id: m.id, supportsImages: m.supportsImages === true }))
+    if (modelModal.editingId === null && !models.some((m) => m.id === id)) models.push({ id, supportsImages })
+    void kernel.upsertProvider({ name: profile.name, baseUrl: profile.baseUrl, models, protocol: profile.protocol }).then(() => {
+      toast.push(`模型已保存：${profile.name} · ${id}`, 'success')
+    }).catch((err: unknown) => {
+      toast.push(err instanceof Error ? err.message : String(err), 'error')
+    })
+  } else if (modelModal.editingId !== null) {
+    const idx = form.models.findIndex((m) => m.id === modelModal.editingId)
+    if (idx !== -1) form.models.splice(idx, 1, { id, supportsImages })
+  } else {
+    form.models.push({ id, supportsImages })
+  }
+  modelModal.open = false
+}
+
+const removeFormModel = (id: string): void => {
+  form.models = form.models.filter((m) => m.id !== id)
+}
+
+/** 已存档供应商删除模型：档案全量重写；最后一个模型由内核拒绝（SETTINGS_PROVIDER_NO_MODEL 如实冒泡） */
+const removeSavedModel = (p: ProviderView, id: string): void => {
+  void kernel.upsertProvider({
+    name: p.name,
+    baseUrl: p.baseUrl,
+    models: p.models.filter((m) => m.id !== id).map((m) => ({ id: m.id, supportsImages: m.supportsImages === true })),
+    protocol: p.protocol,
+  }).then(() => {
+    toast.push(`模型已删除：${p.name} · ${id}`, 'info')
+  }).catch((err: unknown) => {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  })
+}
+
+// ---- 模型行「测试」图标：真实最小请求（存档走解密 key；表单草稿直传端点事实）——chip 如实呈现 ----
+const modelTestResults = ref<Record<string, { ok: boolean; text: string }>>({})
+const testModelRow = (key: string, input: { name?: string; model: string; baseUrl?: string; apiKey?: string; protocol?: 'openai-compat' | 'anthropic' }): void => {
+  modelTestResults.value = { ...modelTestResults.value, [key]: { ok: true, text: '测试中…' } }
+  void kernel.testModel(input).then((r) => {
+    modelTestResults.value = {
+      ...modelTestResults.value,
+      [key]: r.ok ? { ok: true, text: r.detail ?? '可调用' } : { ok: false, text: r.reason ?? '不可用' },
+    }
+  })
 }
 
 const save = async (): Promise<void> => {
@@ -424,16 +506,14 @@ const save = async (): Promise<void> => {
     await kernel.upsertProvider({
       name: form.name.trim(),
       baseUrl: form.baseUrl.trim(),
-      model: form.model.trim(),
+      models: form.models.map((m) => ({ id: m.id, ...(m.supportsImages ? { supportsImages: true } : {}) })),
       ...(form.apiKey.trim() !== '' ? { apiKey: form.apiKey.trim() } : {}),
       ...(form.proxyUrl.trim() !== '' ? { proxyUrl: form.proxyUrl.trim() } : {}),
       protocol: form.protocol,
-      supportsImages: form.supportsImages,
     })
-    // 设为默认（0.1.28 默认语义）：勾选即转移全场唯一默认；上游故障时其他模型回退到它
-    if (form.isDefault) await kernel.setDefaultProvider(form.name.trim())
+    selectedProvider.value = form.name.trim() // 新增/编辑后右栏落在该供应商（主从布局的落点语义）
     toast.push(`模型端点已保存：${form.name.trim()}`, 'success')
-    formOpen.value = false
+    pane.value = 'detail'
   } catch (err) {
     formError.value = err instanceof Error ? `${err.message}` : String(err)
   } finally {
@@ -458,6 +538,56 @@ const removeProvider = (name: string): void => {
 const urlPlaceholder = computed(() =>
   form.protocol === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.deepseek.com/v1',
 )
+
+// ---- 供应商主从布局（UI 优化 2026-09-15，对照用户图例）：左列表选中项驱动右栏详情/内联表单 ----
+/** 左栏选中项（供应商名——档案键）；被删/未匹配时由 selected 兜底回落，不另设 watcher */
+const selectedProvider = ref<string | null>(null)
+/** 右栏详情对象：显式选中 > 全场默认 > 首个；列表空 = null（空态引导） */
+const selected = computed<ProviderView | null>(() => {
+  const list = kernel.providers
+  if (list.length === 0) return null
+  return (
+    list.find((p) => p.name === selectedProvider.value) ??
+    list.find((p) => p.name === kernel.defaultProvider) ??
+    list[0] ??
+    null
+  )
+})
+/** 选中供应商是否全场默认（默认模型按 defaultModel 粒度呈现） */
+const isSelectedDefault = computed(() => selected.value !== null && selected.value.name === kernel.defaultProvider)
+/** 某模型是否为当前全场默认（供应商 + 模型双匹配） */
+const isDefaultPair = (providerName: string, modelId: string): boolean =>
+  kernel.defaultProvider === providerName && (kernel.defaultModel === null || kernel.defaultModel === modelId)
+/** 设某模型为全场默认（v2 粒度 = 供应商 + 模型） */
+const makeDefault = (providerName: string, modelId: string): void => {
+  void kernel.setDefaultProvider(providerName, modelId).then(() => {
+    toast.push(`已设为默认模型：${providerName} · ${modelId}`, 'success')
+  }).catch((err: unknown) => {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  })
+}
+/** 详情态「当前默认」kv 呈现：供应商 · 模型（无模型 id 时只呈现供应商名） */
+const defaultDisplay = computed(() =>
+  kernel.defaultProvider === null
+    ? '未设置（对话将失败）'
+    : `${kernel.defaultProvider}${kernel.defaultModel ? ' · ' + kernel.defaultModel : ''}`,
+)
+
+/** 拖拽排序（左栏供应商列表）：dropOn 把被拖项插入目标位置（全量重排落库） */
+const dragName = ref<string | null>(null)
+const dropOn = (target: string): void => {
+  const from = dragName.value
+  dragName.value = null
+  if (from === null || from === target) return
+  const names = kernel.providers.map((p) => p.name)
+  const fromIdx = names.indexOf(from)
+  const toIdx = names.indexOf(target)
+  if (fromIdx === -1 || toIdx === -1) return
+  names.splice(toIdx, 0, names.splice(fromIdx, 1)[0] ?? names[toIdx]!)
+  void kernel.reorderProviders(names).catch((err: unknown) => {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  })
+}
 
 // ---- 数据区块（P4 Step 11，裁定 E 一期只读：路径展示 + 打开文件夹） ----
 
@@ -610,53 +740,104 @@ const wslHelpNeeded = computed(() => {
         <HelpTip
           text="接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个。全场唯一一个「默认」模型：未指定模型的 Agent 直接使用它；其他模型上游失败（额度不足、订阅过期等）时自动回退到它。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。"
         />
-        <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openCreate">＋ 添加模型</button>
       </div>
-      <div class="settings-card">
-      <div class="kv">
-        <span class="k">当前默认</span>
-        <span class="v mono">{{ kernel.defaultProvider ?? '未设置（对话将失败）' }}</span>
-      </div>
-
-      <div v-for="p in kernel.providers" :key="p.name" class="cfg-row" :class="{ 'is-primary': p.name === kernel.defaultProvider }">
-        <div class="cfg-mark">{{ markOf(p.name) }}</div>
-        <div class="cfg-main">
-          <div class="cfg-name">
-            {{ p.name }}<span class="cfg-model mono">{{ p.model }}</span><span v-if="p.name === kernel.defaultProvider" class="chip chip-accent">默认</span>
-          </div>
-          <div class="cfg-desc mono">{{ p.baseUrl }}<template v-if="p.proxyUrl"> · 代理 {{ p.proxyUrl }}</template></div>
-        </div>
-        <div class="cfg-actions">
-          <button class="btn btn-ghost btn-sm" @click="openEdit(p)">编辑</button>
-          <button class="btn btn-ghost btn-sm btn-danger" @click="removeProvider(p.name)">
-            {{ confirmingRemove === p.name ? '确认删除？' : '删除' }}
+      <!-- 模型设置主从卡（2026-09-15，对照用户图例 v2）：左供应商列表 + 右详情/内联表单——
+           供应商 = 端点事实（URL/协议/key/代理），其下挂模型列表（视觉声明在模型级） -->
+      <div class="settings-card llm-card">
+        <aside class="llm-nav" aria-label="供应商列表">
+          <div class="llm-nav-group-label">供应商列表</div>
+          <button
+            v-for="p in kernel.providers"
+            :key="p.name"
+            type="button"
+            class="llm-nav-item"
+            :class="{ 'is-active': pane !== 'add' && selected?.name === p.name }"
+            :data-provider="p.name"
+            draggable="true"
+            @dragstart="dragName = p.name"
+            @dragend="dragName = null"
+            @dragover.prevent
+            @drop.prevent="dropOn(p.name)"
+            @click="selectedProvider = p.name; pane = 'detail'"
+          >
+            <span class="llm-nav-mark">{{ markOf(p.name) }}</span>
+            <span class="llm-nav-name">{{ p.name }}</span>
+            <span
+              class="llm-nav-dot"
+              :class="{ on: p.name === kernel.defaultProvider }"
+              :title="p.name === kernel.defaultProvider ? '当前默认' : ''"
+            />
           </button>
-          <span v-if="p.protocol === 'anthropic'" class="chip">Anthropic</span>
-          <span class="chip" :class="p.hasKey ? 'chip-success' : ''">{{ p.hasKey ? '已存 key' : '无 key' }}</span>
-        </div>
-      </div>
-      <p v-if="kernel.providers.length === 0" class="settings-empty">还没有模型端点——添加一个开始对话</p>
-      </div>
-
-
-      <!-- 添加/编辑表单（模态——AgentWizard/GroupWizard 容器同款；字段 id 全保留：E2E 定位与路径不变） -->
-      <div v-if="formOpen" class="wiz-overlay" @mousedown.self="closeForm()">
-        <div class="wiz-card" role="dialog" aria-label="模型端点配置" @keydown.escape="closeForm">
-          <div class="wiz-head">
-            <span class="wiz-title">{{ editingName !== null ? '编辑模型端点' : '添加模型端点' }}</span>
-            <button class="wiz-close" type="button" aria-label="关闭" @click="closeForm()">✕</button>
-          </div>
-          <div class="wiz-body provider-form">
+          <button class="llm-nav-add" type="button" :class="{ 'is-active': pane === 'add' }" @click="openCreate">＋ 添加供应商</button>
+        </aside>
+        <div class="llm-detail" data-role="llm-detail">
+          <!-- 详情态：标题头 + 带标签信息行 + 圆角模型行（图例质感） -->
+          <template v-if="pane === 'detail'">
+            <template v-if="selected">
+              <div class="llm-detail-head">
+                <span class="llm-detail-title">{{ selected.name }}</span>
+                <span v-if="isSelectedDefault" class="chip chip-accent">默认</span>
+                <span v-if="selected.protocol === 'anthropic'" class="chip">Anthropic</span>
+                <span class="chip" :class="selected.hasKey ? 'chip-success' : ''">{{ selected.hasKey ? '已存 key' : '无 key' }}</span>
+                <div class="cfg-actions">
+                  <button class="btn btn-ghost btn-sm" @click="openEdit(selected)">编辑</button>
+                  <button class="btn btn-ghost btn-sm btn-danger" @click="removeProvider(selected.name)">
+                    {{ confirmingRemove === selected.name ? '确认删除？' : '删除' }}
+                  </button>
+                </div>
+              </div>
+              <div class="kv"><span class="k">Base URL</span><span class="v mono">{{ selected.baseUrl }}<template v-if="selected.proxyUrl"> · 代理 {{ selected.proxyUrl }}</template></span></div>
+              <div class="kv"><span class="k">API 格式</span><span class="v">{{ selected.protocol === 'anthropic' ? 'Anthropic Messages（/v1/messages）' : 'OpenAI 兼容（/v1/chat/completions）' }}</span></div>
+              <div class="kv"><span class="k">当前默认</span><span class="v mono">{{ defaultDisplay }}</span></div>
+              <div class="field-label llm-sec-label">模型列表</div>
+              <div class="llm-model-list">
+              <div v-for="m in selected.models" :key="m.id" class="llm-model-row" :data-model="m.id">
+                <div class="llm-model-box">
+                  <span class="llm-model-id mono">{{ m.id }}</span>
+                  <span v-if="m.supportsImages" class="chip">视觉</span>
+                  <span v-if="isSelectedDefault && isDefaultPair(selected.name, m.id)" class="chip chip-accent">默认</span>
+                  <span
+                    v-if="modelTestResults[`saved:${selected.name}:${m.id}`]"
+                    class="chip"
+                    :class="modelTestResults[`saved:${selected.name}:${m.id}`].ok ? 'chip-success' : 'chip-danger'"
+                    :title="modelTestResults[`saved:${selected.name}:${m.id}`].text"
+                  >{{ modelTestResults[`saved:${selected.name}:${m.id}`].text.length > 18 ? modelTestResults[`saved:${selected.name}:${m.id}`].text.slice(0, 18) + '…' : modelTestResults[`saved:${selected.name}:${m.id}`].text }}</span>
+                </div>
+                <div class="llm-model-actions">
+                  <button
+                    v-if="!(isSelectedDefault && isDefaultPair(selected.name, m.id))"
+                    class="llm-icon-btn"
+                    title="设为默认"
+                    @click="makeDefault(selected.name, m.id)"
+                    v-html="ICON('<path d=\'M12 2l3 6 6 1-5 5 1 7-5-3-5 3 1-7-5-5 6-1z\'/>')"
+                  />
+                  <button class="llm-icon-btn" title="测试模型可调用" @click="testModelRow(`saved:${selected.name}:${m.id}`, { name: selected.name, model: m.id })" v-html="ICON('<path d=\'M9 7V3\'/><path d=\'M15 7V3\'/><path d=\'M6 7h12v3a6 6 0 0 1-12 0V7z\'/><path d=\'M12 16v5\'/>')" />
+                  <button class="llm-icon-btn" title="编辑模型" @click="openModelModal(m.id, selected.name)" v-html="ICON('<path d=\'M17 3l4 4L7 21H3v-4L17 3z\'/>')" />
+                  <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeSavedModel(selected, m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4h8v2\'/><path d=\'M19 6l-1 14H6L5 6\'/><path d=\'M10 11v6\'/><path d=\'M14 11v6\'/>')" />
+                </div>
+              </div>
+              </div>
+            </template>
+            <p v-if="kernel.providers.length === 0" class="settings-empty">还没有模型端点——左侧「添加供应商」开始对话</p>
+          </template>
+          <!-- 表单态（添加/编辑内联——图例添加页语义）：标题 + 端点事实 + 模型列表行内增删；
+               字段区包 llm-form-body 内部滚动——表单再高也不撑大卡片/分节（尺寸恒定） -->
+          <template v-else>
+            <div class="llm-detail-head">
+              <span class="llm-detail-title">{{ pane === 'add' ? '添加模型供应商' : '编辑供应商' }}</span>
+            </div>
+            <p class="kv-note">{{ pane === 'add' ? '配置一个完全自定义的 API 端点和模型列表。' : '同名替换；API Key 留空保留原密文。' }}</p>
+            <div class="llm-form-body">
             <div class="field">
-              <label class="field-label" for="pfName">显示名称</label>
-              <input id="pfName" v-model="form.name" class="field-input" :disabled="editingName !== null" placeholder="例：DeepSeek" autocomplete="off" maxlength="16" />
+              <label class="field-label" for="pfName">名称</label>
+              <input id="pfName" v-model="form.name" class="field-input" :disabled="pane === 'edit'" placeholder="例：智谱中转（供应商记名，不是模型名）" autocomplete="off" maxlength="16" />
             </div>
             <div class="field">
               <label class="field-label" for="pfUrl">Base URL</label>
               <input id="pfUrl" v-model="form.baseUrl" class="field-input mono" :placeholder="urlPlaceholder" autocomplete="off" spellcheck="false" />
             </div>
             <div class="field">
-              <span class="field-label">协议</span>
+              <span class="field-label">API 格式</span>
               <div class="proto-seg" role="radiogroup" aria-label="协议族">
                 <label class="proto-opt" :class="{ 'is-on': form.protocol === 'openai-compat' }">
                   <input type="radio" name="pf-proto" value="openai-compat" v-model="form.protocol" />
@@ -669,44 +850,82 @@ const wslHelpNeeded = computed(() => {
               </div>
             </div>
             <div class="field">
-              <label class="field-label" for="pfModel">模型 ID</label>
-              <input id="pfModel" v-model="form.model" class="field-input mono" placeholder="例：deepseek-chat" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="field">
-              <label class="proto-opt" :class="{ 'is-on': form.supportsImages }" for="pfVision">
-                <input id="pfVision" type="checkbox" v-model="form.supportsImages" />
-                视觉（图像输入）
-              </label>
-              <p class="field-note">端点支持看图时勾选——GUI 操作的截图将以图像回喂给模型；不勾则降级为文本说明（GUI 工具族仍按环境可用）</p>
-            </div>
-            <div class="field">
-              <label class="proto-opt" :class="{ 'is-on': form.isDefault }" for="pfDefault">
-                <input
-                  id="pfDefault"
-                  type="checkbox"
-                  v-model="form.isDefault"
-                  :disabled="editingName !== null && editingName === kernel.defaultProvider"
-                />
-                设为默认模型
-              </label>
-              <p class="field-note">全场唯一默认：其他模型上游失败（额度不足、订阅过期等）时自动回退到它。已是默认的模型不可在此取消——在别的模型上勾选即可转移</p>
-            </div>
-            <div class="field">
               <label class="field-label" for="pfKey">API Key</label>
-              <input id="pfKey" v-model="form.apiKey" class="field-input mono" type="password" :placeholder="editingName !== null ? '留空保留原密文' : '端点无需 key 时留空'" autocomplete="off" />
+              <input id="pfKey" v-model="form.apiKey" class="field-input mono" type="password" :placeholder="pane === 'edit' ? '留空保留原密文' : '端点无需 key 时留空'" autocomplete="off" />
             </div>
             <div class="field">
               <label class="field-label" for="pfProxy">代理（可选）</label>
               <input id="pfProxy" v-model="form.proxyUrl" class="field-input mono" placeholder="http://127.0.0.1:7890" autocomplete="off" spellcheck="false" />
             </div>
+            <div class="field">
+              <span class="field-label">模型列表</span>
+              <div v-if="form.models.length === 0" class="model-empty-box">ⓘ 当前没有配置模型，添加模型后可在聊天中使用。</div>
+              <div v-if="form.models.length > 0" class="llm-model-list">
+              <div v-for="m in form.models" :key="m.id" class="llm-model-row" :data-form-model="m.id">
+                <div class="llm-model-box">
+                  <span class="llm-model-id mono">{{ m.id }}</span>
+                  <button
+                    type="button"
+                    class="chip chip-click"
+                    :class="{ 'chip-success': m.supportsImages }"
+                    title="视觉（图像输入）——点击切换"
+                    @click="m.supportsImages = !m.supportsImages"
+                  >视觉</button>
+                  <span
+                    v-if="modelTestResults[`form:${m.id}`]"
+                    class="chip"
+                    :class="modelTestResults[`form:${m.id}`].ok ? 'chip-success' : 'chip-danger'"
+                    :title="modelTestResults[`form:${m.id}`].text"
+                  >{{ modelTestResults[`form:${m.id}`].text.length > 18 ? modelTestResults[`form:${m.id}`].text.slice(0, 18) + '…' : modelTestResults[`form:${m.id}`].text }}</span>
+                </div>
+                <div class="llm-model-actions">
+                  <button class="llm-icon-btn" title="测试模型可调用（需先填 Base URL）" @click="testModelRow(`form:${m.id}`, { model: m.id, baseUrl: form.baseUrl.trim() || undefined, apiKey: form.apiKey.trim() || undefined, protocol: form.protocol })" v-html="ICON('<path d=\'M9 7V3\'/><path d=\'M15 7V3\'/><path d=\'M6 7h12v3a6 6 0 0 1-12 0V7z\'/><path d=\'M12 16v5\'/>')" />
+                  <button class="llm-icon-btn" title="编辑模型" @click="openModelModal(m.id, null)" v-html="ICON('<path d=\'M17 3l4 4L7 21H3v-4L17 3z\'/>')" />
+                  <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeFormModel(m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4h8v2\'/><path d=\'M19 6l-1 14H6L5 6\'/><path d=\'M10 11v6\'/><path d=\'M14 11v6\'/>')" />
+                </div>
+              </div>
+              </div>
+              <button class="btn btn-secondary btn-sm" type="button" @click="openModelModal(null, null)">＋ 添加模型</button>
+              <p class="field-note">支持看图的模型勾选「视觉」——GUI 操作的截图将以图像回喂给该模型；不勾则降级为文本说明。</p>
+            </div>
+            </div>
             <p v-if="formError" class="form-error">{{ formError }}</p>
+            <div class="llm-form-foot">
+              <span class="kv-note">{{ pane === 'add' ? '添加供应商前，请至少添加一个模型。' : '同名替换；API Key 留空保留原密文。' }}</span>
+              <button class="btn btn-primary" :disabled="!formValid || saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+              <button class="btn btn-ghost" @click="closeForm">取消</button>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- 模型弹窗（添加/编辑模型行——图例交互）：模型 ID + 视觉声明；Enter 与保存等效（E2E 同路径） -->
+      <div v-if="modelModal.open" class="wiz-overlay" @mousedown.self="modelModal.open = false">
+        <div class="wiz-card" role="dialog" aria-label="模型配置" @keydown.escape="modelModal.open = false">
+          <div class="wiz-head">
+            <span class="wiz-title">{{ modelModal.editingId !== null ? '编辑模型' : '添加模型' }}</span>
+            <button class="wiz-close" type="button" aria-label="关闭" @click="modelModal.open = false">✕</button>
+          </div>
+          <div class="wiz-body">
+            <div class="field">
+              <label class="field-label" for="pfModel">模型 ID</label>
+              <input id="pfModel" v-model="modelModal.id" class="field-input mono" placeholder="例：glm-5.3-flash" autocomplete="off" spellcheck="false" @keydown.enter.prevent="confirmModelModal" />
+            </div>
+            <div class="field">
+              <label class="proto-opt" :class="{ 'is-on': modelModal.supportsImages }" for="pfVision">
+                <input id="pfVision" type="checkbox" v-model="modelModal.supportsImages" />
+                视觉（图像输入）
+              </label>
+              <p class="field-note">勾选后该模型的对话可回喂 GUI 截图（图像 part）；不勾则截图降级为文本说明。</p>
+            </div>
           </div>
           <div class="wiz-foot">
-            <button class="btn btn-primary" :disabled="!formValid || saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
-            <button class="btn btn-ghost" @click="closeForm">取消</button>
+            <button class="btn btn-primary" :disabled="!modelModalValid" @click="confirmModelModal">保存</button>
+            <button class="btn btn-ghost" @click="modelModal.open = false">取消</button>
           </div>
         </div>
       </div>
+
 
       </div>
       <div v-show="activeSection === 'runtime'" class="settings-section">

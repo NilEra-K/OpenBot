@@ -143,22 +143,38 @@ function decryptKey(cipher: string): string {
 
 // ---- 命令面 zod schema（wire 校验；renderer 表单即此形状） ----
 
+const providerModelSchema = z.object({
+  id: z.string().min(1),
+  /** 视觉（图像输入）声明——模型级（v2，0.1.28 截图回喂格式语义随模型走）：缺省 false */
+  supportsImages: z.boolean().optional(),
+})
 const providerInputSchema = z.object({
   name: z.string().min(1),
   baseUrl: z.string().url(),
-  model: z.string().min(1),
+  /** 模型列表（v2 供应商 1:N 模型，2026-09-15）：至少一个——图例语义「添加供应商前先添加模型」 */
+  models: z.array(providerModelSchema).min(1),
   apiKey: z.string().optional(),
   proxyUrl: z.string().optional(),
   temperature: z.number().optional(),
   timeoutMs: z.number().int().positive().optional(),
   /** 协议族（P4 Step 11）：缺省 openai-compat（旧档案读取端兼容） */
   protocol: z.enum(['openai-compat', 'anthropic']).optional(),
-  /** 视觉（图像输入）声明（P8-2 生产注册门的事实源之一）：缺省 false */
-  supportsImages: z.boolean().optional(),
 })
 /** 回退端点设置（P4 Step 11）：null = 清除回退 */
 const setFallbackSchema = z.object({ name: z.string().min(1).nullable() })
 const nameSchema = z.object({ name: z.string().min(1) })
+/** 设为默认（v2 粒度 = 供应商 + 模型）：model 省略取该供应商首个模型 */
+const setDefaultSchema = z.object({ name: z.string().min(1), model: z.string().min(1).optional() })
+/** 供应商重排（左栏拖拽排序）：全量名称清单 */
+const reorderProvidersSchema = z.object({ names: z.array(z.string().min(1)).min(1) })
+/** 模型可调用性测试（模型行「测试」图标）：存档模式（name+model，key 从档案解密）/ 草稿模式（表单未存档，直传端点事实） */
+const testModelSchema = z.object({
+  name: z.string().min(1).optional(),
+  model: z.string().min(1),
+  baseUrl: z.string().optional(),
+  apiKey: z.string().optional(),
+  protocol: z.enum(['openai-compat', 'anthropic']).optional(),
+})
 const resolveSchema = z.object({
   nonce: z.string().min(1),
   decision: z.enum(['approved', 'denied']),
@@ -627,7 +643,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const providerOfAgent = async (modelProvider: string | undefined, silentFallback: boolean): Promise<ChatProvider> => {
     if (modelProvider === undefined || modelProvider === '') return provider
     try {
-      const own = buildProvider(await settings.resolve(modelProvider))
+      const { provider: name, model } = splitModelRef(modelProvider)
+      const own = buildProvider(await settings.resolve(name, model))
       // 绑定模型的 Agent（0.1.28 默认语义）：主=X；X 上游失败（额度/过期等可重试错误）→
       // 自动回退到默认模型实例（provider 原地热更，包装层自动跟随新默认）
       const wrapped = new SwitchableChatProvider()
@@ -642,6 +659,14 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       }
       throw new KernelError('SETTINGS_PROVIDER_NOT_FOUND', msg)
     }
+  }
+
+  /** 模型引用拆分（v2 供应商 1:N 模型）：'供应商::模型' 复合键——agent 覆盖粒度落到模型级；
+   *  无 '::' = 旧值纯供应商名（读取端兼容：解析取该供应商默认模型，老 agent 零迁移） */
+  const splitModelRef = (ref: string): { provider: string; model?: string } => {
+    const idx = ref.indexOf('::')
+    if (idx === -1) return { provider: ref }
+    return { provider: ref.slice(0, idx), model: ref.slice(idx + 2) }
   }
 
   /** 档案 → provider 实现（P4 Step 11）：protocol 分支 anthropic（messages API）/ openai-compat 缺省。
@@ -679,12 +704,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // ---- 命令面扩展（壳装配职责：CLI/E2E 用 Auto 闸门时不需要这些命令） ----
   kernel.transport
     .register('v1.settings.list', async () => {
-      // 展示清单（无 key 材料）+ 当前默认与回退（renderer 空缺态判断）
+      // 展示清单（无 key 材料）+ 当前默认（供应商+模型）与回退（renderer 空缺态判断）
       const providers = await settings.list()
       const current = await settings.load()
       return {
         providers,
         defaultProvider: current.defaultProvider ?? null,
+        defaultModel: current.defaultModel ?? null,
         fallbackProvider: current.fallbackProvider ?? null,
       }
     })
@@ -694,28 +720,67 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       return view
     }, providerInputSchema)
     .register('v1.settings.setDefault', async (payload) => {
-      await settings.setDefault(nameSchema.parse(payload).name)
+      const { name, model } = setDefaultSchema.parse(payload)
+      await settings.setDefault(name, model)
       await applyProvider()
       return { ok: true }
-    }, nameSchema)
+    }, setDefaultSchema)
     .register('v1.settings.removeProvider', async (payload) => {
       await settings.remove(nameSchema.parse(payload).name)
       await applyProvider()
       return { ok: true }
     }, nameSchema)
+    // 供应商重排（左栏拖拽排序）：names 全量清单须与既有档案同集合（settings 层校验）；顺序不影响 provider 实例，无需热切换
+    .register('v1.settings.reorderProviders', async (payload) => {
+      await settings.reorder(reorderProvidersSchema.parse(payload).names)
+      return { ok: true }
+    }, reorderProvidersSchema)
+    // 模型可调用性测试（模型行「测试」图标）：真实最小请求（ping）——如实报告耗时/失败原因，不假装可用。
+    // 存档模式走 settings.resolve（key 解密）；草稿模式（表单未存档）直传端点事实。20s 超时上限
+    .register('v1.settings.testModel', async (payload) => {
+      const p = testModelSchema.parse(payload)
+      let resolved: ResolvedProvider
+      if (p.name !== undefined) {
+        resolved = await settings.resolve(p.name, p.model)
+      } else {
+        if (p.baseUrl === undefined) {
+          throw new KernelError('SETTINGS_PROVIDER_NOT_FOUND', '草稿探测缺少端点——先填写 Base URL')
+        }
+        resolved = {
+          name: 'draft',
+          baseUrl: p.baseUrl,
+          model: p.model,
+          ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}),
+          ...(p.protocol !== undefined ? { protocol: p.protocol } : {}),
+        }
+      }
+      const tester = buildProvider({ ...resolved, timeoutMs: 20_000 })
+      const t0 = Date.now()
+      try {
+        await tester.chat({ messages: [{ role: 'user', content: 'ping' }] })
+        return { ok: true, detail: `模型可调用（${Date.now() - t0}ms）` }
+      } catch (err) {
+        return { ok: false, reason: (err instanceof Error ? err.message : String(err)).slice(0, 200) }
+      }
+    }, testModelSchema)
     // 回退端点（P4 Step 11）：引用校验在 settings 层；null = 清除；热切换立即生效
     .register('v1.settings.setFallback', async (payload) => {
       await settings.setFallback(setFallbackSchema.parse(payload).name)
       await applyProvider()
       return { ok: true }
     }, setFallbackSchema)
-    // LLM 生效事实（状态栏「当轮生效端点」）：activeLane = 最近一轮成功响应实际走的通道
-    .register('v1.settings.llmStatus', async () => ({
-      configured: provider.configured,
-      activeLane: provider.activeLane,
-      primary: (await settings.load()).defaultProvider ?? null,
-      fallback: await settings.getFallback(),
-    }))
+    // LLM 生效事实（状态栏「当轮生效端点」）：activeLane = 最近一轮成功响应实际走的通道；
+    // primaryModel = 默认供应商下生效的模型 id（v2 供应商 1:N 模型——呈现「供应商 · 模型」）
+    .register('v1.settings.llmStatus', async () => {
+      const current = await settings.load()
+      return {
+        configured: provider.configured,
+        activeLane: provider.activeLane,
+        primary: current.defaultProvider ?? null,
+        primaryModel: current.defaultModel ?? null,
+        fallback: await settings.getFallback(),
+      }
+    })
     .register('v1.approval.resolve', async (payload) => {
       const { nonce, decision } = resolveSchema.parse(payload)
       return { approved: await approvalGate.resolve(nonce, decision) }
@@ -924,7 +989,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       const { agentId, modelProvider } = z
         .object({ agentId: z.string().min(1), modelProvider: z.string().trim().min(1).max(64).nullable() })
         .parse(payload)
-      if (modelProvider !== null) await settings.resolve(modelProvider) // 悬空 → SETTINGS_* 稳定码如实抛
+      // 悬空校验：'供应商::模型' 复合键拆分后解析（旧值纯供应商名同款兼容）→ SETTINGS_* 稳定码如实抛
+      if (modelProvider !== null) {
+        const { provider: name, model } = splitModelRef(modelProvider)
+        await settings.resolve(name, model)
+      }
       await kernel.agentStore.setModelProvider(agentId, modelProvider)
       return { ok: true, restartRequired: true }
     }, z.object({ agentId: z.string().min(1), modelProvider: z.string().trim().min(1).max(64).nullable() }))

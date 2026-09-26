@@ -45,12 +45,15 @@ test('打包产物（win-unpacked）：真内核装配 + mock provider 端到端
 
     // settings：表单配 provider（打包态 settings/safeStorage 密文链路同验）
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await page.locator('.cfg-row .btn', { hasText: '设为主力' }).click()
+    // v2（供应商 1:N 模型）：首个供应商自动成为默认——对齐 desktop 用例形态，断言默认状态点点亮
+    await expect(page.locator('.llm-nav-item[data-provider="E2E mock"] .llm-nav-dot.on')).toBeVisible()
 
     // console：发消息 → mock 回复到达（打包态 LLM 客户端 fetch 路径）
     await page.getByRole('button', { name: '控制台', exact: true }).click()

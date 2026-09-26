@@ -159,17 +159,24 @@ export interface GraphEdge {
   count: number
 }
 
+/** 供应商下的模型条目（v2 供应商 1:N 模型，2026-09-15） */
+export interface ProviderModelView {
+  /** 模型 ID（供应商内唯一键） */
+  id: string
+  /** 视觉（图像输入）声明——模型级（0.1.28 截图回喂格式语义随模型走） */
+  supportsImages?: boolean
+}
+
 /** provider 展示形状（v1.settings.list 返回；协议保证无 key 材料） */
 export interface ProviderView {
   name: string
   baseUrl: string
-  model: string
+  /** 供应商下的模型列表（至少一个） */
+  models: ProviderModelView[]
   hasKey: boolean
   proxyUrl?: string
   /** 协议族（P4 Step 11）：缺省 openai-compat */
   protocol?: 'openai-compat' | 'anthropic'
-  /** 视觉（图像输入）声明——computer 工具族生产注册门的事实源之一 */
-  supportsImages?: boolean
 }
 
 /** 镜像条目（plan-image-firstclass P8-3；v1.images.* 载荷——Agent 绑定镜像而非后端，绑定随 P8-4） */
@@ -224,16 +231,14 @@ export interface ImageScanSourceView {
   reason?: string
 }
 
-/** provider 表单输入（v1.settings.upsertProvider 载荷；apiKey 留空=保留原密文） */
+/** provider 表单输入（v1.settings.upsertProvider 载荷；apiKey 留空=保留原密文；模型列表至少一个） */
 export interface ProviderInput {
   name: string
   baseUrl: string
-  model: string
+  models: ProviderModelView[]
   apiKey?: string
   proxyUrl?: string
   protocol?: 'openai-compat' | 'anthropic'
-  /** 视觉（图像输入）声明（P8-2）——缺省 false */
-  supportsImages?: boolean
 }
 
 /** LLM 生效事实（v1.settings.llmStatus；状态栏「当轮生效端点」投影） */
@@ -242,6 +247,8 @@ export interface LlmStatus {
   /** 最近一轮成功响应实际走的通道；null = 尚无成功轮 */
   activeLane: 'primary' | 'fallback' | null
   primary: string | null
+  /** 默认供应商下生效的模型 id（v2 供应商 1:N 模型） */
+  primaryModel?: string | null
   fallback: string | null
 }
 
@@ -328,6 +335,8 @@ export const useKernelStore = defineStore('kernel', {
     /** provider 档案清单（settings 视图；无 key 材料） */
     providers: [] as ProviderView[],
     defaultProvider: null as string | null,
+    /** 默认模型 id（v2 供应商 1:N 模型：defaultProvider 下的生效模型；null = 缺省取首个） */
+    defaultModel: null as string | null,
     /** 回退端点档案名（P4 Step 11；null = 未设置） */
     fallbackProvider: null as string | null,
     /** LLM 生效事实（状态栏投影；activeLane = 最近一轮成功响应实际走的通道） */
@@ -599,9 +608,10 @@ export const useKernelStore = defineStore('kernel', {
     },
     /** 刷新 provider 配置（boot 与 settings 视图操作后调用） */
     async refreshSettings(): Promise<void> {
-      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null; fallbackProvider: string | null }>('v1.settings.list')
+      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null; defaultModel: string | null; fallbackProvider: string | null }>('v1.settings.list')
       this.providers = state.providers
       this.defaultProvider = state.defaultProvider
+      this.defaultModel = state.defaultModel
       this.fallbackProvider = state.fallbackProvider
       this.providerConfigured = state.defaultProvider !== null
     },
@@ -615,13 +625,22 @@ export const useKernelStore = defineStore('kernel', {
       await this.call('v1.approval.setMode', { mode })
       this.approvalMode = mode
     },
-    async setDefaultProvider(name: string): Promise<void> {
-      await this.call('v1.settings.setDefault', { name })
+    async setDefaultProvider(name: string, model?: string): Promise<void> {
+      await this.call('v1.settings.setDefault', { name, ...(model !== undefined ? { model } : {}) })
       await this.refreshSettings()
     },
     async removeProvider(name: string): Promise<void> {
       await this.call('v1.settings.removeProvider', { name })
       await this.refreshSettings()
+    },
+    /** 供应商重排（左栏拖拽排序）：names 全量清单，顺序即落盘顺序 */
+    async reorderProviders(names: string[]): Promise<void> {
+      await this.call('v1.settings.reorderProviders', { names })
+      await this.refreshSettings()
+    },
+    /** 模型可调用性测试（模型行「测试」图标）：真实最小请求，如实报告耗时/失败原因 */
+    async testModel(input: { name?: string; model: string; baseUrl?: string; apiKey?: string; protocol?: 'openai-compat' | 'anthropic' }): Promise<{ ok: boolean; detail?: string; reason?: string }> {
+      return await this.call('v1.settings.testModel', input)
     },
     /** 设置/清除回退端点（P4 Step 11；null = 清除；主力失败本轮降级、下轮自动回主力） */
     async setFallbackProvider(name: string | null): Promise<void> {

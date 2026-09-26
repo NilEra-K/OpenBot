@@ -14,8 +14,8 @@ function makeStore() {
 describe('SettingsStore', () => {
   it('空启动给默认设置；upsert 落盘密文；重启恢复', async () => {
     const { fs, store } = makeStore()
-    expect(await store.load()).toEqual({ version: 1, providers: [] })
-    await store.upsert({ name: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: 'sk-明文' })
+    expect(await store.load()).toEqual({ version: 2, providers: [] })
+    await store.upsert({ name: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', models: [{ id: 'deepseek-chat' }], apiKey: 'sk-明文' })
     // 落盘的是密文
     const raw = fs.snapshot()['data/settings.json'] ?? ''
     expect(raw).not.toContain('sk-明文')
@@ -31,14 +31,14 @@ describe('SettingsStore', () => {
     })
   })
 
-  it('list 展示形状绝无 key 材料，只带 hasKey', async () => {
+  it('list 展示形状绝无 key 材料，只带 hasKey（v2 模型列表）', async () => {
     const { store } = makeStore()
-    await store.upsert({ name: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3' })
-    await store.upsert({ name: 'glm', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4', apiKey: 'sk-x' })
+    await store.upsert({ name: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', models: [{ id: 'qwen3' }] })
+    await store.upsert({ name: 'glm', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: [{ id: 'glm-4' }, { id: 'glm-4-air' }], apiKey: 'sk-x' })
     const list = await store.list()
     expect(list).toEqual([
-      { name: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3', hasKey: false },
-      { name: 'glm', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4', hasKey: true },
+      { name: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', models: [{ id: 'qwen3' }], hasKey: false },
+      { name: 'glm', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: [{ id: 'glm-4' }, { id: 'glm-4-air' }], hasKey: true },
     ])
     expect(JSON.stringify(list)).not.toContain('sk-x')
   })
@@ -46,8 +46,8 @@ describe('SettingsStore', () => {
   it('resolve：显式名 > 默认；两者皆无 → SETTINGS_NO_DEFAULT_PROVIDER', async () => {
     const { store } = makeStore()
     await expect(store.resolve()).rejects.toMatchObject({ code: 'SETTINGS_NO_DEFAULT_PROVIDER' })
-    await store.upsert({ name: 'a', baseUrl: 'https://a/v1', model: 'm' })
-    await store.upsert({ name: 'b', baseUrl: 'https://b/v1', model: 'm' })
+    await store.upsert({ name: 'a', baseUrl: 'https://a/v1', models: [{ id: 'm' }] })
+    await store.upsert({ name: 'b', baseUrl: 'https://b/v1', models: [{ id: 'm' }] })
     expect((await store.resolve('b')).baseUrl).toBe('https://b/v1')
     await store.setDefault('a')
     expect((await store.resolve()).name).toBe('a')
@@ -55,10 +55,55 @@ describe('SettingsStore', () => {
     await expect(store.setDefault('ghost')).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
   })
 
-  it('同名 upsert 替换；省略 apiKey 保留既有密文；remove 清默认', async () => {
+  it('v2 模型解析：resolve(name, model) 显式模型 > defaultModel（默认供应商时）> models[0]；视觉随模型条目', async () => {
     const { store } = makeStore()
-    await store.upsert({ name: 'p', baseUrl: 'https://old/v1', model: 'm1', apiKey: 'sk-1' })
-    const updated = await store.upsert({ name: 'p', baseUrl: 'https://new/v1', model: 'm2' })
+    await store.upsert({
+      name: 'glm',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      models: [{ id: 'glm-5.3-flash' }, { id: 'glm-5.3', supportsImages: true }],
+    })
+    // 缺省 = models[0]（无视觉声明）
+    expect((await store.resolve('glm')).model).toBe('glm-5.3-flash')
+    expect((await store.resolve('glm')).supportsImages).toBeUndefined()
+    // 显式模型 → 视觉随条目
+    const vision = await store.resolve('glm', 'glm-5.3')
+    expect(vision.model).toBe('glm-5.3')
+    expect(vision.supportsImages).toBe(true)
+    // 不存在的模型 → 显式拒绝
+    await expect(store.resolve('glm', 'ghost-model')).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NO_MODEL' })
+    // setDefault(name, model) 落 defaultModel → 默认解析走它
+    await store.setDefault('glm', 'glm-5.3')
+    expect((await store.resolve('glm')).model).toBe('glm-5.3')
+    expect(await store.load()).toMatchObject({ defaultModel: 'glm-5.3' })
+    // 非默认供应商不受全局 defaultModel 影响：回其 models[0]
+    await store.upsert({ name: 'other', baseUrl: 'https://other/v1', models: [{ id: 'o1' }, { id: 'o2' }] })
+    expect((await store.resolve('other')).model).toBe('o1')
+  })
+
+  it('upsert 模型列表为空 → SETTINGS_PROVIDER_NO_MODEL（图例语义：供应商至少一个模型）', async () => {
+    const { store } = makeStore()
+    await expect(store.upsert({ name: 'x', baseUrl: 'https://x/v1', models: [] })).rejects.toMatchObject({
+      code: 'SETTINGS_PROVIDER_NO_MODEL',
+    })
+    await expect(store.upsert({ name: 'x', baseUrl: 'https://x/v1', models: [{ id: '' }] })).rejects.toMatchObject({
+      code: 'SETTINGS_PROVIDER_NO_MODEL',
+    })
+  })
+
+  it('默认模型悬空自愈：默认供应商的模型被改掉时回落新列表首个', async () => {
+    const { store } = makeStore()
+    await store.upsert({ name: 'p', baseUrl: 'https://p/v1', models: [{ id: 'm1' }, { id: 'm2' }] })
+    await store.setDefault('p', 'm2')
+    expect((await store.resolve()).model).toBe('m2')
+    // 同名 upsert 换掉模型列表：旧 defaultModel 悬空 → 回落新列表首个
+    await store.upsert({ name: 'p', baseUrl: 'https://p/v1', models: [{ id: 'n1' }] })
+    expect((await store.resolve()).model).toBe('n1')
+  })
+
+  it('同名 upsert 替换；省略 apiKey 保留既有密文；remove 清默认与 defaultModel 联动', async () => {
+    const { store } = makeStore()
+    await store.upsert({ name: 'p', baseUrl: 'https://old/v1', models: [{ id: 'm1' }], apiKey: 'sk-1' })
+    const updated = await store.upsert({ name: 'p', baseUrl: 'https://new/v1', models: [{ id: 'm2' }] })
     expect(updated.baseUrl).toBe('https://new/v1')
     expect(updated.hasKey).toBe(true) // key 保留
     expect((await store.resolve('p')).model).toBe('m2')
@@ -66,23 +111,79 @@ describe('SettingsStore', () => {
     await store.setDefault('p')
     await store.remove('p')
     await expect(store.resolve()).rejects.toMatchObject({ code: 'SETTINGS_NO_DEFAULT_PROVIDER' })
+    expect(await store.load()).toMatchObject({ defaultModel: undefined })
     expect(await store.list()).toEqual([])
+  })
+
+  it('v1 → v2 读取端迁移：单模型 model → models[0]（supportsImages 随迁下沉）；写回即 v2', async () => {
+    const fs = new InMemoryFs()
+    // 用户真实 v1 形状（单模型 + 供应商级视觉声明 + 默认供应商）
+    await fs.write(
+      'data/settings.json',
+      JSON.stringify({
+        version: 1,
+        defaultProvider: 'GLM',
+        providers: [
+          { name: 'DeepSeek', baseUrl: 'https://jkai/v1', model: 'deepseek-v4-flash' },
+          { name: 'GLM', baseUrl: 'https://bigmodel/api/anthropic', model: 'glm-5.3-flash', supportsImages: true, apiKey: enc('sk-glm') },
+        ],
+        sandbox: 'wsl',
+      }),
+    )
+    const store = new SettingsStore({ fs, root: 'data', encrypt: enc, decrypt: dec })
+    const loaded = await store.load()
+    expect(loaded.version).toBe(2)
+    expect(loaded.providers).toEqual([
+      { name: 'DeepSeek', baseUrl: 'https://jkai/v1', models: [{ id: 'deepseek-v4-flash' }] },
+      {
+        name: 'GLM',
+        baseUrl: 'https://bigmodel/api/anthropic',
+        models: [{ id: 'glm-5.3-flash', supportsImages: true }],
+        apiKey: enc('sk-glm'),
+      },
+    ])
+    expect(loaded.defaultProvider).toBe('GLM')
+    expect(loaded.sandbox).toBe('wsl')
+    // 迁移后解析语义不变；视觉声明已下沉到模型条目
+    const resolved = await store.resolve()
+    expect(resolved.model).toBe('glm-5.3-flash')
+    expect(resolved.supportsImages).toBe(true)
+    // 任意写操作落盘即 v2（旧 model 键消失）
+    await store.setDefault('GLM')
+    const raw = fs.snapshot()['data/settings.json'] ?? ''
+    expect(raw).toContain('"version": 2')
+    expect(raw).toContain('"models"')
+    expect(raw).not.toContain('"model":')
+  })
+
+  it('reorder 拖拽排序：全量重排落盘；清单不一致显式拒绝（悬空/缺项/重复）', async () => {
+    const { store } = makeStore()
+    await store.upsert({ name: 'a', baseUrl: 'https://a/v1', models: [{ id: 'm' }] })
+    await store.upsert({ name: 'b', baseUrl: 'https://b/v1', models: [{ id: 'm' }] })
+    await store.upsert({ name: 'c', baseUrl: 'https://c/v1', models: [{ id: 'm' }] })
+    await store.reorder(['c', 'a', 'b'])
+    expect((await store.list()).map((p) => p.name)).toEqual(['c', 'a', 'b'])
+    // 档案内容随位移动（同对象重排，非重建——key 等字段原样）
+    expect((await store.resolve('c')).baseUrl).toBe('https://c/v1')
+    await expect(store.reorder(['a', 'b'])).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
+    await expect(store.reorder(['a', 'b', 'b'])).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
+    await expect(store.reorder(['a', 'b', 'ghost'])).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
   })
 
   it('损坏/版本不识的 settings.json：回退默认空设置（设置可重建，不拒启）', async () => {
     const fs = new InMemoryFs()
     await fs.write('data/settings.json', '{oops')
     const s1 = new SettingsStore({ fs, root: 'data' })
-    expect(await s1.load()).toEqual({ version: 1, providers: [] })
+    expect(await s1.load()).toEqual({ version: 2, providers: [] })
     await fs.write('data/settings.json', JSON.stringify({ version: 99, providers: [] }))
     const s2 = new SettingsStore({ fs, root: 'data' })
-    expect(await s2.load()).toEqual({ version: 1, providers: [] })
+    expect(await s2.load()).toEqual({ version: 2, providers: [] })
   })
 
   it('protocol 字段（P4 Step 11）：upsert/resolve/list 透传；缺席 = openai-compat 兼容读取', async () => {
     const { store } = makeStore()
-    await store.upsert({ name: 'claude', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5', protocol: 'anthropic' })
-    await store.upsert({ name: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' })
+    await store.upsert({ name: 'claude', baseUrl: 'https://api.anthropic.com', models: [{ id: 'claude-sonnet-5' }], protocol: 'anthropic' })
+    await store.upsert({ name: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', models: [{ id: 'deepseek-chat' }] })
     expect((await store.resolve('claude')).protocol).toBe('anthropic')
     expect((await store.resolve('deepseek')).protocol).toBeUndefined() // 缺席不造默认值——装配层按缺省分支
     const list = await store.list()
@@ -92,8 +193,8 @@ describe('SettingsStore', () => {
 
   it('fallback 档案位（P4 Step 11）：引用校验 / set-get / 清除 / remove 联动清空', async () => {
     const { fs, store } = makeStore()
-    await store.upsert({ name: 'main', baseUrl: 'https://main/v1', model: 'm' })
-    await store.upsert({ name: 'backup', baseUrl: 'https://backup/v1', model: 'm' })
+    await store.upsert({ name: 'main', baseUrl: 'https://main/v1', models: [{ id: 'm' }] })
+    await store.upsert({ name: 'backup', baseUrl: 'https://backup/v1', models: [{ id: 'm' }] })
     // 引用不存在 → 显式拒绝（悬空引用属配置错误）
     await expect(store.setFallback('ghost')).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
     await store.setFallback('backup')

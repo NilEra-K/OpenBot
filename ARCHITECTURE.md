@@ -140,6 +140,11 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
   按 `BoxSpec.image`（条目 id）分发到对应后端实例，'default' 落全局后端——**Agent 绑定镜像
   而非后端实例**（P8-4 已兑现：`AgentProfile.imageId`，addAgent 即按绑定分发创建 Box；
   悬空回默认 + 告警；命令面悬空显式拒绝），services/工具族持单一 backend 引用零改动。
+- **全局 settings.json v2（2026-09-15 供应商 1:N 模型）**：供应商 = 端点事实（baseUrl/协议/key/代理）
+  + `models[]`（模型 id + 模型级 `supportsImages`——截图回喂格式语义从供应商级下沉随模型走）；
+  默认粒度 = 供应商 + 模型（`defaultProvider` + `defaultModel`）。v1 单模型文件读取端迁移
+  （`model` → `models[0]`，写回即 v2，零破坏）；per-agent 覆盖 `modelProvider` 兼容
+  `供应商::模型` 复合键（旧值纯供应商名解析取其默认模型，零迁移）。
 - 继任路线：规模到瓶颈时迁移 `node:sqlite`（Electron 内置 Node 自带，无原生编译）；JSONL 始终是 transcript 源头真相。
 
 ### 3.3 `llm` —— 模型接入（自研薄客户端）
