@@ -135,8 +135,8 @@ const SETTINGS_GROUPS: Array<{ label: string; items: Array<{ id: SettingsSection
 // ---- 镜像注册表（plan-image-firstclass P8-3）：条目清单 + 载体分表单模态 + 连接测试 ----
 const imageFormOpen = ref(false)
 const imageEditingId = ref<string | null>(null)
-type ImageFormCarrier = 'container' | 'ssh' | 'host-screen'
-type ImageFormProtocol = 'x11' | 'none' | 'host'
+type ImageFormCarrier = 'container' | 'ssh' | 'host-screen' | 'windows'
+type ImageFormProtocol = 'x11' | 'none' | 'host' | 'win'
 const imageForm = reactive<{
   name: string
   carrier: ImageFormCarrier
@@ -162,11 +162,16 @@ const enumHostWindows = async (): Promise<void> => {
     hostWindowsLoading.value = false
   }
 }
-/** 载体切换联动（P9-1）：host-screen 协议恒 host；切回他载体时 host 协议回落 x11 */
-watch(imageForm.carrier, (c) => {
-  if (c === 'host-screen') imageForm.controlProtocol = 'host'
-  else if (imageForm.controlProtocol === 'host') imageForm.controlProtocol = 'x11'
-})
+/** 载体切换联动（P9-1/P9-3a）：host-screen 协议恒 host；windows 缺省 win；切回他载体回落 x11。
+ *  watch 源必须是 getter（reactive 属性直传是值——P9-3a E2E 首训实锤：联动静默失效） */
+watch(
+  () => imageForm.carrier,
+  (c) => {
+    if (c === 'host-screen') imageForm.controlProtocol = 'host'
+    else if (c === 'windows' && imageForm.controlProtocol !== 'none') imageForm.controlProtocol = 'win'
+    else if (imageForm.controlProtocol === 'host' || imageForm.controlProtocol === 'win') imageForm.controlProtocol = 'x11'
+  },
+)
 const imageFormError = ref<string | null>(null)
 const imageSaving = ref(false)
 /** 删除二段确认（进行中的 id；语义同模型端点删除） */
@@ -221,7 +226,7 @@ const imageFormValid = computed(() => {
   if (imageForm.name.trim() === '') return false
   if (imageForm.carrier === 'host-screen') return true // 零连接事实（本机主屏）
   if (imageForm.carrier === 'container') return imageForm.image.trim() !== ''
-  return imageForm.host.trim() !== ''
+  return imageForm.host.trim() !== '' // ssh / windows 同形连接事实
 })
 
 const saveImage = async (): Promise<void> => {
@@ -231,7 +236,12 @@ const saveImage = async (): Promise<void> => {
   const payload = {
     name: imageForm.name.trim(),
     carrier: imageForm.carrier,
-    controlProtocol: imageForm.carrier === 'host-screen' ? ('host' as const) : imageForm.controlProtocol,
+    controlProtocol:
+      imageForm.carrier === 'host-screen'
+        ? ('host' as const)
+        : imageForm.carrier === 'windows' && imageForm.controlProtocol !== 'none'
+          ? ('win' as const)
+          : imageForm.controlProtocol,
     ...(imageForm.carrier === 'host-screen' && imageForm.windowTitle.trim() !== '' ? { windowTitle: imageForm.windowTitle.trim() } : {}),
     ...(imageForm.carrier === 'host-screen'
       ? {}
@@ -243,7 +253,7 @@ const saveImage = async (): Promise<void> => {
             ...(imageForm.user.trim() !== '' ? { user: imageForm.user.trim() } : {}),
             ...(imageForm.keyPath.trim() !== '' ? { keyPath: imageForm.keyPath.trim() } : {}),
           }),
-    ...(imageForm.carrier !== 'host-screen' && imageForm.display.trim() !== '' ? { display: imageForm.display.trim() } : {}),
+    ...(imageForm.carrier === 'ssh' && imageForm.display.trim() !== '' ? { display: imageForm.display.trim() } : {}),
   }
   try {
     if (imageEditingId.value !== null) await kernel.updateImage(imageEditingId.value, payload)
@@ -288,12 +298,13 @@ const testImage = async (img: { id: string }): Promise<void> => {
   }
 }
 
-const carrierLabel = (c: 'container' | 'ssh' | 'host-screen'): string => (c === 'ssh' ? 'SSH' : c === 'host-screen' ? '宿主屏幕' : '容器')
-const imageSummary = (img: { carrier: 'container' | 'ssh' | 'host-screen'; image?: string; host?: string; port?: number; user?: string; keyPath?: string; windowTitle?: string }): string => {
+const carrierLabel = (c: 'container' | 'ssh' | 'host-screen' | 'windows'): string =>
+  c === 'ssh' ? 'SSH' : c === 'host-screen' ? '宿主屏幕' : c === 'windows' ? 'Windows' : '容器'
+const imageSummary = (img: { carrier: 'container' | 'ssh' | 'host-screen' | 'windows'; image?: string; host?: string; port?: number; user?: string; keyPath?: string; windowTitle?: string }): string => {
   if (img.carrier === 'host-screen') {
     return img.windowTitle !== undefined ? `窗口「${img.windowTitle}」（内置注入）` : '本机主屏（内置注入）'
   }
-  if (img.carrier !== 'ssh') return img.image ?? ''
+  if (img.carrier === 'container') return img.image ?? ''
   let out = ''
   if (img.user) out += img.user + '@'
   out += img.host ?? ''
@@ -1099,6 +1110,10 @@ const wslHelpNeeded = computed(() => {
                   <input type="radio" name="if-carrier" value="container" v-model="imageForm.carrier" />
                   容器镜像
                 </label>
+                <label class="proto-opt" :class="{ 'is-on': imageForm.carrier === 'windows' }">
+                  <input type="radio" name="if-carrier" value="windows" v-model="imageForm.carrier" />
+                  Windows 主机
+                </label>
                 <label class="proto-opt" :class="{ 'is-on': imageForm.carrier === 'host-screen' }">
                   <input type="radio" name="if-carrier" value="host-screen" v-model="imageForm.carrier" />
                   宿主屏幕
@@ -1122,7 +1137,7 @@ const wslHelpNeeded = computed(() => {
               </div>
               <p class="field-note">绑定后几何/截图/注入域收敛到该窗口（标题子串匹配——窗口重开同名即恢复）；窗口未在场时操作如实拒绝。键入仍需目标窗口在前台（不自动抢焦点）。</p>
             </div>
-            <template v-else-if="imageForm.carrier === 'ssh'">
+            <template v-else-if="imageForm.carrier === 'ssh' || imageForm.carrier === 'windows'">
               <div class="field">
                 <label class="field-label" for="ifHost">主机地址</label>
                 <input id="ifHost" v-model="imageForm.host" class="field-input mono" placeholder="192.168.1.20 或 vm.local" autocomplete="off" spellcheck="false" />
@@ -1139,12 +1154,31 @@ const wslHelpNeeded = computed(() => {
                 <label class="field-label" for="ifKey">私钥路径（可选——密钥免密为前提）</label>
                 <input id="ifKey" v-model="imageForm.keyPath" class="field-input mono" placeholder="C:/keys/vm.pem" autocomplete="off" spellcheck="false" />
               </div>
+              <div v-if="imageForm.carrier === 'windows'" class="field">
+                <p class="field-note">
+                  目标机须安装 OpenSSH Server（设置 → 应用 → 可选功能）并放行 22 端口；GUI 面经 PowerShell
+                  截屏与 SendInput 注入——目标机桌面须保持登录态。远端整机是独立机器，注入不经本机审批闸（绑定后按 caps 呈现）。
+                </p>
+              </div>
             </template>
             <div v-else class="field">
               <label class="field-label" for="ifImage">镜像名</label>
               <input id="ifImage" v-model="imageForm.image" class="field-input mono" placeholder="openbot-gui:24.04" autocomplete="off" spellcheck="false" />
             </div>
-            <div v-if="imageForm.carrier !== 'host-screen'" class="field">
+            <div v-if="imageForm.carrier === 'windows'" class="field">
+              <span class="field-label">控制协议</span>
+              <div class="proto-seg" role="radiogroup" aria-label="控制协议">
+                <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'win' }">
+                  <input type="radio" name="if-proto" value="win" v-model="imageForm.controlProtocol" />
+                  Win 注入（SendInput）
+                </label>
+                <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'none' }">
+                  <input type="radio" name="if-proto" value="none" v-model="imageForm.controlProtocol" />
+                  无（纯命令行）
+                </label>
+              </div>
+            </div>
+            <div v-else-if="imageForm.carrier !== 'host-screen'" class="field">
               <span class="field-label">控制协议</span>
               <div class="proto-seg" role="radiogroup" aria-label="控制协议">
                 <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'x11' }">

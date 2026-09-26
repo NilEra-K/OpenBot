@@ -96,6 +96,29 @@ export function buildRemoteScript(
   return parts.join(' ')
 }
 
+/** ssh 基础 argv（两载体共用——POSIX 与 Windows 机内同构；选项全在 destination 之前）。
+ *  BatchMode=yes：密码/口令提示一律快速失败（key-only，裁定 D）；accept-new：首连自动
+ *  接受新主机键（known_hosts 仍防中途变脸）；ConnectTimeout 只覆盖 TCP 连接段 */
+export function sshBaseArgv(
+  target: { host: string; port?: number; user?: string; keyPath?: string },
+  extraOptions: string[] = [],
+): string[] {
+  const argv = [
+    'ssh',
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'StrictHostKeyChecking=accept-new',
+    '-o',
+    'ConnectTimeout=10',
+    ...extraOptions,
+  ]
+  if (target.port !== undefined && target.port !== 22) argv.push('-p', String(target.port))
+  if (target.keyPath !== undefined) argv.push('-i', target.keyPath)
+  argv.push(target.user !== undefined && target.user !== '' ? `${target.user}@${target.host}` : target.host)
+  return argv
+}
+
 export class SshBoxBackend implements BoxBackend {
   readonly id = 'ssh'
   readonly #host: string
@@ -266,24 +289,9 @@ export class SshBoxBackend implements BoxBackend {
     ]
   }
 
-  /** ssh 基础 argv：选项必须全在 destination 之前（destination 之后的词进远端命令串）。
-   *  BatchMode=yes：密码/口令提示一律快速失败（key-only，裁定 D）；accept-new：首连自动
-   *  接受新主机键（known_hosts 仍防中途变脸）；ConnectTimeout 只覆盖 TCP 连接段 */
+  /** ssh 基础 argv（共享构造 sshBaseArgv——Windows 机内后端逐字节同一套选项语义） */
   #baseArgv(extraOptions: string[] = []): string[] {
-    const argv = [
-      'ssh',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'StrictHostKeyChecking=accept-new',
-      '-o',
-      'ConnectTimeout=10',
-      ...extraOptions,
-    ]
-    if (this.#port !== 22) argv.push('-p', String(this.#port))
-    if (this.#keyPath !== undefined) argv.push('-i', this.#keyPath)
-    argv.push(this.#user !== undefined && this.#user !== '' ? `${this.#user}@${this.#host}` : this.#host)
-    return argv
+    return sshBaseArgv({ host: this.#host, port: this.#port, user: this.#user, keyPath: this.#keyPath }, extraOptions)
   }
 
   #require(boxId: BoxId): void {

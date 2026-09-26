@@ -95,7 +95,7 @@ const activeImageDisplay = computed(() => {
   if (!kernel.imagesLoaded) return '镜像条目加载中…'
   const entry = kernel.images.find((e) => e.id === id)
   if (entry === undefined) return '镜像已删除 · 回默认沙箱'
-  return entry.name + '（' + (entry.carrier === 'ssh' ? 'SSH ' + entry.host : entry.carrier === 'host-screen' ? '宿主屏幕' : '容器 ' + (entry.image ?? '')) + '）'
+  return entry.name + '（' + (entry.carrier === 'ssh' ? 'SSH ' + entry.host : entry.carrier === 'host-screen' ? '宿主屏幕' : entry.carrier === 'windows' ? 'Windows ' + entry.host : '容器 ' + (entry.image ?? '')) + '）'
 })
 // 镜像清单现势保障（P8-4 E2E 首训记档）：清单由设置页维护——ctx 跨页消费，**挂载与档案
 // 面打开时现拉**（不依赖别页副作用残留）；悬空判定只认现势数据，不误报「已删除」

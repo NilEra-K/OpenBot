@@ -135,3 +135,28 @@ describe('ImageStore', () => {
     expect(await reborn.get(hs.id)).toEqual(fixed)
   })
 })
+
+describe('Windows 载体（P9-3a）', () => {
+  it('windows 条目：ssh 同形连接事实；协议 win/none；协议错配拒绝', async () => {
+    const { store } = make()
+    const w = await store.add({ name: 'Win 虚机', carrier: 'windows', host: '192.168.1.30', port: 22, user: 'ops', controlProtocol: 'win' })
+    expect(w.carrier).toBe('windows')
+    expect(w.controlProtocol).toBe('win')
+    await expect(
+      store.add({ name: 'x', carrier: 'windows', host: 'h', controlProtocol: 'x11' }),
+    ).rejects.toMatchObject({ code: 'STATE_IMAGE_INVALID' })
+    await expect(
+      store.add({ name: 'x', carrier: 'windows', controlProtocol: 'win' }),
+    ).rejects.toMatchObject({ code: 'STATE_IMAGE_INVALID' }) // 缺主机
+  })
+
+  it('ssh↔windows 互切保留连接事实（同形组）；切 container 清除', async () => {
+    const { store } = make()
+    const ssh = await store.add({ ...SSH_ENTRY })
+    const asWin = await store.update(ssh.id, { carrier: 'windows', controlProtocol: 'win' })
+    expect(asWin.host).toBe('192.168.1.20') // 同形组——连接事实保留
+    expect(asWin.keyPath).toBe('C:/keys/vm.pem')
+    const asContainer = await store.update(ssh.id, { carrier: 'container', image: 'a:1', controlProtocol: 'x11' })
+    expect(asContainer.host).toBeUndefined() // 跨组——清除
+  })
+})

@@ -5,13 +5,8 @@
  * 全程替身 spawner/runner/bridge——零真实进程、零真实屏幕。
  */
 import { describe, expect, it, vi } from 'vitest'
-import {
-  HOST_INJECT_SCRIPT,
-  HOST_SCREEN_BOX_ID,
-  HostScreenControl,
-  keyToVk,
-  serializeHostAction,
-} from '../src/screen/host-screen.js'
+import { HOST_INJECT_SCRIPT, coalesceMoves, keyToVk, serializeHostAction } from '../src/screen/win-protocol.js'
+import { HOST_SCREEN_BOX_ID, HostScreenControl } from '../src/screen/host-screen.js'
 import { ScreenControlRouter } from '../src/screen/index.js'
 import { HostScreenBoxBackend } from '../src/backend-hostscreen/index.js'
 import type { PipeProcess } from '../src/procexec/index.js'
@@ -293,7 +288,7 @@ describe('ScreenControlRouter（按 boxId 分发——消费方零载体感知�
 // P9-2：窗口绑定 / L2 零依赖帧泵 / 通道侧合帧
 // ---------------------------------------------------------------------------
 
-import { coalesceMoves } from '../src/screen/host-screen.js'
+
 import type { HostScreenBridge } from '../src/screen/host-screen.js'
 
 describe('coalesceMoves（通道侧合帧）', () => {

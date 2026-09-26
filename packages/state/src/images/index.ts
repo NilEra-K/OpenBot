@@ -23,12 +23,14 @@ export const ImageErrorCodes = {
 export const IMAGE_LIMIT = 16
 export const IMAGE_NAME_LIMIT = 64
 
-/** 载体类型（P8-3：容器镜像 / SSH 主机；P9-1 起加宿主屏幕——纯屏幕载体，vmware 随 P8-5） */
-export type ImageCarrier = 'container' | 'ssh' | 'host-screen'
+/** 载体类型（P8-3：容器镜像 / SSH 主机；P9-1 起加宿主屏幕；P9-3a 起加 Windows 主机——
+ *  SSH 可达的 Windows 目标机，PowerShell SendInput 注入） */
+export type ImageCarrier = 'container' | 'ssh' | 'host-screen' | 'windows'
 
 /** 控制协议（桌面控制适配器的选择依据；'none' = 纯 exec 载体——无 GUI 面；
- *  'host' = 宿主内置注入（P9-1 host-screen 专属——SendInput 恒过闸） */
-export type ImageControlProtocol = 'x11' | 'none' | 'host'
+ *  'host' = 宿主内置注入（P9-1 host-screen 专属）；'win' = Windows 机内注入
+ *  （P9-3a windows 专属——SendInput over SSH，远端独立机器不经本机审批闸） */
+export type ImageControlProtocol = 'x11' | 'none' | 'host' | 'win'
 
 export interface ImageEntry {
   /** 路由键（BoxSpec.image 消费——addAgent 绑定后 per-agent create 的第一参数） */
@@ -109,15 +111,19 @@ function validateEntry(entry: ImageEntry): void {
     if (entry.controlProtocol !== 'x11' && entry.controlProtocol !== 'none') {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '容器载体控制协议只接受 x11/none')
     }
-  } else if (entry.carrier === 'ssh') {
+  } else if (entry.carrier === 'ssh' || entry.carrier === 'windows') {
+    // ssh 与 windows 同形连接事实（host/port/user/keyPath）；协议枚举按载体分
     if (entry.host === undefined || entry.host === '') {
-      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, 'SSH 镜像条目须指定主机地址')
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '镜像条目须指定主机地址')
     }
     if (entry.port !== undefined && (!Number.isInteger(entry.port) || entry.port < 1 || entry.port > 65535)) {
-      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, `SSH 端口非法：${entry.port}`)
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, `端口非法：${entry.port}`)
     }
-    if (entry.controlProtocol !== 'x11' && entry.controlProtocol !== 'none') {
+    if (entry.carrier === 'ssh' && entry.controlProtocol !== 'x11' && entry.controlProtocol !== 'none') {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, 'SSH 载体控制协议只接受 x11/none')
+    }
+    if (entry.carrier === 'windows' && entry.controlProtocol !== 'win' && entry.controlProtocol !== 'none') {
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, 'Windows 载体控制协议只接受 win/none')
     }
   } else {
     // host-screen（P9-1）：纯屏幕载体——连接事实为零（一期恒主屏），控制协议恒 host
@@ -215,15 +221,20 @@ export class ImageStore {
     if (!entry) {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_NOT_FOUND, `镜像条目不存在：${id}`)
     }
+    // 连接事实同形组（P9-3a）：ssh↔windows 互切保留 host/port/user/keyPath（同形状）；
+    // 跨组切换（↔container/host-screen）清除——字段对目标载体无意义
+    const remoteLike = (c: ImageCarrier): boolean => c === 'ssh' || c === 'windows'
+    const target = patch.carrier ?? entry.carrier
+    const keepConnection = patch.carrier === undefined || (remoteLike(entry.carrier) && remoteLike(target))
     const next: ImageEntry = {
       ...entry,
       name: patch.name ?? entry.name,
-      carrier: patch.carrier ?? entry.carrier,
-      image: patch.image ?? (patch.carrier === undefined ? entry.image : undefined),
-      host: patch.host ?? (patch.carrier === undefined ? entry.host : undefined),
-      port: patch.port ?? (patch.carrier === undefined ? entry.port : undefined),
-      user: patch.user ?? (patch.carrier === undefined ? entry.user : undefined),
-      keyPath: patch.keyPath ?? (patch.carrier === undefined ? entry.keyPath : undefined),
+      carrier: target,
+      image: patch.image ?? (keepConnection ? entry.image : undefined),
+      host: patch.host ?? (keepConnection ? entry.host : undefined),
+      port: patch.port ?? (keepConnection ? entry.port : undefined),
+      user: patch.user ?? (keepConnection ? entry.user : undefined),
+      keyPath: patch.keyPath ?? (keepConnection ? entry.keyPath : undefined),
       controlProtocol: patch.controlProtocol ?? entry.controlProtocol,
       display: patch.display !== undefined ? (patch.display === '' ? undefined : patch.display) : entry.display,
       // 窗口绑定随载体切换清除（host-screen 专属事实）；空串 = 清除回整屏

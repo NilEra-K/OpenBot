@@ -190,7 +190,7 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
 |---|---|
 | P9-1 | 宿主注册「宿主屏幕」条目 → agent 绑定 → 对话内 computer_screenshot 看到本机屏幕 → computer_click/type 真实生效（门控套件验收）→ GUI 视图实况流按 L0/L1 档位呈现（**档位 + 实测 fps/延迟如实可见，未达高档带原因与指引**）；既有 X11/SSH/容器链路零回退（已实施，v0.1.32） |
 | P9-2 | L2 零依赖流式（getUserMedia 帧泵）+ 窗口区域绑定（EnumWindows/GetWindowRect）+ 通道侧 move 合帧（已实施，2026-09-26） |
-| P9-3 | Android adb / Windows 机内 / RDP 随真机接入定形 |
+| P9-3 | **A 轮（Windows 机内适配器）已实施**（2026-09-26）；Android adb / RDP 随真机接入定形（A/B 两路线待用户表态） |
 
 ## P9-2 实施记档（2026-09-26，用户批准后实施）
 
@@ -207,6 +207,50 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
 - [x] 8. E2E：窗口绑定常规段（条件断言）+ 门控套件档位报告打点
 - [ ] 9. 真机监督验收：门控套件跑一轮（三档 fps 实测回填本表 + L2/窗口模式真链验证）
 - [x] 10. 文档：plan 记档 + ARCHITECTURE §3.2 语义同步 + backlog ⑥ 状态
+
+## P9-3a 实施记档（2026-09-26，用户批准后实施——「Windows 机内适配器」轮）
+
+- [x] 1. boxes：SshWindowsBoxBackend（EncodedCommand exec/env/cwd、fs PS 变体、openShell、
+   attach/caps/probe）+ 单测（编码前脚本内容逐字断言——argv 锁死）
+- [x] 2. boxes：win-protocol.ts 提炼（HOST_INJECT_SCRIPT/serialize/keyToVk/coalesceMoves/
+   attachWinChannel 通道机制收口——HostScreenControl 行为等价迁移，26 测试锁死零回归）+
+   SshWindowsScreenControl（注入通道 over ssh openPipe / PS CopyFromScreen 截屏 / b64 行帧流）+ 单测
+- [x] 3. state：carrier `'windows'`（协议 'win'|'none'；ssh↔windows 同形组互切保留连接事实）+ 单测
+- [x] 4. desktop：路由注册（per-entry 后端 + 同主机 boxId 收敛共享屏幕适配器）+ GUI 门
+   windows 分支（mirror 宿主屏幕门）+ `v1.images.test` windows 分支（连通/几何如实报告）
+- [x] 5. 设置页：载体「Windows 主机」+ 连接字段与 SSH 复用 + 协议段 Win 注入/无 + 目标机
+   安装指引注记；摘要/ctx/向导三处呈现
+- [x] 6. E2E：Windows 注册/真实测试不可达红 chip/重启持久/删除（mock 沙箱零真连）；门控
+   套件 `ssh-windows-real.test.ts`（`OPENBOT_TEST_WINSSH=1` 基础链 + `OPENBOT_TEST_WINSSH_GUI=1`
+   注入/截屏/帧流全链——注入往返与 fps 实测打点）
+- [ ] 7. 真机监督验收（与 P9-1/P9-2 门控欠债合并一轮——用户裁定 P9-3 完成后跑）
+- [x] 8. 文档：ARCHITECTURE §3.2/§6 同步 + platforms.md 目标机安装指引 + backlog ⑥ 状态
+
+### P9-3a 实施要点
+
+- **核心洞察兑现**：PS 协议传输无关——`attachWinChannel` 只要求一根到 powershell 的
+  stdin/stdout 管道；本机 = 本地 spawn（PipeProcess 多回调面）、机内 = ssh openPipe
+  （PipeSession 单回调面）——同一行协议/ack/回包解析逐字节复用（win-protocol.ts 收口）。
+- **EncodedCommand（裁定 B）**：UTF-16LE base64 单 token——对 cmd/powershell 默认 shell 双
+  透明，消灭 Windows 引号地狱；env/cwd 内联编码脚本（$env:/Set-Location——SendEnv 本就不可
+  依赖）；`exit $LASTEXITCODE` 传导原生退出码。
+- **DPI 前置**：截屏/几何脚本内联 `SetProcessDpiAwarenessContext(-4)`——远端 PS 物理像素与
+  注入归一化同坐标系（真机缩放显示器实测归门控套件回填）。
+- **b64 行帧流（裁定 D）**：每帧一行 base64（newline 定界——ssh 文本管线免二进制翻损，
+  带宽 +33% 记档）；渲染端 mjpeg 管线零改动。
+- **审批闸语义**：windows 载体 = 远端独立机器（isolation high）——**不经**宿主屏幕的
+  actionGate（那是零隔离本机桌面的特权面）；agent 在目标机内 exec/注入 = Box 内自由。
+- **每主机收敛**：同主机的多个 windows 条目共享同一 boxId（win-<host>）与屏幕适配器
+  （同一桌面面）；条目删除按引用计数清理（孤儿纪律）。
+- **坑（实施中）**：①公共 exec 曾把原始 PS 脚本再包一层 `& '<串>'`（& 对字符串是命令名
+  调用非脚本执行）——拆 `#execRaw` 内部面，公共 exec 走 buildWindowsScript；
+  ②bash 内嵌 node 重构遭反引号地狱（坑⑫第四变体——`\${` 在双引号 heredoc 中被命令替换
+  展开损毁模板字面量）——改 Edit 工具手工修复，教训记档：**批量重构禁用 bash 内嵌脚本
+  拼接 TS 模板串**；③测试替身路由键 `Bounds.Width` 与实际脚本子串不符（`Bounds; ...$b.Width`）
+  ——单测首抓，路由键改 `PrimaryScreen.Bounds` 且 CopyFromScreen 判定前置；④**Vue watch 陷阱
+  （E2E 首训）**：`watch(reactiveObj.prop, cb)` 传的是值不是源——联动静默失效，P9-2 宿主屏幕
+  因 saveImage 强制 protocol 侥幸通过，P9-3a windows 无强制即炸（保存被 zod 拒、行不出现）——
+  修复 = watch 源改 getter `() => obj.prop` + saveImage 对载体协议做同款强制（双保险）。
 
 ### P9-2 实施要点
 

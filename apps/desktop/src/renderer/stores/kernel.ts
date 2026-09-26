@@ -183,13 +183,13 @@ export interface ProviderView {
 export interface ImageEntryView {
   id: string
   name: string
-  carrier: 'container' | 'ssh' | 'host-screen'
+  carrier: 'container' | 'ssh' | 'host-screen' | 'windows'
   image?: string
   host?: string
   port?: number
   user?: string
   keyPath?: string
-  controlProtocol: 'x11' | 'none' | 'host'
+  controlProtocol: 'x11' | 'none' | 'host' | 'win'
   display?: string
   /** carrier=host-screen：绑定窗口标题子串（P9-2；空缺=整屏） */
   windowTitle?: string
@@ -199,7 +199,7 @@ export interface ImageEntryView {
 /** 镜像表单输入（add/update 共用形状；连接事实按载体分形状校验在内核 zod） */
 export interface ImageInputView {
   name: string
-  carrier: 'container' | 'ssh' | 'host-screen'
+  carrier: 'container' | 'ssh' | 'host-screen' | 'windows'
   windowTitle?: string
   image?: string
   host?: string

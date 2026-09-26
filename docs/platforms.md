@@ -101,3 +101,31 @@ Windows Sandbox 降级为 Pro 用户可选（P4 后视需求）。
 - 探测两级：`ssh -V`（CLI 在场；版本号打印在 stderr、exit 0）+ 配置了 host 时 BatchMode 试连
   （5s ConnectTimeout，主机不可达/密钥被拒是最常见不可用态——docker info 同哲学）；
   Windows 的 OpenSSH 客户端是可选功能（设置页探测项缺席时按指引一条命令安装）
+
+## Windows 机内（P9-3a——VMware Windows 虚机 / 云电脑 / 云 Windows 主机；真机链路经 OPENBOT_TEST_WINSSH 门控套件）
+
+目标机一次性准备（管理员 PowerShell）：
+
+```powershell
+# 1) OpenSSH Server（Capability 方式——Win10 1809+ / Win11 通用）
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Start-Service sshd
+Set-Service -Name sshd -StartupType Automatic
+# 2) 防火墙放行 22（OpenSSH-Server.Install 默认规则已建——手工兜底）
+New-NetFirewallRule -Name 'OpenSSH-Server-Manual' -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+# 3) 密钥免密（裁定 D key-only——BatchMode 下密码提示快速失败）
+#    把客户端公钥写入目标机 <用户_profile>\.ssh\administrators_authorized_keys（管理员组用户）
+#    或 authorized_keys（普通用户），并修正 ACL：
+icacls "$env:ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant "SYSTEM:F" /grant "BUILTIN\Administrators:F"
+```
+
+- **默认 shell 无关紧要**：所有命令经 `powershell -EncodedCommand <UTF-16LE b64>` 单 token
+  传输——cmd/powershell 默认 shell 双透明，零引号地狱（P9-3a 裁定 B）。
+- **GUI 面前提**：目标机桌面保持**登录态**（锁屏/注销后 CopyFromScreen 截屏失效——如实报错）；
+  注入 = SendInput（与宿主屏幕同一份脚本），远端整机 isolation high——不经本机审批闸。
+- **PTY**：`ssh -tt` + powershell 交互；Windows 无 stty——终端尺寸 80×24 缺省（记档）。
+- **已知限制记档**：快照无原语（vmrun 链随 P8-5）；PS 5.1 为基线（脚本不用 -AsByteStream
+  等 PS7 专属）；缩放显示器的物理像素坐标实测归门控套件回填。
+- **门控套件**：`OPENBOT_TEST_WINSSH=1 OPENBOT_TEST_WINSSH_HOST=<host> [PORT/USER/KEY]`
+  基础链（attach/exec/env/fs/PTY 路径）；`OPENBOT_TEST_WINSSH_GUI=1` 注入/截屏/帧流全链
+  （会真实注入目标机键鼠——需人在目标机旁监督）。

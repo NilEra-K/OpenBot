@@ -32,6 +32,8 @@ import {
   NspawnBoxBackend,
   PodmanBoxBackend,
   SshBoxBackend,
+  SshWindowsBoxBackend,
+  SshWindowsScreenControl,
   UtmBoxBackend,
   RoutingBoxBackend,
   WslBoxBackend,
@@ -41,6 +43,7 @@ import {
   X11ScreenControl,
   entryIdOfBoxId,
   isHostScreenBoxId,
+  windowsBoxId,
   MOCK_BOX_CAPS,
   NSPAWN_BOX_CAPS,
   OCI_BOX_CAPS,
@@ -221,13 +224,13 @@ const automationPatchSchema = automationInputSchema.partial().extend({ id: z.str
  *  patch 不带 carrier 条件校验（部分载荷由 store 层 update 合并后 validateEntry 兜底） */
 const imageInputBase = z.object({
   name: z.string().trim().min(1).max(64),
-  carrier: z.enum(['container', 'ssh', 'host-screen']),
+  carrier: z.enum(['container', 'ssh', 'host-screen', 'windows']),
   image: z.string().trim().min(1).max(200).optional(),
   host: z.string().trim().min(1).max(200).optional(),
   port: z.number().int().min(1).max(65535).optional(),
   user: z.string().trim().min(1).max(64).optional(),
   keyPath: z.string().trim().min(1).max(500).optional(),
-  controlProtocol: z.enum(['x11', 'none', 'host']),
+  controlProtocol: z.enum(['x11', 'none', 'host', 'win']),
   display: z.string().trim().max(40).optional(),
   /** host-screen 专属（P9-2 裁定 B）：绑定窗口标题子串；空缺=整屏 */
   windowTitle: z.string().trim().max(200).optional(),
@@ -238,6 +241,12 @@ const imageInputSchema = imageInputBase.superRefine((v, ctx) => {
   }
   if (v.carrier === 'ssh' && (v.host === undefined || v.host === '')) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['host'], message: 'SSH 镜像条目须指定主机地址' })
+  }
+  if (v.carrier === 'windows' && (v.host === undefined || v.host === '')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['host'], message: 'Windows 镜像条目须指定主机地址' })
+  }
+  if (v.carrier === 'windows' && v.controlProtocol !== 'win' && v.controlProtocol !== 'none') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['controlProtocol'], message: 'Windows 载体控制协议只接受 win/none' })
   }
   if (v.carrier === 'host-screen' && v.controlProtocol !== 'host') {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['controlProtocol'], message: '宿主屏幕载体控制协议恒为 host（内置注入）' })
@@ -546,6 +555,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     hostScreenControls.set(entry.id, ctrl)
     return ctrl
   }
+  // Windows 机内（P9-3a）：per-entry 后端 + 屏幕适配器（boxId = win-<host> 同主机共享桌面面）
+  let hasWindowsRoute = false
+  const winBackends = new Map<string, SshWindowsBoxBackend>()
+  const winScreens = new Map<string, SshWindowsScreenControl>()
   const x11ScreenControl = new X11ScreenControl({
     host: routingBackend,
     ...(process.env.OPENBOT_GUI_DISPLAY !== undefined ? { display: process.env.OPENBOT_GUI_DISPLAY } : {}),
@@ -554,9 +567,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     resolve: (boxId) => {
       const entryId = entryIdOfBoxId(boxId)
       const hit = entryId !== null ? hostScreenControls.get(entryId) : undefined
-      return hit ?? x11ScreenControl
+      return hit ?? winScreens.get(boxId) ?? x11ScreenControl
     },
-    adapters: () => [x11ScreenControl, ...hostScreenControls.values()],
+    adapters: () => [x11ScreenControl, ...hostScreenControls.values(), ...winScreens.values()],
   })
   /** 窗口清单探测（v1.hostscreen.windows——懒建单例通道，随应用退出 dispose） */
   let windowProbe: HostScreenControl | null = null
@@ -583,6 +596,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       hostScreenControlFor(entry)
       routingBackend.registerRoute(entry.id, { backend: hostScreenBackend })
       hasHostScreenRoute = true
+    } else if (entry.carrier === 'windows') {
+      // Windows 机内（P9-3a）：per-entry 后端（同主机 boxId 收敛——同一桌面面同一适配器）
+      const boxId = windowsBoxId(entry.host ?? '')
+      let backend = winBackends.get(boxId)
+      if (backend === undefined) {
+        backend = new SshWindowsBoxBackend({
+          host: entry.host ?? '',
+          ...(entry.port !== undefined ? { port: entry.port } : {}),
+          ...(entry.user !== undefined ? { user: entry.user } : {}),
+          ...(entry.keyPath !== undefined ? { keyPath: entry.keyPath } : {}),
+          workdir: 'C:\\openbot-work',
+          now: Date.now,
+        })
+        winBackends.set(boxId, backend)
+      }
+      if (!winScreens.has(boxId)) {
+        winScreens.set(boxId, new SshWindowsScreenControl({ host: backend }))
+      }
+      routingBackend.registerRoute(entry.id, { backend })
+      if (entry.controlProtocol === 'win') hasWindowsRoute = true
     } else if (chosen.backendId === 'docker' || chosen.backendId === 'podman') {
       routingBackend.registerRoute(entry.id, {
         backend,
@@ -618,6 +651,34 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
             : 'mjpeg 轮询（L0·兜底）'
       const surface = entry.windowTitle !== undefined ? `窗口「${entry.windowTitle}」 ${geo.width}×${geo.height}` : `主屏 ${geo.width}×${geo.height}`
       return { ok: true, detail: `宿主屏幕就绪（${surface} 物理像素）；实况流 ${tierText}` }
+    }
+    if (entry.carrier === 'windows') {
+      // Windows 机内（P9-3a）：真实 attach（连通 + 工作目录）→ win 协议加测屏幕几何
+      // （PS 截屏能力随连通+桌面会话在场即成立——如实报告）→ 断开（零远端副作用）
+      const probe = new SshWindowsBoxBackend({
+        host: entry.host ?? '',
+        ...(entry.port !== undefined ? { port: entry.port } : {}),
+        ...(entry.user !== undefined ? { user: entry.user } : {}),
+        ...(entry.keyPath !== undefined ? { keyPath: entry.keyPath } : {}),
+        workdir: 'C:\\openbot-work',
+        now: Date.now,
+      })
+      try {
+        const boxId = await probe.create({ image: entry.id })
+        let detail = 'Windows 主机连接正常（PowerShell 就绪）'
+        if (entry.controlProtocol === 'win') {
+          const probeScreen = new SshWindowsScreenControl({ host: probe })
+          const geo = await probeScreen.geometry(boxId)
+          detail +=
+            geo !== null
+              ? `；屏幕 ${geo.width}×${geo.height}（注入能力就绪——SendInput）`
+              : '；屏幕几何不可得（桌面会话未登录或 PS 受限——注入能力待真机核）'
+        }
+        await probe.teardown(boxId)
+        return { ok: true, detail }
+      } catch (err) {
+        return { ok: false, reason: (err instanceof Error ? err.message : String(err)).slice(0, 200) }
+      }
     }
     if (entry.carrier === 'ssh') {
       const probe = new SshBoxBackend({
@@ -1035,13 +1096,27 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }, imagePatchSchema)
     .register('v1.images.remove', async (payload) => {
       const { id } = z.object({ id: z.string() }).parse(payload)
+      const entry = await imageStore.get(id) // 先取条目（remove 后不可查——载体分支需要它）
       await imageStore.remove(id)
       routingBackend.removeRoute(id)
-      // P9-2：宿主屏幕条目删除 → 同步清其适配器（常驻 PS 通道——孤儿纪律）
-      const gone = hostScreenControls.get(id)
-      if (gone !== undefined) {
-        gone.dispose()
-        hostScreenControls.delete(id)
+      // P9-2/P9-3a：宿主屏幕/Windows 条目删除 → 同步清其适配器（常驻通道——孤儿纪律）
+      if (entry?.carrier === 'host-screen') {
+        const gone = hostScreenControls.get(id)
+        if (gone !== undefined) {
+          gone.dispose()
+          hostScreenControls.delete(id)
+        }
+      }
+      if (entry?.carrier === 'windows' && entry.host !== undefined) {
+        const bid = windowsBoxId(entry.host)
+        const stillBound = (await imageStore.list()).some(
+          (e) => e.carrier === 'windows' && windowsBoxId(e.host ?? '') === bid,
+        )
+        if (!stillBound) {
+          winScreens.get(bid)?.dispose()
+          winScreens.delete(bid)
+          winBackends.delete(bid)
+        }
       }
       return { ok: true }
     }, z.object({ id: z.string() }))
@@ -1233,6 +1308,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   if (!computerEnabled && hasHostScreenRoute) {
     computerEnabled = true
     console.log('[openbot] computer 工具族已注册：宿主屏幕条目在场（内置注入，无需 X11 工具集）')
+  }
+  // Windows 机内分支（P9-3a）：win 协议条目在场即开注册（mirror 宿主屏幕门——SendInput
+  // 随 Windows 在场近乎普适；powershell 在场性由 v1.images.test 如实报告）
+  if (!computerEnabled && hasWindowsRoute) {
+    computerEnabled = true
+    console.log('[openbot] computer 工具族已注册：Windows 机内条目在场（PowerShell SendInput）')
   }
   if (computerEnabled) {
     for (const tool of computerTools({
