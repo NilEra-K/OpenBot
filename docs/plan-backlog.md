@@ -236,6 +236,17 @@ auto「完全访问」两项热切换，SwitchableApprovalGate 复用既有闸�
 采集：每轮 prompt/completion tokens、缓存命中率；OpenBot 无此管线，等 usage 采集立项）；
 推理力度下拉（图 4——LLM 层无此参数暴露，接推理力度的 provider 能力出现后再议）。
 
+### 2026-09-26 语义升格：⑥ → P9「屏幕一等公民」
+
+用户语义澄清：终极目标的操作对象是「**屏幕**」而非「可 exec 的机器」——任何能接入的图形化
+界面（Windows/Android/macOS/宿主上的远程控制窗口）都可能是操作对象（「看到」≠「能操作」，
+注入通道是分界）。镜像条目是屏幕条目的真子集。立项与首条载体（宿主侧屏幕——路线 B）规划
+见 [plan-screen-firstclass.md](plan-screen-firstclass.md)；P8-5（vmrun/RDP 记档）顺延归入
+P9-3 随真机接入定形。
+**P9-1（宿主屏幕载体）已实施**（2026-09-26）——纯屏幕 Box + PowerShell SendInput 注入
+（恒过审批闸）+ L0/L1 双档实况流 + ScreenControlRouter；实施记档见 plan-screen-firstclass
+P9-1 节；真机门控套件（`OPENBOT_TEST_HOSTSCREEN=1`）与流畅度实测回填待设备监督验收。
+
 ---
 
 ## 排期

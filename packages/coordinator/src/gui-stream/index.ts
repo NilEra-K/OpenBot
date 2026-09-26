@@ -110,10 +110,12 @@ export class GuiStreamService {
     }
     const entry: Entry = {
       boxId,
-      codec: this.#codec,
+      // 适配器实际交付的 codec（P9-1：宿主屏幕无 ffmpeg 时 h264 请求降级 mjpeg——
+      // 以 session.codec 为真相源，渲染端解码管线按 meta 选对）
+      codec: session.codec,
       session,
       targets: new Map(),
-      splitter: this.#codec === 'mjpeg' ? createMjpegSplitter() : null,
+      splitter: session.codec === 'mjpeg' ? createMjpegSplitter() : null,
       latest: null,
     }
     this.#streams.set(boxId, entry)

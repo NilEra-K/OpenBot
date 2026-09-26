@@ -11,6 +11,7 @@ import type { BoxBackend, ScreenAction, ScreenCapture, ScreenControl } from '@op
 import type { A2aService } from '@openbot/messaging'
 import type { TranscriptStore } from '@openbot/state'
 import type { RunStreamEvent } from '../stream/index.js'
+import { requestToolApproval } from '../gate/index.js'
 
 export const ToolErrorCodes = {
   TOOL_NOT_FOUND: 'TOOL_NOT_FOUND',
@@ -479,6 +480,16 @@ export interface ComputerToolDeps extends BoxToolDeps {
   lock?: Pick<GuiTakeoverLock, 'waitTurn'>
   /** 动作后截图前的静置毫秒（测试注入 0；缺省 500——等 GUI 响应） */
   settleMs?: number
+  /**
+   * 载体级动作闸（P9-1 裁定 F）：宿主屏幕等「零隔离」载体上 computer 动作**恒过审批闸**——
+   * 「Box 内自由」的边界假设在用户本机屏幕上不成立。appliesTo 按 boxId 判定（装配层注入，
+   * host-screen 常量 id）；截图不进闸（注册条目本身即「可看」的授权；注入才是主权面）。
+   */
+  actionGate?: {
+    gate: import('../approval/index.js').ApprovalGate
+    appliesTo: (boxId: string) => boolean
+    reason?: (boxId: string) => string
+  }
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -531,6 +542,16 @@ function computerActionTool(
     async execute(ctx, args) {
       const boxId = requireBox(ctx)
       const record = asRecord(args)
+      // 载体级动作闸（P9-1 裁定 F）：零隔离载体（宿主屏幕）恒过审批闸——拒绝即回喂不执行
+      if (deps.actionGate !== undefined && deps.actionGate.appliesTo(boxId)) {
+        const r = await requestToolApproval(
+          deps.actionGate.gate,
+          ctx,
+          spec.name,
+          deps.actionGate.reason?.(boxId),
+        )
+        if (!r.approved) return r.denial
+      }
       // 接管锁（Step 5）：用户接管中挂起在此——「交还 agent」放行后继续
       await deps.lock?.waitTurn()
       await deps.screen.act(boxId, toAction(record))

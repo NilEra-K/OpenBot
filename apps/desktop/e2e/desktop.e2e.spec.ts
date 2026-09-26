@@ -1646,6 +1646,68 @@ test('镜像注册表（P8-3）：CRUD 全链 + 连接测试如实报告 + 多�
   }
 })
 
+test('宿主屏幕载体（P9-1）：注册 + 内置注入协议呈现 + 真实测试报告 + 重启持久化（E2E 不真注入——裁定 G）', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-hostscreen-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '镜像' }).click()
+
+    // —— 注册宿主屏幕条目：载体单选 → 控制协议自动切「host」（联动）→ 零连接事实保存 ——
+    await page.getByRole('button', { name: '＋ 添加镜像' }).click()
+    await page.locator('label.proto-opt', { hasText: '宿主屏幕' }).click()
+    await expect(page.locator('span.chip', { hasText: '宿主内置注入' })).toBeVisible() // 协议段切换为固定 chip
+    await page.locator('#ifName').fill('本机屏幕')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    const row = page.locator('.cfg-row[data-image-id="img-1"]')
+    await expect(row).toBeVisible()
+    await expect(row).toContainText('宿主屏幕') // 载体 chip
+    await expect(row).toContainText('本机主屏（内置注入）') // 摘要（零连接事实）
+
+    // —— 真实测试（有桌面会话即过）：几何 + 实况档位如实报告（green chip；全文在 title） ——
+    await row.locator('[data-role="image-test"]').click()
+    await expect(row.locator('.chip-success')).toBeVisible({ timeout: 30_000 })
+    await expect(row.locator('.chip-success')).toHaveAttribute('title', /宿主屏幕就绪.*实况流/)
+
+    // —— 编辑往返：协议 chip 恒 host（表单回填不破坏载体语义） ——
+    await row.locator('[data-role="image-edit"]').click()
+    await expect(page.locator('span.chip', { hasText: '宿主内置注入' })).toBeVisible()
+    await page.getByRole('button', { name: '取消', exact: true }).click()
+
+    // —— 重启持久化（双段会话）+ 删除二段确认 ——
+    await app.close()
+    const app2 = await _electron.launch({
+      args: ['.'],
+      env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+    })
+    const page2 = await app2.firstWindow()
+    try {
+      await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+      await page2.getByRole('button', { name: '设置', exact: true }).click()
+      await page2.locator('.settings-nav-item', { hasText: '镜像' }).click()
+      const row2 = page2.locator('.cfg-row[data-image-id="img-1"]')
+      await expect(row2).toBeVisible({ timeout: 10_000 })
+      await expect(row2).toContainText('宿主屏幕')
+      const del = row2.locator('[data-role="image-remove"]')
+      await del.click()
+      await expect(del).toHaveText('确认删除？')
+      await del.click()
+      await expect(row2).toHaveCount(0)
+    } finally {
+      await app2.close()
+    }
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
 test('可用镜像探测：扫描报告来源事实（可用性 chip + 如实原因）+ 在场镜像注册预填', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-scan-'))
   const app = await _electron.launch({

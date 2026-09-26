@@ -134,3 +134,60 @@ describe('computerTools（替身）', () => {
     expect(r.text).toContain('自动换算')
   })
 })
+
+describe('computerTools actionGate（P9-1 裁定 F：宿主屏幕动作恒过闸）', () => {
+  const gateOf = (approved: boolean, log: { tools: string[]; nonces: string[] }) => ({
+    request: async (r: { tool: string; nonce: string }) => {
+      log.tools.push(r.tool)
+      log.nonces.push(r.nonce)
+      return approved
+    },
+  })
+  const depsGated = (screen: ScreenControl, gate: ReturnType<typeof gateOf>, appliesTo: (boxId: string) => boolean) => ({
+    ...depsOf(screen),
+    actionGate: { gate, appliesTo, reason: () => '宿主屏幕输入注入' },
+  })
+
+  it('appliesTo 命中：动作先过闸（拒绝 → APPROVAL_DENIED 回喂，act 零调用）；闸不拦截图', async () => {
+    const { screen, acts } = fakeScreen()
+    const log = { tools: [] as string[], nonces: [] as string[] }
+    const tools = computerTools(depsGated(screen, gateOf(false, log), () => true))
+    const reg = new ToolRegistry()
+    for (const t of tools) reg.register(t)
+    const r = await reg.execute(ctx('hostscreen-main'), { id: 'c1', name: 'computer_click', args: { x: 1, y: 2 } })
+    expect(String(r)).toContain('APPROVAL_DENIED')
+    expect(acts).toHaveLength(0) // 拒绝即不执行
+    // nonce = originMessageId:toolCallId（幂等键与 gated() 同构——redrive 不双弹窗）
+    expect(log.nonces).toEqual(['m1:c1'])
+    expect(log.tools).toEqual(['computer_click'])
+    // 截图不进闸（注册条目即「可看」授权——注入才是主权面）
+    const shotLog = { tools: [] as string[], nonces: [] as string[] }
+    const shotTools = computerTools(depsGated(screen, gateOf(false, shotLog), () => true))
+    const shot = shotTools.find((t) => t.spec.name === 'computer_screenshot')!
+    const sr = await shot.execute(ctx('hostscreen-main'), {})
+    expect(String((sr as { text: string }).text)).toContain('已截图')
+    expect(shotLog.tools).toHaveLength(0)
+  })
+
+  it('appliesTo 未命中（普通容器 box）：闸零调用——「Box 内自由」语义不变', async () => {
+    const { screen, acts } = fakeScreen()
+    const log = { tools: [] as string[], nonces: [] as string[] }
+    const tools = computerTools(depsGated(screen, gateOf(false, log), (boxId) => boxId === 'hostscreen-main'))
+    const reg = new ToolRegistry()
+    for (const t of tools) reg.register(t)
+    await reg.execute(ctx('box-1'), { id: 'c1', name: 'computer_click', args: { x: 1, y: 2 } })
+    expect(acts).toHaveLength(1)
+    expect(log.tools).toHaveLength(0)
+  })
+
+  it('批准放行：过闸后动作照常执行（manual/auto 语义归闸门内件）', async () => {
+    const { screen, acts } = fakeScreen()
+    const log = { tools: [] as string[], nonces: [] as string[] }
+    const tools = computerTools(depsGated(screen, gateOf(true, log), () => true))
+    const reg = new ToolRegistry()
+    for (const t of tools) reg.register(t)
+    await reg.execute(ctx('hostscreen-main'), { id: 'c1', name: 'computer_click', args: { x: 1, y: 2 } })
+    expect(acts).toHaveLength(1)
+    expect(log.tools).toEqual(['computer_click'])
+  })
+})

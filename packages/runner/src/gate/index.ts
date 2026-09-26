@@ -4,7 +4,6 @@
  * 包内工具（in-box）自由、不过闸；host 工具按需包 gated()。
  */
 import { KernelError } from '@openbot/core'
-import type { ToolCall } from '@openbot/llm'
 import { approvalDenied, ApprovalErrorCodes } from '../approval/index.js'
 import type { ApprovalGate, ApprovalRequest } from '../approval/index.js'
 import type { Tool, ToolContext, ToolResult } from '../tools/index.js'
@@ -15,28 +14,42 @@ export interface GatedToolDeps {
   reason?: (ctx: ToolContext, args: unknown) => string | undefined
 }
 
+/**
+ * 单次审批请求（gated() 与 computer 动作工具 actionGate 共用——P9-1 宿主屏幕载体恒过闸）：
+ * 已中止的 run 不进闸门（不发 requested 事件）；拒绝返回 null 由调用方决定回喂形态。
+ */
+export async function requestToolApproval(
+  gate: ApprovalGate,
+  ctx: ToolContext,
+  toolName: string,
+  reason?: string,
+): Promise<{ approved: true } | { approved: false; denial: string }> {
+  const request: ApprovalRequest = {
+    runId: ctx.runId,
+    agentId: ctx.agentId,
+    tool: toolName,
+    ...(reason !== undefined ? { reason } : {}),
+    nonce: `${ctx.originMessageId}:${ctx.toolCallId}`,
+  }
+  if (ctx.signal.aborted) {
+    throw new KernelError(ApprovalErrorCodes.APPROVAL_RUN_ABORTED, 'run 已中止，审批作废')
+  }
+  const approved = await requestRacingAbort(gate.request(request), ctx.signal)
+  if (!approved) {
+    const err = approvalDenied(request)
+    return { approved: false, denial: `错误 ${err.code}: ${err.message}` }
+  }
+  return { approved: true }
+}
+
 /** 把任意工具包成「先过闸」：拒绝时以 APPROVAL_DENIED 文本回喂模型，不执行 */
 export function gated(tool: Tool, deps: GatedToolDeps): Tool {
   return {
     spec: tool.spec,
     async execute(ctx: ToolContext, args: unknown): Promise<string | ToolResult> {
-      const call: ToolCall = { id: ctx.toolCallId, name: tool.spec.name, args }
-      const request: ApprovalRequest = {
-        runId: ctx.runId,
-        agentId: ctx.agentId,
-        tool: tool.spec.name,
-        reason: deps.reason?.(ctx, args),
-        nonce: `${ctx.originMessageId}:${call.id}`,
-      }
-      // 已中止的 run 不进闸门（不发 requested 事件——用户中止后不再弹窗打扰）
-      if (ctx.signal.aborted) {
-        throw new KernelError(ApprovalErrorCodes.APPROVAL_RUN_ABORTED, 'run 已中止，审批作废')
-      }
-      const approved = await requestRacingAbort(deps.gate.request(request), ctx.signal)
-      if (!approved) {
-        const err = approvalDenied(request)
-        return `错误 ${err.code}: ${err.message}`
-      }
+      const reason = deps.reason?.(ctx, args)
+      const r = await requestToolApproval(deps.gate, ctx, tool.spec.name, reason)
+      if (!r.approved) return r.denial
       return tool.execute(ctx, args)
     },
   }

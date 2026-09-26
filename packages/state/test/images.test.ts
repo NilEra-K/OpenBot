@@ -110,4 +110,28 @@ describe('ImageStore', () => {
     // 读取端不回写——坏文件留盘待人工检查（不静默吞数据）
     expect(fs.snapshot()['data/images.json']).toBe('{ NOT JSON')
   })
+
+  it('host-screen 载体（P9-1）：零连接事实入库；协议恒 host；他载体拒 host 协议', async () => {
+    const { fs, store } = make()
+    const hs = await store.add({ name: '本机屏幕', carrier: 'host-screen', controlProtocol: 'host' })
+    expect(hs.host).toBeUndefined()
+    expect(hs.image).toBeUndefined()
+    expect(hs.controlProtocol).toBe('host')
+    // 协议错配拒绝：host-screen 恒 host；ssh/container 不接受 host
+    await expect(
+      store.add({ name: 'x', carrier: 'host-screen', controlProtocol: 'x11' }),
+    ).rejects.toMatchObject({ code: 'STATE_IMAGE_INVALID' })
+    await expect(
+      store.add({ name: 'x', carrier: 'ssh', host: 'h', controlProtocol: 'host' }),
+    ).rejects.toMatchObject({ code: 'STATE_IMAGE_INVALID' })
+    // 切出 host-screen：host 协议不合法 → 校验拒绝（不会落脏数据）
+    await expect(store.update(hs.id, { carrier: 'container', image: 'a:1' })).rejects.toMatchObject({
+      code: 'STATE_IMAGE_INVALID',
+    })
+    const fixed = await store.update(hs.id, { carrier: 'container', image: 'a:1', controlProtocol: 'x11' })
+    expect(fixed.controlProtocol).toBe('x11')
+    // 重启恢复（读取端兼容——version 1 不动）
+    const reborn = new ImageStore({ fs, root: 'data' })
+    expect(await reborn.get(hs.id)).toEqual(fixed)
+  })
 })

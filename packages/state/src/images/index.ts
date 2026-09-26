@@ -23,11 +23,12 @@ export const ImageErrorCodes = {
 export const IMAGE_LIMIT = 16
 export const IMAGE_NAME_LIMIT = 64
 
-/** 载体类型（P8-3 一期：容器镜像 / SSH 主机；vmware 随 P8-5） */
-export type ImageCarrier = 'container' | 'ssh'
+/** 载体类型（P8-3：容器镜像 / SSH 主机；P9-1 起加宿主屏幕——纯屏幕载体，vmware 随 P8-5） */
+export type ImageCarrier = 'container' | 'ssh' | 'host-screen'
 
-/** 控制协议（桌面控制适配器的选择依据；'none' = 纯 exec 载体——无 GUI 面） */
-export type ImageControlProtocol = 'x11' | 'none'
+/** 控制协议（桌面控制适配器的选择依据；'none' = 纯 exec 载体——无 GUI 面；
+ *  'host' = 宿主内置注入（P9-1 host-screen 专属——SendInput 恒过闸） */
+export type ImageControlProtocol = 'x11' | 'none' | 'host'
 
 export interface ImageEntry {
   /** 路由键（BoxSpec.image 消费——addAgent 绑定后 per-agent create 的第一参数） */
@@ -102,12 +103,23 @@ function validateEntry(entry: ImageEntry): void {
     if (entry.image === undefined || entry.image === '') {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '容器镜像条目须指定镜像名')
     }
-  } else {
+    if (entry.controlProtocol !== 'x11' && entry.controlProtocol !== 'none') {
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '容器载体控制协议只接受 x11/none')
+    }
+  } else if (entry.carrier === 'ssh') {
     if (entry.host === undefined || entry.host === '') {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, 'SSH 镜像条目须指定主机地址')
     }
     if (entry.port !== undefined && (!Number.isInteger(entry.port) || entry.port < 1 || entry.port > 65535)) {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, `SSH 端口非法：${entry.port}`)
+    }
+    if (entry.controlProtocol !== 'x11' && entry.controlProtocol !== 'none') {
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, 'SSH 载体控制协议只接受 x11/none')
+    }
+  } else {
+    // host-screen（P9-1）：纯屏幕载体——连接事实为零（一期恒主屏），控制协议恒 host
+    if (entry.controlProtocol !== 'host') {
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '宿主屏幕载体控制协议恒为 host（内置注入）')
     }
   }
 }

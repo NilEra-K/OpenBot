@@ -179,17 +179,17 @@ export interface ProviderView {
   protocol?: 'openai-compat' | 'anthropic'
 }
 
-/** 镜像条目（plan-image-firstclass P8-3；v1.images.* 载荷——Agent 绑定镜像而非后端，绑定随 P8-4） */
+/** 镜像条目（plan-image-firstclass P8-3；P9-1 起加 host-screen；v1.images.* 载荷——Agent 绑定镜像而非后端） */
 export interface ImageEntryView {
   id: string
   name: string
-  carrier: 'container' | 'ssh'
+  carrier: 'container' | 'ssh' | 'host-screen'
   image?: string
   host?: string
   port?: number
   user?: string
   keyPath?: string
-  controlProtocol: 'x11' | 'none'
+  controlProtocol: 'x11' | 'none' | 'host'
   display?: string
   createdAt: number
 }
@@ -197,7 +197,7 @@ export interface ImageEntryView {
 /** 镜像表单输入（add/update 共用形状；连接事实按载体分形状校验在内核 zod） */
 export interface ImageInputView {
   name: string
-  carrier: 'container' | 'ssh'
+  carrier: 'container' | 'ssh' | 'host-screen'
   image?: string
   host?: string
   port?: number

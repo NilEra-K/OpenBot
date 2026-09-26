@@ -212,7 +212,7 @@ const onKeydown = (e: KeyboardEvent): void => {
             <span class="wiz-field-label">缺省用默认沙箱（装配选定的本机后端，重活不进云）——或绑定已注册的镜像：</span>
             <select v-model="imageBinding" class="wiz-select">
               <option value="">默认沙箱</option>
-              <option v-for="img in kernel.images" :key="img.id" :value="img.id">{{ img.name }}（{{ img.carrier === 'ssh' ? 'SSH ' + img.host : img.image }}）</option>
+              <option v-for="img in kernel.images" :key="img.id" :value="img.id">{{ img.name }}（{{ img.carrier === 'ssh' ? 'SSH ' + img.host : img.carrier === 'host-screen' ? '宿主屏幕' : img.image }}）</option>
             </select>
           </label>
           <p v-if="imageBinding !== ''" class="wiz-note">绑定后该 agent 的专属 Box 落在所选镜像上——注册即真实连接（机器不可达会如实失败）；改绑重启生效。</p>

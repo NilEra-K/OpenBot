@@ -10,7 +10,7 @@
  * - settings 命令面 + provider 热切换（key 密文经 safeStorage；系统加密不可用时 base64 降级并标前缀）
  * - 崩溃恢复：审批账本 pending 项重发 requested 事件（UI 重新弹窗）
  */
-import { app, safeStorage } from 'electron'
+import { app, desktopCapturer, safeStorage, screen as electronScreen } from 'electron'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -35,6 +35,11 @@ import {
   UtmBoxBackend,
   RoutingBoxBackend,
   WslBoxBackend,
+  HostScreenBoxBackend,
+  HostScreenControl,
+  ScreenControlRouter,
+  X11ScreenControl,
+  HOST_SCREEN_BOX_ID,
   MOCK_BOX_CAPS,
   NSPAWN_BOX_CAPS,
   OCI_BOX_CAPS,
@@ -46,7 +51,16 @@ import {
   runProcess,
   scanEnvImages,
 } from '@openbot/boxes'
-import type { BackendProbe, BoxBackend, BoxCaps, BoxStats, PipeSession, PipeSpec, ScreenAction } from '@openbot/boxes'
+import type {
+  BackendProbe,
+  BoxBackend,
+  BoxCaps,
+  BoxStats,
+  HostScreenBridge,
+  PipeSession,
+  PipeSpec,
+  ScreenAction,
+} from '@openbot/boxes'
 import { computerTools } from '@openbot/runner'
 
 // ---- provider 热切换：settings 变更后替换底层实现，steward 的引用不变 ----
@@ -205,13 +219,13 @@ const automationPatchSchema = automationInputSchema.partial().extend({ id: z.str
  *  patch 不带 carrier 条件校验（部分载荷由 store 层 update 合并后 validateEntry 兜底） */
 const imageInputBase = z.object({
   name: z.string().trim().min(1).max(64),
-  carrier: z.enum(['container', 'ssh']),
+  carrier: z.enum(['container', 'ssh', 'host-screen']),
   image: z.string().trim().min(1).max(200).optional(),
   host: z.string().trim().min(1).max(200).optional(),
   port: z.number().int().min(1).max(65535).optional(),
   user: z.string().trim().min(1).max(64).optional(),
   keyPath: z.string().trim().min(1).max(500).optional(),
-  controlProtocol: z.enum(['x11', 'none']),
+  controlProtocol: z.enum(['x11', 'none', 'host']),
   display: z.string().trim().max(40).optional(),
 })
 const imageInputSchema = imageInputBase.superRefine((v, ctx) => {
@@ -220,6 +234,9 @@ const imageInputSchema = imageInputBase.superRefine((v, ctx) => {
   }
   if (v.carrier === 'ssh' && (v.host === undefined || v.host === '')) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['host'], message: 'SSH 镜像条目须指定主机地址' })
+  }
+  if (v.carrier === 'host-screen' && v.controlProtocol !== 'host') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['controlProtocol'], message: '宿主屏幕载体控制协议恒为 host（内置注入）' })
   }
 })
 const imagePatchSchema = imageInputBase.partial().extend({ id: z.string() })
@@ -466,6 +483,62 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // 路由表运行时可变（add/remove 即时生效——按调用分发无状态，与沙箱偏好的装配期决策不同）
   const imageStore = new ImageStore({ fs, root: dataRoot, now: Date.now })
   const routingBackend = new RoutingBoxBackend({ fallback: backend })
+  // ---- 宿主屏幕载体（plan-screen-firstclass P9-1）----
+  // 纯屏幕 Box（记账面）+ 内置注入适配器 + 路由器：kernel.screen 按 boxId 分发（宿主屏幕 →
+  // HostScreenControl；其余 → X11 经 routedBackend exec）——消费方（工具族/实况/gui 命令面）
+  // 零载体感知。Electron 面（desktopCapturer/screen API）收口 bridge 注入，boxes 零 electron 依赖。
+  const hostScreenBackend = new HostScreenBoxBackend({ now: Date.now })
+  let hasHostScreenRoute = false
+  const hostScreenBridge: HostScreenBridge = {
+    // 主屏物理像素（DIP × scaleFactor——desktopCapturer 采集与 SendInput 同一坐标系）
+    geometry: () => {
+      try {
+        const d = electronScreen.getPrimaryDisplay()
+        return { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) }
+      } catch {
+        return null // 桌面会话不可用——如实（act/采集路径各自给出可见错误）
+      }
+    },
+    captureFrame: async ({ maxWidth, quality }) => {
+      const geo = (() => {
+        try {
+          const d = electronScreen.getPrimaryDisplay()
+          return { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) }
+        } catch {
+          return null
+        }
+      })()
+      if (geo === null) throw new KernelError('SCREEN_CAPTURE_FAILED', '桌面会话不可用——无法采集主屏')
+      const width = Math.min(maxWidth, geo.width)
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width, height: Math.max(1, Math.round((geo.height * width) / geo.width)) },
+      })
+      const img = sources[0]?.thumbnail
+      if (img === undefined || img.isEmpty()) {
+        throw new KernelError('SCREEN_CAPTURE_FAILED', '无可用屏幕采集源（thumbnail 为空）')
+      }
+      const size = img.getSize()
+      return { bytes: new Uint8Array(img.toJPEG(quality)), width: size.width, height: size.height }
+    },
+  }
+  const hostScreenControl = new HostScreenControl({ bridge: hostScreenBridge })
+  const x11ScreenControl = new X11ScreenControl({
+    host: routingBackend,
+    ...(process.env.OPENBOT_GUI_DISPLAY !== undefined ? { display: process.env.OPENBOT_GUI_DISPLAY } : {}),
+  })
+  const screenRouter = new ScreenControlRouter({
+    resolve: (boxId) => (boxId === HOST_SCREEN_BOX_ID ? hostScreenControl : x11ScreenControl),
+    adapters: [x11ScreenControl, hostScreenControl],
+  })
+  /** 宿主 ffmpeg 在场性（v1.images.test 报告 L1/L0 档位——探测一次即时结算，不缓存跨调用） */
+  const probeHostFfmpeg = async (): Promise<boolean> => {
+    try {
+      return (await runProcess({ command: ['ffmpeg', '-version'], timeoutMs: 5_000 })).exitCode === 0
+    } catch {
+      return false
+    }
+  }
   const registerImageRoute = (entry: ImageEntry): void => {
     if (entry.carrier === 'ssh') {
       routingBackend.registerRoute(entry.id, {
@@ -478,6 +551,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
           now: Date.now,
         }),
       })
+    } else if (entry.carrier === 'host-screen') {
+      // 多条目共享同一台「屏幕设备」（一期恒主屏）——同一后端实例记账多对一
+      routingBackend.registerRoute(entry.id, { backend: hostScreenBackend })
+      hasHostScreenRoute = true
     } else if (chosen.backendId === 'docker' || chosen.backendId === 'podman') {
       routingBackend.registerRoute(entry.id, {
         backend,
@@ -491,6 +568,20 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
    *  ssh = 真实 attach（连通验证 + 工作目录）→ x11 协议加测 GUI 工具集 → 断开；
    *  container = 按 CLI 查镜像在场（docker inspect / podman exists）；底座非 OCI 如实报告不可路由 */
   const testImageEntry = async (entry: ImageEntry): Promise<{ ok: boolean; detail?: string; reason?: string }> => {
+    if (entry.carrier === 'host-screen') {
+      // 宿主屏幕：几何 + ffmpeg 档位报告（L0/L1 如实——无真实注入，测试零副作用）
+      const geo = hostScreenBridge.geometry()
+      if (geo === null) {
+        return { ok: false, reason: '宿主屏幕几何不可用（桌面会话未就绪）' }
+      }
+      const ff = await probeHostFfmpeg()
+      return {
+        ok: true,
+        detail: `宿主屏幕就绪（主屏 ${geo.width}×${geo.height} 物理像素）；实况流 ${
+          ff ? 'h264（ffmpeg 在场）' : 'mjpeg 轮询（ffmpeg 缺席——安装后自动升级）'
+        }`,
+      }
+    }
     if (entry.carrier === 'ssh') {
       const probe = new SshBoxBackend({
         host: entry.host ?? '',
@@ -590,6 +681,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     root: dataRoot,
     // 镜像路由后端（P8-3）：镜像条目 id → 后端实例的多路 facade——services/工具族零改动
     backend: routedBackend,
+    // 桌面控制路由器（P9-1）：按 boxId 分发 X11/宿主屏幕——coordinator 内置 X11 缺省面被覆盖
+    screen: screenRouter,
     // save/recall 工具 + 会话装配「此前记忆」注入（每轮同步读缓存；addAgent 预载）
     memory: memoryStore,
     // run 策略上调（2026-09-06 进展驱动 grace 语义）：无进展 5 分钟才逃逸（慢模型长思考/
@@ -1086,6 +1179,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       }
     }
   }
+  // 宿主屏幕分支（P9-1）：条目在场即开注册——内置注入不依赖 X11 工具集（跳过探测）。
+  // 门语义仍是装配期布尔（全局门）：运行中新注册的宿主屏幕条目重启后才生效（与 X11 门一致）。
+  if (!computerEnabled && hasHostScreenRoute) {
+    computerEnabled = true
+    console.log('[openbot] computer 工具族已注册：宿主屏幕条目在场（内置注入，无需 X11 工具集）')
+  }
   if (computerEnabled) {
     for (const tool of computerTools({
       backend: routedBackend, // 路由面——P8-4 起 agent 绑定的镜像 Box 也能 exec 到位
@@ -1094,6 +1193,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       transcript: kernel.transcript,
       screen: kernel.screen,
       lock: guiLock,
+      // 载体级动作闸（P9-1 裁定 F）：宿主屏幕上 computer 动作恒过审批闸——「Box 内自由」
+      // 在用户本机屏幕上不成立；截图不进闸（注册条目本身即「可看」的授权，注入才是主权面）
+      actionGate: {
+        gate: switchableGate,
+        appliesTo: (boxId: string) => boxId === HOST_SCREEN_BOX_ID,
+        reason: () => '宿主屏幕输入注入——agent 将在你的本机屏幕上执行鼠标/键盘动作',
+      },
     })) {
       kernel.tools.register(tool)
     }

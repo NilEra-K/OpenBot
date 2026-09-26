@@ -135,17 +135,24 @@ const SETTINGS_GROUPS: Array<{ label: string; items: Array<{ id: SettingsSection
 // ---- 镜像注册表（plan-image-firstclass P8-3）：条目清单 + 载体分表单模态 + 连接测试 ----
 const imageFormOpen = ref(false)
 const imageEditingId = ref<string | null>(null)
+type ImageFormCarrier = 'container' | 'ssh' | 'host-screen'
+type ImageFormProtocol = 'x11' | 'none' | 'host'
 const imageForm = reactive<{
   name: string
-  carrier: 'container' | 'ssh'
+  carrier: ImageFormCarrier
   image: string
   host: string
   port: number | null
   user: string
   keyPath: string
-  controlProtocol: 'x11' | 'none'
+  controlProtocol: ImageFormProtocol
   display: string
 }>({ name: '', carrier: 'ssh', image: '', host: '', port: null, user: '', keyPath: '', controlProtocol: 'x11', display: '' })
+/** 载体切换联动（P9-1）：host-screen 协议恒 host；切回他载体时 host 协议回落 x11 */
+watch(imageForm.carrier, (c) => {
+  if (c === 'host-screen') imageForm.controlProtocol = 'host'
+  else if (imageForm.controlProtocol === 'host') imageForm.controlProtocol = 'x11'
+})
 const imageFormError = ref<string | null>(null)
 const imageSaving = ref(false)
 /** 删除二段确认（进行中的 id；语义同模型端点删除） */
@@ -172,7 +179,7 @@ const openImageCreate = (): void => {
   imageFormOpen.value = true
 }
 
-const openImageEdit = (img: { id: string; name: string; carrier: 'container' | 'ssh'; image?: string; host?: string; port?: number; user?: string; keyPath?: string; controlProtocol: 'x11' | 'none'; display?: string }): void => {
+const openImageEdit = (img: { id: string; name: string; carrier: ImageFormCarrier; image?: string; host?: string; port?: number; user?: string; keyPath?: string; controlProtocol: ImageFormProtocol; display?: string }): void => {
   imageEditingId.value = img.id
   Object.assign(imageForm, {
     name: img.name,
@@ -196,6 +203,7 @@ const closeImageForm = (): void => {
 
 const imageFormValid = computed(() => {
   if (imageForm.name.trim() === '') return false
+  if (imageForm.carrier === 'host-screen') return true // 零连接事实（本机主屏）
   if (imageForm.carrier === 'container') return imageForm.image.trim() !== ''
   return imageForm.host.trim() !== ''
 })
@@ -207,16 +215,18 @@ const saveImage = async (): Promise<void> => {
   const payload = {
     name: imageForm.name.trim(),
     carrier: imageForm.carrier,
-    controlProtocol: imageForm.controlProtocol,
-    ...(imageForm.carrier === 'container'
-      ? { image: imageForm.image.trim() }
-      : {
-          host: imageForm.host.trim(),
-          ...(imageForm.port !== null && Number.isFinite(imageForm.port) ? { port: Number(imageForm.port) } : {}),
-          ...(imageForm.user.trim() !== '' ? { user: imageForm.user.trim() } : {}),
-          ...(imageForm.keyPath.trim() !== '' ? { keyPath: imageForm.keyPath.trim() } : {}),
-        }),
-    ...(imageForm.display.trim() !== '' ? { display: imageForm.display.trim() } : {}),
+    controlProtocol: imageForm.carrier === 'host-screen' ? ('host' as const) : imageForm.controlProtocol,
+    ...(imageForm.carrier === 'host-screen'
+      ? {}
+      : imageForm.carrier === 'container'
+        ? { image: imageForm.image.trim() }
+        : {
+            host: imageForm.host.trim(),
+            ...(imageForm.port !== null && Number.isFinite(imageForm.port) ? { port: Number(imageForm.port) } : {}),
+            ...(imageForm.user.trim() !== '' ? { user: imageForm.user.trim() } : {}),
+            ...(imageForm.keyPath.trim() !== '' ? { keyPath: imageForm.keyPath.trim() } : {}),
+          }),
+    ...(imageForm.carrier !== 'host-screen' && imageForm.display.trim() !== '' ? { display: imageForm.display.trim() } : {}),
   }
   try {
     if (imageEditingId.value !== null) await kernel.updateImage(imageEditingId.value, payload)
@@ -261,8 +271,9 @@ const testImage = async (img: { id: string }): Promise<void> => {
   }
 }
 
-const carrierLabel = (c: 'container' | 'ssh'): string => (c === 'ssh' ? 'SSH' : '容器')
-const imageSummary = (img: { carrier: 'container' | 'ssh'; image?: string; host?: string; port?: number; user?: string; keyPath?: string }): string => {
+const carrierLabel = (c: 'container' | 'ssh' | 'host-screen'): string => (c === 'ssh' ? 'SSH' : c === 'host-screen' ? '宿主屏幕' : '容器')
+const imageSummary = (img: { carrier: 'container' | 'ssh' | 'host-screen'; image?: string; host?: string; port?: number; user?: string; keyPath?: string }): string => {
+  if (img.carrier === 'host-screen') return '本机主屏（内置注入）'
   if (img.carrier !== 'ssh') return img.image ?? ''
   let out = ''
   if (img.user) out += img.user + '@'
@@ -991,7 +1002,7 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">镜像注册表</div>
         <HelpTip
-          text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。「扫描可用镜像」按需列出本机 Docker / Podman（含 WSL 发行版内独立安装的 docker——Docker Desktop 的镜像走宿主 CLI）实际在场的镜像，只报告事实；行上「注册」预填表单，保存后才入注册表。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 tools/provision-gui.sh 预置桌面工具集。"
+          text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机 / 宿主屏幕）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。「扫描可用镜像」按需列出本机 Docker / Podman（含 WSL 发行版内独立安装的 docker——Docker Desktop 的镜像走宿主 CLI）实际在场的镜像，只报告事实；行上「注册」预填表单，保存后才入注册表。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 tools/provision-gui.sh 预置桌面工具集；宿主屏幕载体注入恒经审批确认。"
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" data-role="image-scan" :disabled="kernel.imageScanning" @click="scanAvailableImages">{{ kernel.imageScanning ? '扫描中…' : '⟳ 扫描可用镜像' }}</button>
         <button class="btn btn-secondary btn-sm" style="margin-left: 8px" @click="openImageCreate">＋ 添加镜像</button>
@@ -1069,9 +1080,19 @@ const wslHelpNeeded = computed(() => {
                   <input type="radio" name="if-carrier" value="container" v-model="imageForm.carrier" />
                   容器镜像
                 </label>
+                <label class="proto-opt" :class="{ 'is-on': imageForm.carrier === 'host-screen' }">
+                  <input type="radio" name="if-carrier" value="host-screen" v-model="imageForm.carrier" />
+                  宿主屏幕
+                </label>
               </div>
             </div>
-            <template v-if="imageForm.carrier === 'ssh'">
+            <div v-if="imageForm.carrier === 'host-screen'" class="field">
+              <p class="field-note">
+                把本机屏幕（主屏）注册为可操控载体：Agent 可截图查看与注入鼠标键盘（远程控制窗口里的一切都落在宿主屏幕上）。
+                屏幕上的一切输入注入都会先经审批确认（默认「变更前确认」模式逐次弹窗）；本载体无命令执行面。
+              </p>
+            </div>
+            <template v-else-if="imageForm.carrier === 'ssh'">
               <div class="field">
                 <label class="field-label" for="ifHost">主机地址</label>
                 <input id="ifHost" v-model="imageForm.host" class="field-input mono" placeholder="192.168.1.20 或 vm.local" autocomplete="off" spellcheck="false" />
@@ -1093,7 +1114,7 @@ const wslHelpNeeded = computed(() => {
               <label class="field-label" for="ifImage">镜像名</label>
               <input id="ifImage" v-model="imageForm.image" class="field-input mono" placeholder="openbot-gui:24.04" autocomplete="off" spellcheck="false" />
             </div>
-            <div class="field">
+            <div v-if="imageForm.carrier !== 'host-screen'" class="field">
               <span class="field-label">控制协议</span>
               <div class="proto-seg" role="radiogroup" aria-label="控制协议">
                 <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'x11' }">
@@ -1105,6 +1126,10 @@ const wslHelpNeeded = computed(() => {
                   无（纯命令行）
                 </label>
               </div>
+            </div>
+            <div v-else class="field">
+              <span class="field-label">控制协议</span>
+              <span class="chip">宿主内置注入（SendInput）</span>
             </div>
             <div v-if="imageForm.controlProtocol === 'x11'" class="field">
               <label class="field-label" for="ifDisplay">X 显示地址（可选，缺省 :0）</label>

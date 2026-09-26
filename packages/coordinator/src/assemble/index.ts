@@ -54,6 +54,11 @@ export interface AssembleOptions {
    * ScreenControl 接口。lock.waitTurn 在每个动作前等待（用户接管挂起）。
    */
   computer?: { lock: Pick<GuiTakeoverLock, 'waitTurn'> }
+  /**
+   * 桌面控制适配器覆盖（plan-screen-firstclass P9-1）：缺省装配 X11 单实例（既有行为）；
+   * desktop 传 ScreenControlRouter（按 boxId 分发 X11/宿主屏幕）——消费方零感知。
+   */
+  screen?: ScreenControl
   maxToolRounds?: number
   /** run 策略覆盖（2026-09-06 进展驱动 grace 语义）：装配方按产品形态调——desktop 上调
    *  （慢模型长轮次不被误杀），CLI/测试缺省 DEFAULT_RUN_POLICY */
@@ -222,11 +227,14 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const shellService = new ShellService({ backend })
   // 桌面控制适配器（plan-image-firstclass P8-2 接口化）：X11 适配器为缺省实现——display
   // 装配参数化（env OPENBOT_GUI_DISPLAY 由装配读取传入，B3；P8-3 起由镜像条目接管）；
+  // P9-1 起装配方可注入 ScreenControlRouter（按 boxId 分发 X11/宿主屏幕）——消费方零感知。
   // 工具族/实况服务/gui 命令面三方共用同一实例（几何缓存单源）
-  const screen = new X11ScreenControl({
-    host: backend,
-    ...(process.env.OPENBOT_GUI_DISPLAY !== undefined ? { display: process.env.OPENBOT_GUI_DISPLAY } : {}),
-  })
+  const screen =
+    options.screen ??
+    new X11ScreenControl({
+      host: backend,
+      ...(process.env.OPENBOT_GUI_DISPLAY !== undefined ? { display: process.env.OPENBOT_GUI_DISPLAY } : {}),
+    })
   // GUI 桌面实况（三期双引擎）：采集经适配器（Box 内 ffmpeg 管道，帧字节直出），
   // 帧走 WS /stream 的 gui 帧型；编码引擎 env OPENBOT_GUI_CODEC 覆盖（缺省 h264——
   // x264 zerolatency + WebCodecs 硬解；'mjpeg' 回退一期路径）

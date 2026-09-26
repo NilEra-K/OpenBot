@@ -419,3 +419,58 @@ export async function probeX11Toolset(host: ScreenControlHost, boxId: string): P
     return false
   }
 }
+
+// ---------------------------------------------------------------------------
+// 桌面控制路由器（plan-screen-firstclass P9-1）：kernel.screen 单实例消费面不变，
+// 按 boxId 分发到对应适配器（宿主屏幕条目 → HostScreenControl；其余 → X11）——
+// RoutingBoxBackend 的对位件：载体差异收敛在装配层，消费方（工具族/实况服务/gui 命令面）
+// 依旧零载体感知。
+// ---------------------------------------------------------------------------
+
+export interface ScreenControlRouterOptions {
+  /** boxId → 适配器（路由键与 RoutingBoxBackend 同源：BoxSpec.image / 宿主屏幕常量 id） */
+  resolve: (boxId: string) => ScreenControl
+  /** 全量适配器清单（dispose 兜底遍历——孤儿纪律） */
+  adapters: ScreenControl[]
+}
+
+export class ScreenControlRouter implements ScreenControl {
+  readonly #resolve: (boxId: string) => ScreenControl
+  readonly #adapters: ScreenControl[]
+
+  constructor(options: ScreenControlRouterOptions) {
+    this.#resolve = options.resolve
+    this.#adapters = options.adapters
+  }
+
+  geometry(boxId: string): Promise<ScreenGeometry | null> {
+    return this.#resolve(boxId).geometry(boxId)
+  }
+
+  capture(boxId: string, opts?: ScreenCaptureOptions): Promise<ScreenCapture> {
+    return this.#resolve(boxId).capture(boxId, opts)
+  }
+
+  act(boxId: string, action: ScreenAction): Promise<void> {
+    return this.#resolve(boxId).act(boxId, action)
+  }
+
+  stream(boxId: string, opts?: ScreenStreamOptions): Promise<ScreenStreamSession> {
+    return this.#resolve(boxId).stream(boxId, opts)
+  }
+
+  /** 路由面恒 true（各适配器 stream 内部自兜底——L0 轮询/mjpeg 缺席如实降级） */
+  supportsStream(): boolean {
+    return true
+  }
+
+  async inputChannel(boxId: string): Promise<{ write(actions: ScreenAction[]): void; close(): void } | null> {
+    const adapter = this.#resolve(boxId)
+    return adapter.inputChannel !== undefined ? adapter.inputChannel(boxId) : null
+  }
+
+  dispose(): void {
+    for (const adapter of this.#adapters) adapter.dispose?.()
+  }
+}
+
