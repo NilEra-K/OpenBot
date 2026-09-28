@@ -190,7 +190,7 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
 |---|---|
 | P9-1 | 宿主注册「宿主屏幕」条目 → agent 绑定 → 对话内 computer_screenshot 看到本机屏幕 → computer_click/type 真实生效（门控套件验收）→ GUI 视图实况流按 L0/L1 档位呈现（**档位 + 实测 fps/延迟如实可见，未达高档带原因与指引**）；既有 X11/SSH/容器链路零回退（已实施，v0.1.32） |
 | P9-2 | L2 零依赖流式（getUserMedia 帧泵）+ 窗口区域绑定（EnumWindows/GetWindowRect）+ 通道侧 move 合帧（已实施，2026-09-26） |
-| P9-3 | **A 轮（Windows 机内适配器）已实施**（2026-09-26）；Android adb / RDP 随真机接入定形（A/B 两路线待用户表态） |
+| P9-3 | **A 轮（Windows 机内适配器）已实施**（2026-09-26，v0.1.34）；**B 轮（Android adb 载体）已实施**（2026-09-27，v0.1.38）；RDP 继续记档后置 |
 
 ## P9-2 实施记档（2026-09-26，用户批准后实施）
 
@@ -244,6 +244,46 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
   附带收益：occlusion 开关与屏外可见窗口保留（对隐藏窗口视频节流的双保险，无回归）。
 - **Windows 机内真机**：门控套件就绪待目标机（`OPENBOT_TEST_WINSSH=1` 基础链 +
   `_GUI=1` 注入/截屏/帧流）——VMware Win 虚机/云电脑到位即跑。
+
+## P9-3b 实施记档（2026-09-27，用户批准后实施——「Android adb 载体」轮）
+
+- [x] 0. **回归修复（插队）**：v0.1.35 门重构把 ensureComputerTools 幂等判据误写成
+   `if (computerEnabled) return`——OPENBOT_COMPUTER=1 与 X11 探测两条路径的工具注册全部丢失
+   （computer-use E2E 症状从「截图回喂文本化」变 TOOL_NOT_FOUND 实证）。修复 = 注册判据与使能
+   判据分离（computerRegistered 标志）。**教训：核对存量失败必须对症状，不止对用例名。**
+- [x] 1. boxes：AdbBoxBackend——buildRemoteScript/sshQuote/fs stdin b64 全复用 backend-ssh
+   （Android 是 POSIX）；create 应答校验（echo ok）+ /data/local/tmp/openbot 工作目录；
+   openShell `adb -tt shell`；attach/caps 与 SSH 同矩阵 + 单测
+- [x] 2. boxes：AdbScreenControl——`wm size` 几何（Override 优先）；`screencap|base64` PNG
+   （魔数校验、原生分辨率 1:1 零换算）；注入词表映射（tap/swipe/keyevent/keycombination，
+   type 仅 ASCII 如实拒绝、多修饰键如实拒绝、滚轮单指 swipe 中心近似——裁定 A/C/D）；持久
+   `adb shell` stdin 注入通道（无 ack——触屏无回执语义）；screenrecord h264raw 循环流（180s
+   重启缺口记档）+ 单测 15 例
+- [x] 3. state：carrier `'android'`（host = 序列号/wifi 地址；协议 'android'|'none'；
+   同形组细化——ssh→android 保留 host 清 ssh 专属字段）+ 单测
+- [x] 4. desktop：路由注册（同序列号收敛）+ GUI 门 android 分支（运行时翻转已就绪）+
+   `v1.images.test` android 分支（连通/几何如实报告）+ remove 引用计数清理
+- [x] 5. 设置页：载体「Android 设备」+ 序列号/wifi 地址字段 + 设备准备指引 + 三处呈现
+- [x] 6. E2E：Android 注册/设备未在场红 chip/重启持久/删除（mock 沙箱零真连）；门控套件
+   `adb-real.test.ts`（`OPENBOT_TEST_ADB=1` 基础链 + `_GUI=1` 注入/截屏/screenrecord 全链 +
+   注入往返实测打点）
+- [ ] 7. 真机监督验收：**待 Android 设备**（USB 调试或 wifi adb——`OPENBOT_TEST_ADB=1
+   OPENBOT_TEST_ADB_HOST=<序列号> [_GUI=1] pnpm vitest run packages/boxes/test/adb-real.test.ts`）
+- [x] 8. 文档：ARCHITECTURE 十载体矩阵 + platforms.md adb 指引 + backlog ⑥ 状态
+
+### P9-3b 实施要点
+
+- **POSIX 红利**：Android mksh = POSIX——远端脚本构造/fs 读写/stdin b64 模式**直接 import
+  backend-ssh 的 buildRemoteScript/sshQuote**（零复制零漂移）；与 P9-3a 的 win-protocol 提炼
+  同哲学：载体差异收敛在传输层（adb vs ssh vs 本机 spawn），协议层逐字节共享。
+- **screenrecord 红利**：`--output-format=h264raw` 直出 Annex B → 实况真 h264（设备编码器
+  自适应帧率）——比宿主屏幕 L2 帧泵高一档，WebCodecs 管线零改动；180s 上限以 while 循环重启
+  （~0.5s 缺口记档，无缝续录留后续）。
+- **触屏词表的诚实边界**：type 仅 ASCII（input text 不支持 unicode——中文剪贴板方案留后续）；
+  组合键仅单修饰（keycombination 双 keycode 限制）；滚轮单指 swipe 中心近似；move/down/up
+  不渲染（触屏无 hover/半程）——全部如实报错或记档，不假装。
+- **1:1 坐标系**：screencap 原生分辨率直出（设备端无缩放工具）——capture 与 act 同坐标系
+  零换算（与 X11/宿主屏幕的 1280 缩放契约不同，如实分叉记档）。
 
 ### P9-3a 实施要点
 

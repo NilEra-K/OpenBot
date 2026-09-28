@@ -160,3 +160,26 @@ describe('Windows 载体（P9-3a）', () => {
     expect(asContainer.host).toBeUndefined() // 跨组——清除
   })
 })
+
+describe('Android 载体（P9-3b）', () => {
+  it('android 条目：host = 序列号/wifi 地址；协议 android/none；缺主机拒绝', async () => {
+    const { store } = make()
+    const a = await store.add({ name: '手机', carrier: 'android', host: 'R58NXXXXXX', controlProtocol: 'android' })
+    expect(a.controlProtocol).toBe('android')
+    await expect(
+      store.add({ name: 'x', carrier: 'android', host: 'h', controlProtocol: 'win' }),
+    ).rejects.toMatchObject({ code: 'STATE_IMAGE_INVALID' })
+    await expect(
+      store.add({ name: 'x', carrier: 'android', controlProtocol: 'android' }),
+    ).rejects.toMatchObject({ code: 'STATE_IMAGE_INVALID' })
+  })
+
+  it('ssh→android：保留 host、清除 port/user/keyPath（字段形状不同）', async () => {
+    const { store } = make()
+    const ssh = await store.add({ ...SSH_ENTRY })
+    const asAndroid = await store.update(ssh.id, { carrier: 'android', controlProtocol: 'android' })
+    expect(asAndroid.host).toBe('192.168.1.20')
+    expect(asAndroid.port).toBeUndefined()
+    expect(asAndroid.keyPath).toBeUndefined()
+  })
+})

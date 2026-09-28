@@ -251,7 +251,9 @@ P9-1 节；真机门控套件（`OPENBOT_TEST_HOSTSCREEN=1`）与流畅度实测
 修正；记档见 plan-screen-firstclass P9-2 节。
 **P9-3a（Windows 机内适配器）已实施**（2026-09-26）——Windows 目标机（OpenSSH Server）
 经 EncodedCommand exec + PowerShell 截屏/SendInput 注入（win-protocol 共享核心 over SSH）；
-用户裁定先 A 后 B（Android adb 待表态）；记档见 plan-screen-firstclass P9-3a 节。
+**P9-3b（Android adb 载体）已实施**（2026-09-27）——设备内建工具三件套（wm size/screencap/
+input/screenrecord h264raw）零预装，POSIX 脚本构造复用 backend-ssh；记档见
+plan-screen-firstclass P9-3b 节（RDP 继续记档后置）。
 
 ---
 

@@ -135,8 +135,8 @@ const SETTINGS_GROUPS: Array<{ label: string; items: Array<{ id: SettingsSection
 // ---- 镜像注册表（plan-image-firstclass P8-3）：条目清单 + 载体分表单模态 + 连接测试 ----
 const imageFormOpen = ref(false)
 const imageEditingId = ref<string | null>(null)
-type ImageFormCarrier = 'container' | 'ssh' | 'host-screen' | 'windows'
-type ImageFormProtocol = 'x11' | 'none' | 'host' | 'win'
+type ImageFormCarrier = 'container' | 'ssh' | 'host-screen' | 'windows' | 'android'
+type ImageFormProtocol = 'x11' | 'none' | 'host' | 'win' | 'android'
 const imageForm = reactive<{
   name: string
   carrier: ImageFormCarrier
@@ -169,7 +169,13 @@ watch(
   (c) => {
     if (c === 'host-screen') imageForm.controlProtocol = 'host'
     else if (c === 'windows' && imageForm.controlProtocol !== 'none') imageForm.controlProtocol = 'win'
-    else if (imageForm.controlProtocol === 'host' || imageForm.controlProtocol === 'win') imageForm.controlProtocol = 'x11'
+  else if (c === 'android' && imageForm.controlProtocol !== 'none') imageForm.controlProtocol = 'android'
+    else if (
+    imageForm.controlProtocol === 'host' ||
+    imageForm.controlProtocol === 'win' ||
+    imageForm.controlProtocol === 'android'
+  )
+    imageForm.controlProtocol = 'x11'
   },
 )
 const imageFormError = ref<string | null>(null)
@@ -239,9 +245,13 @@ const saveImage = async (): Promise<void> => {
     controlProtocol:
       imageForm.carrier === 'host-screen'
         ? ('host' as const)
-        : imageForm.carrier === 'windows' && imageForm.controlProtocol !== 'none'
+        : imageForm.carrier === 'android' && imageForm.controlProtocol !== 'none'
+          ? ('android' as const)
+          : imageForm.carrier === 'windows' && imageForm.controlProtocol !== 'none'
           ? ('win' as const)
-          : imageForm.controlProtocol,
+          : imageForm.carrier === 'android' && imageForm.controlProtocol !== 'none'
+            ? ('android' as const)
+            : imageForm.controlProtocol,
     ...(imageForm.carrier === 'host-screen' && imageForm.windowTitle.trim() !== '' ? { windowTitle: imageForm.windowTitle.trim() } : {}),
     ...(imageForm.carrier === 'host-screen'
       ? {}
@@ -298,9 +308,17 @@ const testImage = async (img: { id: string }): Promise<void> => {
   }
 }
 
-const carrierLabel = (c: 'container' | 'ssh' | 'host-screen' | 'windows'): string =>
-  c === 'ssh' ? 'SSH' : c === 'host-screen' ? '宿主屏幕' : c === 'windows' ? 'Windows' : '容器'
-const imageSummary = (img: { carrier: 'container' | 'ssh' | 'host-screen' | 'windows'; image?: string; host?: string; port?: number; user?: string; keyPath?: string; windowTitle?: string }): string => {
+const carrierLabel = (c: 'container' | 'ssh' | 'host-screen' | 'windows' | 'android'): string =>
+  c === 'ssh'
+    ? 'SSH'
+    : c === 'host-screen'
+      ? '宿主屏幕'
+      : c === 'windows'
+        ? 'Windows'
+        : c === 'android'
+          ? 'Android'
+          : '容器'
+const imageSummary = (img: { carrier: 'container' | 'ssh' | 'host-screen' | 'windows' | 'android'; image?: string; host?: string; port?: number; user?: string; keyPath?: string; windowTitle?: string }): string => {
   if (img.carrier === 'host-screen') {
     return img.windowTitle !== undefined ? `窗口「${img.windowTitle}」（内置注入）` : '本机主屏（内置注入）'
   }
@@ -1114,6 +1132,10 @@ const wslHelpNeeded = computed(() => {
                   <input type="radio" name="if-carrier" value="windows" v-model="imageForm.carrier" />
                   Windows 主机
                 </label>
+                <label class="proto-opt" :class="{ 'is-on': imageForm.carrier === 'android' }">
+                  <input type="radio" name="if-carrier" value="android" v-model="imageForm.carrier" />
+                  Android 设备
+                </label>
                 <label class="proto-opt" :class="{ 'is-on': imageForm.carrier === 'host-screen' }">
                   <input type="radio" name="if-carrier" value="host-screen" v-model="imageForm.carrier" />
                   宿主屏幕
@@ -1161,6 +1183,19 @@ const wslHelpNeeded = computed(() => {
                 </p>
               </div>
             </template>
+            <template v-else-if="imageForm.carrier === 'android'">
+              <div class="field">
+                <label class="field-label" for="ifHost">设备序列号或 wifi 地址</label>
+                <input id="ifHost" v-model="imageForm.host" class="field-input mono" placeholder="R58NXXXXXX 或 192.168.1.50:5555" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field">
+                <p class="field-note">
+                  目标设备须开启 USB 调试（或 <span class="mono">adb tcpip 5555</span> 后用 wifi 地址）；序列号用
+                  <span class="mono">adb devices</span> 查看。GUI 面经设备内建 screencap/input/screenrecord——设备端零预装；
+                  中文键入不受支持（input text 仅 ASCII，如实报错）；远端设备是独立机器，注入不经本机审批闸。
+                </p>
+              </div>
+            </template>
             <div v-else class="field">
               <label class="field-label" for="ifImage">镜像名</label>
               <input id="ifImage" v-model="imageForm.image" class="field-input mono" placeholder="openbot-gui:24.04" autocomplete="off" spellcheck="false" />
@@ -1171,6 +1206,19 @@ const wslHelpNeeded = computed(() => {
                 <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'win' }">
                   <input type="radio" name="if-proto" value="win" v-model="imageForm.controlProtocol" />
                   Win 注入（SendInput）
+                </label>
+                <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'none' }">
+                  <input type="radio" name="if-proto" value="none" v-model="imageForm.controlProtocol" />
+                  无（纯命令行）
+                </label>
+              </div>
+            </div>
+            <div v-else-if="imageForm.carrier === 'android'" class="field">
+              <span class="field-label">控制协议</span>
+              <div class="proto-seg" role="radiogroup" aria-label="控制协议">
+                <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'android' }">
+                  <input type="radio" name="if-proto" value="android" v-model="imageForm.controlProtocol" />
+                  Android 注入（input）
                 </label>
                 <label class="proto-opt" :class="{ 'is-on': imageForm.controlProtocol === 'none' }">
                   <input type="radio" name="if-proto" value="none" v-model="imageForm.controlProtocol" />

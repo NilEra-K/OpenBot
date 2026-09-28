@@ -34,6 +34,9 @@ import {
   SshBoxBackend,
   SshWindowsBoxBackend,
   SshWindowsScreenControl,
+  AdbBoxBackend,
+  AdbScreenControl,
+  adbBoxId,
   UtmBoxBackend,
   RoutingBoxBackend,
   WslBoxBackend,
@@ -224,13 +227,13 @@ const automationPatchSchema = automationInputSchema.partial().extend({ id: z.str
  *  patch 不带 carrier 条件校验（部分载荷由 store 层 update 合并后 validateEntry 兜底） */
 const imageInputBase = z.object({
   name: z.string().trim().min(1).max(64),
-  carrier: z.enum(['container', 'ssh', 'host-screen', 'windows']),
+  carrier: z.enum(['container', 'ssh', 'host-screen', 'windows', 'android']),
   image: z.string().trim().min(1).max(200).optional(),
   host: z.string().trim().min(1).max(200).optional(),
   port: z.number().int().min(1).max(65535).optional(),
   user: z.string().trim().min(1).max(64).optional(),
   keyPath: z.string().trim().min(1).max(500).optional(),
-  controlProtocol: z.enum(['x11', 'none', 'host', 'win']),
+  controlProtocol: z.enum(['x11', 'none', 'host', 'win', 'android']),
   display: z.string().trim().max(40).optional(),
   /** host-screen 专属（P9-2 裁定 B）：绑定窗口标题子串；空缺=整屏 */
   windowTitle: z.string().trim().max(200).optional(),
@@ -247,6 +250,14 @@ const imageInputSchema = imageInputBase.superRefine((v, ctx) => {
   }
   if (v.carrier === 'windows' && v.controlProtocol !== 'win' && v.controlProtocol !== 'none') {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['controlProtocol'], message: 'Windows 载体控制协议只接受 win/none' })
+  }
+  if (v.carrier === 'android') {
+    if (v.host === undefined || v.host === '') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['host'], message: 'Android 镜像条目须指定设备序列号或 wifi 地址' })
+    }
+    if (v.controlProtocol !== 'android' && v.controlProtocol !== 'none') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['controlProtocol'], message: 'Android 载体控制协议只接受 android/none' })
+    }
   }
   if (v.carrier === 'host-screen' && v.controlProtocol !== 'host') {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['controlProtocol'], message: '宿主屏幕载体控制协议恒为 host（内置注入）' })
@@ -562,6 +573,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   let hasWindowsRoute = false
   const winBackends = new Map<string, SshWindowsBoxBackend>()
   const winScreens = new Map<string, SshWindowsScreenControl>()
+  // Android 设备（P9-3b）：per-entry 后端 + 屏幕适配器（boxId = adb-<serial> 同设备共享）
+  let hasAndroidRoute = false
+  const adbBackends = new Map<string, AdbBoxBackend>()
+  const adbScreens = new Map<string, AdbScreenControl>()
   const x11ScreenControl = new X11ScreenControl({
     host: routingBackend,
     ...(process.env.OPENBOT_GUI_DISPLAY !== undefined ? { display: process.env.OPENBOT_GUI_DISPLAY } : {}),
@@ -570,9 +585,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     resolve: (boxId) => {
       const entryId = entryIdOfBoxId(boxId)
       const hit = entryId !== null ? hostScreenControls.get(entryId) : undefined
-      return hit ?? winScreens.get(boxId) ?? x11ScreenControl
+      return hit ?? winScreens.get(boxId) ?? adbScreens.get(boxId) ?? x11ScreenControl
     },
-    adapters: () => [x11ScreenControl, ...hostScreenControls.values(), ...winScreens.values()],
+    adapters: () => [x11ScreenControl, ...hostScreenControls.values(), ...winScreens.values(), ...adbScreens.values()],
   })
   /** 窗口清单探测（v1.hostscreen.windows——懒建单例通道，随应用退出 dispose） */
   let windowProbe: HostScreenControl | null = null
@@ -622,6 +637,22 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       if (entry.controlProtocol === 'win') {
         hasWindowsRoute = true
         if (gatewayStarted) ensureComputerTools('Windows 机内条目运行中注册（PowerShell SendInput）')
+      }
+    } else if (entry.carrier === 'android') {
+      // Android 设备（P9-3b）：per-entry 后端 + 屏幕适配器（同序列号收敛——同一设备面）
+      const boxId = adbBoxId(entry.host ?? '')
+      let backend = adbBackends.get(boxId)
+      if (backend === undefined) {
+        backend = new AdbBoxBackend({ host: entry.host ?? '', now: Date.now })
+        adbBackends.set(boxId, backend)
+      }
+      if (!adbScreens.has(boxId)) {
+        adbScreens.set(boxId, new AdbScreenControl({ host: backend }))
+      }
+      routingBackend.registerRoute(entry.id, { backend })
+      if (entry.controlProtocol === 'android') {
+        hasAndroidRoute = true
+        if (gatewayStarted) ensureComputerTools('Android 设备条目运行中注册（input 注入）')
       }
     } else if (chosen.backendId === 'docker' || chosen.backendId === 'podman') {
       routingBackend.registerRoute(entry.id, {
@@ -680,6 +711,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
             geo !== null
               ? `；屏幕 ${geo.width}×${geo.height}（注入能力就绪——SendInput）`
               : '；屏幕几何不可得（桌面会话未登录或 PS 受限——注入能力待真机核）'
+        }
+        await probe.teardown(boxId)
+        return { ok: true, detail }
+      } catch (err) {
+        return { ok: false, reason: (err instanceof Error ? err.message : String(err)).slice(0, 200) }
+      }
+    }
+    if (entry.carrier === 'android') {
+      // Android 设备（P9-3b）：真实 attach（adb 连通 + 工作目录）→ android 协议加测屏幕几何
+      const probe = new AdbBoxBackend({ host: entry.host ?? '', now: Date.now })
+      try {
+        const boxId = await probe.create({ image: entry.id })
+        let detail = 'Android 设备连接正常（adb 就绪）'
+        if (entry.controlProtocol === 'android') {
+          const probeScreen = new AdbScreenControl({ host: probe })
+          const geo = await probeScreen.geometry(boxId)
+          detail +=
+            geo !== null
+              ? `；屏幕 ${geo.width}×${geo.height}（注入能力就绪——input 命令）`
+              : '；屏幕几何不可得（wm size 失败——设备碎片化或未点亮）'
         }
         await probe.teardown(boxId)
         return { ok: true, detail }
@@ -781,6 +832,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   //（E2E/显式开启）；生产门 = GUI 工具集探测 ∩ 主力 provider 视觉声明，在名册装配后探测
   // 注册（见下方 addAgent 之后——探测需要 Box 在场）。enabled 是运行时可变事实（v1.box.gui.state）
   let computerEnabled = process.env.OPENBOT_COMPUTER === '1'
+  /** 工具族已注册标记（ensureComputerTools 幂等判据——与使能判据分离，v0.1.38 回归修复） */
+  let computerRegistered = false
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
@@ -1125,6 +1178,17 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
           winBackends.delete(bid)
         }
       }
+      if (entry?.carrier === 'android' && entry.host !== undefined) {
+        const bid = adbBoxId(entry.host)
+        const stillBound = (await imageStore.list()).some(
+          (e) => e.carrier === 'android' && adbBoxId(e.host ?? '') === bid,
+        )
+        if (!stillBound) {
+          adbScreens.get(bid)?.dispose()
+          adbScreens.delete(bid)
+          adbBackends.delete(bid)
+        }
+      }
       return { ok: true }
     }, z.object({ id: z.string() }))
     .register('v1.images.test', async (payload) => {
@@ -1315,7 +1379,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // 在场性门天然可运行时翻转）：registerImageRoute 在网关开启后发现首批条目时调
   // ensureComputerTools 补注册（幂等）；装配期仍走下方静态分支（switchableGate 时序）。
   const ensureComputerTools = (reason: string): void => {
-    if (computerEnabled) return
+    // 幂等判据 = 已注册（非已使能）——v0.1.37 修：曾用 computerEnabled 判据把 env 强制门与
+    // X11 探测两条路径挡在注册外（使能 true 即 return，工具永不注册——TOOL_NOT_FOUND）
+    if (computerRegistered) return
+    computerRegistered = true
     computerEnabled = true
     for (const tool of computerTools({
       backend: routedBackend, // 路由面——P8-4 起 agent 绑定的镜像 Box 也能 exec 到位
@@ -1343,8 +1410,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   if (!computerEnabled && hasWindowsRoute) {
     ensureComputerTools('Windows 机内条目在场（PowerShell SendInput）')
   }
+  // Android 设备分支（P9-3b）：android 协议条目在场即开注册（input/screenrecord 设备内建，
+  // 无需设备端预装；设备碎片化能力差异由 v1.images.test 如实报告）
+  if (!computerEnabled && hasAndroidRoute) {
+    ensureComputerTools('Android 设备条目在场（input 注入）')
+  }
   if (computerEnabled) {
-    console.log('[openbot] computer 工具族注册门通过（GUI 工具集探测 ∩ 在场性条目——生产门兑现）')
+    ensureComputerTools('装配期注册门通过（env 强制 / X11 探测 / 在场性条目）')
   }
 
   gatewayStarted = true // 网关已开——此后 registerImageRoute 的在场性门可运行时补注册

@@ -129,3 +129,25 @@ icacls "$env:ProgramData\ssh\administrators_authorized_keys" /inheritance:r /gra
 - **门控套件**：`OPENBOT_TEST_WINSSH=1 OPENBOT_TEST_WINSSH_HOST=<host> [PORT/USER/KEY]`
   基础链（attach/exec/env/fs/PTY 路径）；`OPENBOT_TEST_WINSSH_GUI=1` 注入/截屏/帧流全链
   （会真实注入目标机键鼠——需人在目标机旁监督）。
+
+## Android 设备（P9-3b——USB 真机 / wifi adb / 模拟器；真机链路经 OPENBOT_TEST_ADB 门控套件）
+
+目标设备一次性准备：
+
+```bash
+# USB 真机：开发者选项 → 开启 USB 调试 → 插线后确认序列号
+adb devices                 # 序列号在本机可见（授权弹窗须确认）
+# wifi 模式（同一局域网——首次需 USB）：
+adb tcpip 5555
+adb connect 192.168.1.50:5555
+```
+
+- **设备端零预装**：几何（`wm size`）/ 截屏（`screencap`）/ 注入（`input`）/ 实况
+  （`screenrecord --output-format=h264raw`）全为系统内建。
+- **诚实边界**：`input text` 仅 ASCII（中文需剪贴板/IME 方案——后续轮次）；组合键仅单修饰
+  （`input keycombination` 双 keycode，Android 12+）；滚轮 = 单指 swipe 屏幕中心近似；
+  screenrecord 180s 上限（客户端 while 循环重启，~0.5s 缺口）。
+- **坐标语义**：screencap 原生分辨率 1:1——capture 与注入同一坐标系，零换算。
+- **门控套件**：`OPENBOT_TEST_ADB=1 OPENBOT_TEST_ADB_HOST=<序列号或 ip:5555>` 基础链
+  （attach/exec/env/fs）；`OPENBOT_TEST_ADB_GUI=1` 注入/截屏/screenrecord 全链
+  （会真实触控设备——需人在旁监督）。

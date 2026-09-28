@@ -1810,6 +1810,64 @@ test('Windows 机内载体（P9-3a）：注册 + 真实测试如实报告（不�
   }
 })
 
+test('Android 载体（P9-3b）：注册 + 真实测试如实报告（设备未在场红 chip）+ 重启持久化', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-adb-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '镜像' }).click()
+
+    // —— 注册 Android 条目：载体单选 → 协议自动切 android → 序列号保存 ——
+    await page.getByRole('button', { name: '＋ 添加镜像' }).click()
+    await page.locator('label.proto-opt', { hasText: 'Android 设备' }).click()
+    await expect(page.locator('label.proto-opt', { hasText: 'Android 注入' })).toBeVisible()
+    await page.locator('#ifName').fill('测试手机')
+    await page.locator('#ifHost').fill('FAKE-SERIAL-9999')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    const row = page.locator('.cfg-row[data-image-id="img-1"]')
+    await expect(row).toBeVisible()
+    await expect(row).toContainText('Android')
+    await expect(row).toContainText('FAKE-SERIAL-9999')
+
+    // —— 真实测试：设备未在场（或 adb CLI 缺席）如实红 chip——失败语义环境无关断言 ——
+    await row.locator('[data-role="image-test"]').click()
+    await expect(row.locator('.chip-danger')).toBeVisible({ timeout: 30_000 })
+    await expect(row.locator('.chip-danger')).toHaveAttribute('title', /连接失败|adb devices|未在场|进程启动失败/)
+
+    // —— 重启持久化 + 删除二段确认 ——
+    await app.close()
+    const app2 = await _electron.launch({
+      args: ['.'],
+      env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+    })
+    const page2 = await app2.firstWindow()
+    try {
+      await expect(page2.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+      await page2.getByRole('button', { name: '设置', exact: true }).click()
+      await page2.locator('.settings-nav-item', { hasText: '镜像' }).click()
+      const row2 = page2.locator('.cfg-row[data-image-id="img-1"]')
+      await expect(row2).toBeVisible({ timeout: 10_000 })
+      await expect(row2).toContainText('Android')
+      const del = row2.locator('[data-role="image-remove"]')
+      await del.click()
+      await expect(del).toHaveText('确认删除？')
+      await del.click()
+      await expect(row2).toHaveCount(0)
+    } finally {
+      await app2.close()
+    }
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
 test('可用镜像探测：扫描报告来源事实（可用性 chip + 如实原因）+ 在场镜像注册预填', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-scan-'))
   const app = await _electron.launch({
