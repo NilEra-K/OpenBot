@@ -14,6 +14,8 @@
  * 参考：plan-screen-firstclass.md P9-3b、ARCHITECTURE.md §6、docs/platforms.md Android 节。
  */
 import { KernelError } from '@openbot/core'
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { runProcess, spawnShellProcess, spawnPipeProcess, pipeSessionOf } from '../procexec/index.js'
 import type { ProcRunner, ShellSpawner, PipeSpawner } from '../procexec/index.js'
 import { BoxesErrorCodes } from '../types.js'
@@ -37,6 +39,8 @@ import type {
 export interface AdbBoxBackendOptions {
   /** 设备序列号（USB）或 wifi 地址（`192.168.1.x:5555`——adb connect 后同为 -s 目标） */
   host: string
+  /** adb 可执行注入（测试锁定 argv 用；缺省走 resolveAdbCommand 探测——PATH > winget 包 > SDK 位） */
+  adbCommand?: string
   /** Box 内默认工作目录（Android 免 root 可写标准位） */
   workdir?: string
   /** 子进程执行器注入（测试脚本化替身） */
@@ -51,14 +55,59 @@ export interface AdbBoxBackendOptions {
 /** boxId 派生（adb- 前缀 + 序列号净化——kernel 路由层与后端共用，跨重启稳定） */
 export const adbBoxId = (host: string): string => `adb-${host.replace(/[^a-zA-Z0-9.-]/g, '-')}`
 
-/** adb 基础 argv：-s 选定目标设备（多设备并存互不串线；wire/wifi 地址同为 -s 目标） */
-export function adbBaseArgv(host: string, extra: string[] = []): string[] {
-  return ['adb', '-s', host, ...extra]
+/**
+ * adb 可执行解析（v0.1.40）：PATH 优先，缺席时探测常见安装位（win32：winget portable 包 /
+ * Android SDK 位 / Program Files——真机实锤 winget 装的 adb 不进 PATH，spawn ENOENT 炸
+ * 装配）。探测事实驱动惯例（probeAll 同哲学）：装在哪都能用，用户零 PATH 配置。
+ * 惰性缓存一次（进程生命周期内安装位不变）。
+ */
+let adbCommandCache: string | null = null
+export function resolveAdbCommand(): string {
+  if (adbCommandCache !== null) return adbCommandCache
+  adbCommandCache = 'adb'
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA ?? ''
+    if (local !== '') {
+      // winget portable 包（Google.PlatformTools_<hash>/platform-tools——目录名带源哈希，glob 前缀）
+      const wingetPkgs = join(local, 'Microsoft', 'WinGet', 'Packages')
+      try {
+        for (const name of readdirSync(wingetPkgs)) {
+          if (name.startsWith('Google.PlatformTools')) {
+            const hit = join(wingetPkgs, name, 'platform-tools', 'adb.exe')
+            if (existsSync(hit)) {
+              adbCommandCache = hit
+              return hit
+            }
+          }
+        }
+      } catch {
+        // 目录不在场——落下一候选
+      }
+      const sdk = join(local, 'Android', 'platform-tools', 'adb.exe')
+      if (existsSync(sdk)) {
+        adbCommandCache = sdk
+        return sdk
+      }
+    }
+    const pf = join(process.env.ProgramFiles ?? 'C:\\Program Files', 'platform-tools', 'adb.exe')
+    if (existsSync(pf)) {
+      adbCommandCache = pf
+      return pf
+    }
+  }
+  return adbCommandCache
+}
+
+/** adb 基础 argv：-s 选定目标设备（多设备并存互不串线；wire/wifi 地址同为 -s 目标）；
+ *  cmd 可注入（测试锁定 argv；缺省走探测解析） */
+export function adbBaseArgv(host: string, extra: string[] = [], cmd: string = resolveAdbCommand()): string[] {
+  return [cmd, '-s', host, ...extra]
 }
 
 export class AdbBoxBackend implements BoxBackend {
   readonly id = 'adb'
   readonly #host: string
+  readonly #adbCommand: string
   readonly #workdir: string
   readonly #run: ProcRunner
   readonly #spawnShell: ShellSpawner
@@ -70,6 +119,7 @@ export class AdbBoxBackend implements BoxBackend {
 
   constructor(options: AdbBoxBackendOptions) {
     this.#host = options.host
+    this.#adbCommand = options.adbCommand ?? resolveAdbCommand()
     this.#workdir = options.workdir ?? '/data/local/tmp/openbot'
     this.#run = options.run ?? runProcess
     this.#spawnShell = options.spawnShell ?? spawnShellProcess
@@ -82,11 +132,17 @@ export class AdbBoxBackend implements BoxBackend {
     return { ...SSH_BOX_CAPS }
   }
 
-  /** create = attach（裁定 C）：连通验证 + 工作目录确保 + 记账；幂等（已附着零网络往返） */
+  /** create = attach（裁定 C）：连通验证 + 工作目录确保 + 记账；幂等（已附着零网络往返）。
+   *  wifi 地址（含 :）自动 connect（v0.1.40 UX 修复：「客户端填地址还要去终端手动 connect」
+   *  的缺口——`adb -s` 不自动连接 wifi 目标；connect 幂等已连时零副作用，失败不拦截——
+   *  连通验证会给出真实错误）。USB 序列号/mDNS 别名不含冒号不受影响 */
   async create(spec: BoxSpec): Promise<BoxId> {
     if (this.#attached) return this.#boxId
+    if (this.#host.includes(':')) {
+      await this.#run({ command: [this.#adbCommand, 'connect', this.#host], timeoutMs: 15_000 }).catch(() => {})
+    }
     const r = await this.#run({
-      command: [...adbBaseArgv(this.#host, ['shell']), 'echo ok'],
+      command: [...adbBaseArgv(this.#host, ['shell'], this.#adbCommand), 'echo ok'],
       timeoutMs: 30_000,
     })
     if (r.exitCode !== 0 || !r.stdout.includes('ok')) {
@@ -94,7 +150,7 @@ export class AdbBoxBackend implements BoxBackend {
       throw new KernelError(BoxesSshErrorCodes.BOX_CREATE_FAILED, `adb 连接失败（exit ${r.exitCode}）：${detail}——请用 adb devices 核对序列号`)
     }
     const init = await this.#run({
-      command: [...adbBaseArgv(this.#host, ['shell']), `mkdir -p ${sshQuote(this.#workdir)}`],
+      command: [...adbBaseArgv(this.#host, ['shell'], this.#adbCommand), `mkdir -p ${sshQuote(this.#workdir)}`],
       timeoutMs: 60_000,
     })
     if (init.exitCode !== 0) {
@@ -111,7 +167,7 @@ export class AdbBoxBackend implements BoxBackend {
   async exec(boxId: BoxId, spec: ExecSpec): Promise<ExecResult> {
     this.#require(boxId)
     const r = await this.#run({
-      command: [...adbBaseArgv(this.#host, ['shell']), buildRemoteScript(spec.command, spec, this.#workdir)],
+      command: [...adbBaseArgv(this.#host, ['shell'], this.#adbCommand), buildRemoteScript(spec.command, spec, this.#workdir)],
       timeoutMs: spec.timeoutMs,
       onChunk: spec.onChunk,
       ...(spec.signal !== undefined ? { signal: spec.signal } : {}),
@@ -128,7 +184,7 @@ export class AdbBoxBackend implements BoxBackend {
   async openShell(boxId: BoxId, _opts: ShellOpenOptions = {}): Promise<ShellSession> {
     this.#require(boxId)
     // -t 强制分配 PTY（设备端 mksh 交互）；Windows 无 stty 等价物——80×24 缺省记档
-    const proc = this.#spawnShell([...adbBaseArgv(this.#host, ['-tt', 'shell'])])
+    const proc = this.#spawnShell([...adbBaseArgv(this.#host, ['-tt', 'shell'], this.#adbCommand)])
     let dataCb: ((text: string) => void) | null = null
     let exitCb: ((code: number | null) => void) | null = null
     proc.onOutput((text) => dataCb?.(text))
@@ -147,9 +203,15 @@ export class AdbBoxBackend implements BoxBackend {
 
   async openPipe(boxId: BoxId, spec: PipeSpec): Promise<PipeSession> {
     this.#require(boxId)
-    // adb shell 无 -T/-t 分化——stdout 二进制纯净性由采集命令自保（screenrecord 原始字节直出；
-    // 若设备端 sh 引入 \r\n 翻损由消费方容错——b64 行帧方案不受影响）
-    const argv = [...adbBaseArgv(this.#host, ['shell']), buildRemoteScript(spec.command, spec, this.#workdir)]
+    // raw 直通（v0.1.40 吞吐修复）：adb exec-out 原始二进制通道——无 pty（无 CRLF 翻损）、
+    // 无 shell 包装（无 buildRemoteScript 转义层）、吞吐跑满码率（shell pty 实测掐到 ~1Mbps）。
+    // command 直接作为 exec-out 的 argv
+    if (spec.raw === true) {
+      const argv = [...adbBaseArgv(this.#host, ['exec-out'], this.#adbCommand), ...spec.command]
+      return pipeSessionOf(this.#spawnPipe(argv))
+    }
+    // shell 包装通道（缺省）：stdout 二进制纯净性由采集命令自保（b64 行帧方案）
+    const argv = [...adbBaseArgv(this.#host, ['shell'], this.#adbCommand), buildRemoteScript(spec.command, spec, this.#workdir)]
     return pipeSessionOf(this.#spawnPipe(argv))
   }
 
@@ -167,7 +229,7 @@ export class AdbBoxBackend implements BoxBackend {
     // 内容走 stdin b64（toybox base64 -d 设备端齐备）；读 EOF 即落盘
     const b64 = Buffer.from(content, 'utf8').toString('base64')
     const r = await this.#run({
-      command: [...adbBaseArgv(this.#host, ['shell']), `base64 -d > ${sshQuote(path)}`],
+      command: [...adbBaseArgv(this.#host, ['shell'], this.#adbCommand), `base64 -d > ${sshQuote(path)}`],
       input: b64,
       timeoutMs: 120_000,
     })

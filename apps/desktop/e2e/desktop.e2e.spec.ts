@@ -6,7 +6,7 @@
  */
 import { test, expect, _electron } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockOpenAi } from './mock-openai'
@@ -1995,6 +1995,44 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
     } finally {
       await app2.close()
     }
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('载体不可达不炸启动（v0.1.40 恢复降级）：绑定离线 android 条目的 agent → 应用照常起 + 回默认沙箱', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-adbdown-'))
+  // 预置持久化状态（绕过 UI——运行中注册对不可达载体会如实失败，造不出这个状态）：
+  // android 条目（假序列号）+ 绑定它的 worker agent 档案
+  await mkdir(join(userData, 'data', 'images'), { recursive: true }).catch(() => {})
+  await mkdir(join(userData, 'data', 'agents', 'worker-offline'), { recursive: true })
+  await writeFile(
+    join(userData, 'data', 'images.json'),
+    JSON.stringify({ version: 1, images: [{ id: 'img-1', name: '离线手机', carrier: 'android', host: 'FAKE-SERIAL-DOWN', controlProtocol: 'android', createdAt: 1 }] }, null, 2),
+  )
+  await writeFile(
+    join(userData, 'data', 'agents', 'worker-offline', 'profile.json'),
+    JSON.stringify({ agentId: 'worker-offline', name: '离线工', role: 'worker', createdAt: 1, imageId: 'img-1' }, null, 2),
+  )
+  // 启动——恢复循环遇到不可达载体：降级默认沙箱（告警留痕），应用必须正常起（不弹装配失败）
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    // agent 恢复在场且回默认沙箱（boxId 非 adb- 前缀——降级实证）
+    await expect(page.locator('.roster-item', { hasText: '离线工' })).toBeVisible({ timeout: 10_000 })
+    await page.locator('.roster-item', { hasText: '离线工' }).click()
+    await page.getByTitle('会话档案').click()
+    // 降级实证：Box 归属为默认沙箱 box（box-N 格式，非 adb- 前缀）；镜像绑定行保留
+    // （档案事实——设备回场重启即恢复原载体；呈现层降级注记记为后续打磨）
+    await expect(page.locator('.ctx')).toContainText('镜像离线手机', { timeout: 10_000 })
+    const boxVal = (await page.locator('.ctx .kv', { hasText: 'Box 归属' }).locator('.v').innerText()).trim()
+    expect(boxVal.startsWith('box-')).toBe(true)
+    expect(boxVal.includes('adb-')).toBe(false)
   } finally {
     await app.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})

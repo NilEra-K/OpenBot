@@ -1329,7 +1329,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   for (const profile of await kernel.agentStore.list()) {
     if (profile.agentId === 'steward') continue
     // 镜像绑定恢复（P8-4）：悬空（条目已删）静默回默认 + 告警留痕——modelProvider 悬空双语义同款；
-    // 绑定在场则 create 直接落对应载体（路由后端按 id 分发——不可达机器在此如实失败并冒泡）
+    // **载体不可达同样降级**（v0.1.40 真机实锤：android/ssh/win 设备临时不在场炸掉整个应用
+    // 启动——桌面单机语义下不可接受）：恢复路径 create 失败 → 告警 + 回默认沙箱重试（绑定
+    // 保留在档案里，设备回场重启即恢复原载体）。运行中注册（addAgent 命令路径）失败仍冒泡——
+    // 用户当下操作要真实反馈
     let imageId: string | undefined
     if (profile.imageId !== undefined) {
       if ((await imageStore.get(profile.imageId)) !== null) {
@@ -1338,15 +1341,27 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         console.warn(`[openbot] agent ${profile.agentId} 绑定的镜像条目 ${profile.imageId} 已删除——回默认沙箱`)
       }
     }
-    await kernel.addAgent({
+    const restored = {
       agentId: profile.agentId,
       name: profile.name,
       ...(profile.color !== undefined ? { color: profile.color } : {}),
       // 模型覆盖（backlog ③）：恢复路径悬空静默回继承（告警留痕）——档案可能已被删除
       llm: await providerOfAgent(profile.modelProvider, true),
-      ...(imageId !== undefined ? { imageId } : {}),
       steward: profile.role === 'steward',
-    })
+    }
+    if (imageId === undefined) {
+      await kernel.addAgent(restored)
+      continue
+    }
+    try {
+      await kernel.addAgent({ ...restored, imageId })
+    } catch (err) {
+      const entry = await imageStore.get(imageId)
+      console.warn(
+        `[openbot] agent ${profile.agentId} 绑定的镜像「${entry?.name ?? imageId}」载体不可达（${err instanceof Error ? err.message.slice(0, 120) : String(err)}）——本次启动回默认沙箱（绑定保留，设备回场重启即恢复）`,
+      )
+      await kernel.addAgent(restored)
+    }
   }
 
   // 装配配置（E2E/演示用）：附加 worker agent——A2A 需要至少两名成员；共享同一

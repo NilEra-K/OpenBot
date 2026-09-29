@@ -245,9 +245,7 @@ const saveImage = async (): Promise<void> => {
     controlProtocol:
       imageForm.carrier === 'host-screen'
         ? ('host' as const)
-        : imageForm.carrier === 'android' && imageForm.controlProtocol !== 'none'
-          ? ('android' as const)
-          : imageForm.carrier === 'windows' && imageForm.controlProtocol !== 'none'
+        : imageForm.carrier === 'windows' && imageForm.controlProtocol !== 'none'
           ? ('win' as const)
           : imageForm.carrier === 'android' && imageForm.controlProtocol !== 'none'
             ? ('android' as const)
@@ -265,10 +263,19 @@ const saveImage = async (): Promise<void> => {
           }),
     ...(imageForm.carrier === 'ssh' && imageForm.display.trim() !== '' ? { display: imageForm.display.trim() } : {}),
   }
+  // 编辑前的连接事实（v0.1.40 UX：变更后已绑定 agent 的 Box 不热迁移——保存时提示重启）
+  const before = imageEditingId.value !== null ? kernel.images.find((e) => e.id === imageEditingId.value) ?? null : null
   try {
     if (imageEditingId.value !== null) await kernel.updateImage(imageEditingId.value, payload)
     else await kernel.addImage(payload)
     toast.push(imageEditingId.value !== null ? '镜像条目已更新' : '镜像条目已添加', 'success')
+    if (
+      before !== null &&
+      (before.host ?? '') !== (payload.host ?? '') &&
+      (before.carrier === 'android' || before.carrier === 'windows' || before.carrier === 'ssh')
+    ) {
+      toast.push('连接地址已变更——已绑定该镜像的 agent 须重启应用后生效（新建 agent 即时用新地址）', 'info')
+    }
     imageFormOpen.value = false
   } catch (err) {
     imageFormError.value = err instanceof Error ? err.message : String(err)

@@ -301,43 +301,61 @@ export class AdbScreenControl implements ScreenControl {
     // 等比缩到宽 720（偶数——h264 契约）；竖屏高换算
     const w = 720
     const h = Math.max(2, Math.round(((geo.height * w) / geo.width) / 2) * 2)
-    // b64 行帧通道（v0.1.39 修：adb shell pty 层把 \n 翻 \r\n——h264 裸流二进制会被毁；
-    // screenrecord | base64 流式行帧，剥 \r 解码零损。带宽 +33% 记档——wifi 可承受。
-    // --output-format=h264 = Annex B 裸流——真机首训实证 'h264raw' 是笔误参数值，设备如实
-    // Unknown format 拒绝；toybox base64 块缓冲流式输出（2s 窗口实测涌出），非全缓冲）。
-    // while 循环重启（screenrecord 180s 上限——重启 ~0.5s 缺口记档）
-    const loop = `while :; do screenrecord --size ${w}x${h} --bit-rate 4M --output-format=h264 - | base64; done`
-    const pipe = await this.#host.openPipe(boxId, {
-      command: ['sh', '-c', loop],
-    })
-    let lineBuf = ''
+    // exec-out 原始二进制通道（v0.1.40 吞吐根修）：无 pty（无 CRLF 翻损——b64 行帧层退役）、
+    // 吞吐跑满码率（shell pty 实测掐到 ~1Mbps，exec-out 实测 4.2Mbps 满速 4M——真机对照
+    // 数据入档 plan P9-3b）。--output-format=h264 = Annex B 裸流直通。
+    // screenrecord 180s 上限：进程退出即 session 内自动 respawn（对消费者透明——缺口 ~0.5s
+    // 记档；两次重启间 h264 无 IDR 间隙由解码器容错）
+    const spawnRecord = async () =>
+      this.#host.openPipe!(boxId, {
+        command: ['screenrecord', '--size', `${w}x${h}`, '--bit-rate', '4M', '--output-format', 'h264', '-'],
+        raw: true,
+      })
+    let pipe = await spawnRecord()
+    let dataCb: ((chunk: Uint8Array) => void) | null = null
+    let exitCb: ((code: number | null) => void) | null = null
+    let closed = false
+    let respawning = false
     const session: ScreenStreamSession = {
-      codec: 'h264', // 解码后 Annex B 裸流——WebCodecs 解码管线直用
+      codec: 'h264', // Annex B 裸流原始字节直通——WebCodecs 解码管线直用
       onData: (cb) => {
-        pipe.onData((chunk) => {
-          lineBuf += new TextDecoder('utf8').decode(chunk)
-          let idx = lineBuf.indexOf('\n')
-          while (idx >= 0) {
-            const line = lineBuf.slice(0, idx).replace(/\r/g, '')
-            lineBuf = lineBuf.slice(idx + 1)
-            if (line !== '') {
-              try {
-                cb(new Uint8Array(Buffer.from(line, 'base64')))
-              } catch {
-                // 坏帧跳过不拖累流（并行帧解码同哲学）
-              }
-            }
-            idx = lineBuf.indexOf('\n')
-          }
-        })
+        dataCb = cb
       },
-      onExit: (cb) => pipe.onExit(cb),
+      onExit: (cb) => {
+        exitCb = cb
+      },
       stderrTail: () => pipe.stderrTail(),
       close: () => {
-        // 杀本地 adb（连接断开 → 设备端 screenrecord 随 stdout 断自退；无 pidfile——记档）
+        if (closed) return
+        closed = true
         pipe.close()
       },
     }
+    pipe.onData((chunk) => dataCb?.(chunk))
+    pipe.onExit(() => {
+      if (closed) {
+        exitCb?.(null)
+        return
+      }
+      // 180s 录制上限到点——透明 respawn 续流（消费者零感知；失败重试一次后如实退）
+      if (respawning) {
+        exitCb?.(null)
+        return
+      }
+      respawning = true
+      void spawnRecord()
+        .then((next) => {
+          respawning = false
+          if (closed) {
+            next.close()
+            return
+          }
+          pipe = next
+          pipe.onData((chunk) => dataCb?.(chunk))
+          pipe.onExit(() => exitCb?.(null))
+        })
+        .catch(() => exitCb?.(null))
+    })
     this.#streams.add(session)
     return session
   }

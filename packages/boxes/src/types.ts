@@ -110,11 +110,16 @@ export interface ShellOpenOptions {
   rows?: number
 }
 
-/** 二进制管道启动参数：argv 直传（无 shell 无注入面）+ 环境注入（与 ExecSpec.env 同语义） */
+/** 二进制管道启动参数：argv 直传（无 shell 无注入面）+ 环境注入（与 ExecSpec.env 同语义）。
+ *  raw = 宿主 CLI 的原始二进制通道直通（P9-3b 吞吐修复：adb exec-out——无 pty 无 CRLF 无
+ *  吞吐瓶颈；command 直接作为 exec-out 的 argv，不进远端 shell 包装。adb 专属语义，其他
+ *  后端遇 raw 走缺省包装不受影响） */
 export interface PipeSpec {
   command: string[]
   cwd?: string
   env?: Record<string, string>
+  /** adb exec-out 直通（v0.1.40：shell pty 通道实测掐到 1Mbps，exec-out 跑满 4M 码率） */
+  raw?: boolean
 }
 
 /** 二进制管道会话（常驻进程）：stdout **原始字节**直出、零解码——Box 内常驻采集进程

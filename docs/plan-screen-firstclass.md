@@ -366,3 +366,35 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
   ③user 钳制的 span 选错（窗口宽 vs 屏幕宽——abs 坐标按窗口宽钳会截掉屏边）——窗口模式
   统一对屏幕 span 钳制、本地域校验独立做；④pump 早期帧早于 onData 挂接——加 pending 缓冲
   挂接即回放。
+
+### v0.1.40 增量记档（Android GUI 卡根修 + 两项 UX——用户真机体验反馈驱动）
+
+- **「手机 GUI 非常卡」根因（真机对照实验实锤）**：`adb shell` 的 pty 通道吞吐瓶颈 +
+  b64 膨胀双重开销——受控动态画面下 shell+b64 仅 ~1.0Mbps 有效视频流，而 `adb exec-out`
+  原始二进制通道跑满 4.2Mbps（4M 码率上限，4 倍差距）。**注意实验方法**：屏幕静止时
+  h264 VBR 输出极低，两通道对照无效——必须受控动态（input swipe 循环驱动）才有区分度。
+- **根修**：`PipeSpec.raw`（宿主 CLI 原始二进制通道——adb exec-out 专属语义，诚实建模）
+  + `AdbScreenControl.stream` 改 exec-out 裸流直通（b64 行帧层退役——无 pty 即无 CRLF，
+  零膨胀）+ **180s 录制上限改 session 内透明 respawn**（exec-out 无 shell 不能 while 循环
+  ——对消费者零感知续流，缺口 ~0.5s 记档）。
+- **UX-1（adb 自动 connect）**：`create` 对含 `:` 的 host 自动先 `adb connect`（幂等、失败
+  不拦截——连通验证给真实错误）——「客户端填 wifi 地址还要去终端手动 connect」缺口闭环。
+- **UX-2（条目变更提示）**：连接地址编辑保存时 toast 提示「已绑定 agent 须重启生效」
+  （Box 不热迁移是装配期语义——完整热迁移记档后续裁定）；顺带修 saveImage 三元嵌套的
+  android 重复分支手误（v0.1.38 批量脚本注入）。
+- **真机经验补录**：adb server 被 kill 后 **mDNS 自动发现偶发不恢复**（重开无线调试也不
+  重新广播到）——退回 `adb connect ip:端口` 直连即可（本轮验收即此路径）；mDNS 别名是
+  便利非依赖。
+
+### v0.1.40 追加（启动炸装配修复——真机报障二连）
+
+- **载体不可达炸启动**（用户真机实锤：android 设备临时不在场 → 恢复循环 addAgent 冒泡 →
+  「内核装配失败」弹窗，应用起不来）：恢复路径 create 失败改**降级默认沙箱 + 显著告警**
+  （绑定保留在档案，设备回场重启即恢复原载体）——与「条目悬空回默认」同哲学的补全；
+  运行中注册（命令路径）失败仍如实冒泡（用户当下反馈）。E2E 锁死（预置持久化数据构造
+  绑定离线条目的 agent → 重启 → 应用正常起 + Box 归属回默认沙箱 + 档案绑定行保留）。
+- **adb 可执行探测**（用户真机实锤：winget 装的 adb 不进 PATH → ProcSpawnError）：
+  `resolveAdbCommand`——PATH 优先，缺席探测常见安装位（win32：winget portable 包
+  Google.PlatformTools_*/platform-tools、Android SDK 位、Program Files），惰性缓存；
+  探测事实驱动惯例（probeAll 同哲学）——装在哪都能用，用户零 PATH 配置。
+  `adbCommand` 可注入参数（测试锁 argv 用）。

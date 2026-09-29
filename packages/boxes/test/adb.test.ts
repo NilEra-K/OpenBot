@@ -27,12 +27,12 @@ const runnerOf = () => {
 describe('AdbBoxBackend（替身 run）', () => {
   const make = () => {
     const { calls, result, run } = runnerOf()
-    const b = new AdbBoxBackend({ host: 'R58NXXXXXX', run, now: () => 42 })
+    const b = new AdbBoxBackend({ host: 'R58NXXXXXX', run, adbCommand: 'adb', now: () => 42 })
     return { b, calls, result }
   }
 
   it('caps：SSH 同矩阵（persistent ✓ / snapshot ✗ / interactive ✓ / isolation high）', () => {
-    expect(new AdbBoxBackend({ host: 'h' }).caps()).toEqual(SSH_BOX_CAPS)
+    expect(new AdbBoxBackend({ host: 'h', adbCommand: 'adb' }).caps()).toEqual(SSH_BOX_CAPS)
   })
 
   it('create：连通（echo ok 应答校验）+ 工作目录确保；幂等零二次往返', async () => {
@@ -217,22 +217,67 @@ describe('AdbScreenControl（替身 host）', () => {
     })
   })
 
-  it('stream：screenrecord 循环脚本（b64 行帧）+ h264 codec；CRLF 翻损剥洗', async () => {
+  it('stream：exec-out 原始裸流直通（raw 通道）+ 180s 到点透明 respawn', async () => {
     const { host, pipes } = hostOf()
     const ctrl = new AdbScreenControl({ host, execTimeoutMs: 500 })
     const s = await ctrl.stream('adb-h', { codec: 'h264' })
     expect(s.codec).toBe('h264')
     const got: string[] = []
     s.onData((b) => got.push(Buffer.from(b).toString('utf8')))
-    // adb pty 把 \n 翻 \r\n——b64 行帧 + 剥 \r 解码零损
-    pipes[0]!.emit(Buffer.from('h264-chunk-1').toString('base64') + '\r\n')
-    pipes[0]!.emit(Buffer.from('h264-chunk-2').toString('base64') + '\r\n')
+    // 原始字节直通（无 b64 无 CRLF 剥洗——exec-out 无 pty）
+    pipes[0]!.emit('h264-chunk-1')
+    pipes[0]!.emit('h264-chunk-2')
     await new Promise((r) => setTimeout(r, 10))
     expect(got).toEqual(['h264-chunk-1', 'h264-chunk-2'])
+    // 180s 到点（pipe 退出）→ 透明 respawn：新 pipe 就位后续流
+    pipes[0]!.exit(null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(pipes.length).toBe(2) // respawn 产生了新管道
+    pipes[1]!.emit('h264-after-respawn')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(got).toContain('h264-after-respawn')
     s.close()
-    expect(pipes[0]!.killed).toBe(true)
+    expect(pipes[1]!.killed).toBe(true)
   })
 })
 
 // argv 面静态引用（保持 adbBaseArgv 导出被消费）
 void adbBaseArgv
+
+describe('v0.1.40 语义（自动 connect + exec-out raw 通道）', () => {
+  it('create：wifi 地址（含冒号）自动先 adb connect；USB 序列号零 connect', async () => {
+    const wifi = runnerOf()
+    const bw = new AdbBoxBackend({ host: '192.168.1.50:5555', run: wifi.run, adbCommand: 'adb' })
+    await bw.create({ image: 'x' })
+    expect(wifi.calls[0]!.argv).toEqual(['adb', 'connect', '192.168.1.50:5555'])
+    expect(wifi.calls[1]!.argv.slice(0, 5)).toEqual(['adb', '-s', '192.168.1.50:5555', 'shell', 'echo ok'])
+    const usb = runnerOf()
+    const bu = new AdbBoxBackend({ host: 'R58NXXXXXX', run: usb.run, adbCommand: 'adb' })
+    await bu.create({ image: 'x' })
+    expect(usb.calls[0]!.argv).not.toEqual(['adb', 'connect']) // 首条即连通验证
+    expect(usb.calls[0]!.argv[1]).toBe('-s')
+  })
+
+  it('openPipe raw：exec-out 直通 argv（不进 shell 包装）；缺省仍走 shell', async () => {
+    const { calls, run } = runnerOf()
+    const spawnPipeCalls: string[][] = []
+    const b = new AdbBoxBackend({
+      host: 'R58N',
+      adbCommand: 'adb',
+      run,
+      spawnPipe: (argv) => {
+        spawnPipeCalls.push(argv)
+        return { onOutput() {}, onExit() {}, stderrTail: () => '', write() {}, kill() {} } as never
+      },
+    })
+    await b.create({ image: 'x' })
+    await b.openPipe(adbBoxId('R58N'), {
+      command: ['screenrecord', '--output-format', 'h264', '-'],
+      raw: true,
+    })
+    expect(spawnPipeCalls[0]).toEqual(['adb', '-s', 'R58N', 'exec-out', 'screenrecord', '--output-format', 'h264', '-'])
+    await b.openPipe(adbBoxId('R58N'), { command: ['cat'] })
+    expect(spawnPipeCalls[1]!.slice(0, 4)).toEqual(['adb', '-s', 'R58N', 'shell']) // 缺省 shell 包装
+    void calls
+  })
+})
