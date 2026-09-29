@@ -217,16 +217,18 @@ describe('AdbScreenControl（替身 host）', () => {
     })
   })
 
-  it('stream：screenrecord 循环脚本 + h264 codec（Annex B 直用）', async () => {
+  it('stream：screenrecord 循环脚本（b64 行帧）+ h264 codec；CRLF 翻损剥洗', async () => {
     const { host, pipes } = hostOf()
     const ctrl = new AdbScreenControl({ host, execTimeoutMs: 500 })
     const s = await ctrl.stream('adb-h', { codec: 'h264' })
     expect(s.codec).toBe('h264')
     const got: string[] = []
     s.onData((b) => got.push(Buffer.from(b).toString('utf8')))
-    pipes[0]!.emit('raw-h264-chunk')
+    // adb pty 把 \n 翻 \r\n——b64 行帧 + 剥 \r 解码零损
+    pipes[0]!.emit(Buffer.from('h264-chunk-1').toString('base64') + '\r\n')
+    pipes[0]!.emit(Buffer.from('h264-chunk-2').toString('base64') + '\r\n')
     await new Promise((r) => setTimeout(r, 10))
-    expect(got).toEqual(['raw-h264-chunk']) // 原始字节直通（零拆帧——h264raw 语义）
+    expect(got).toEqual(['h264-chunk-1', 'h264-chunk-2'])
     s.close()
     expect(pipes[0]!.killed).toBe(true)
   })

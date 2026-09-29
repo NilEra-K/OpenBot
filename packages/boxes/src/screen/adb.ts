@@ -301,14 +301,36 @@ export class AdbScreenControl implements ScreenControl {
     // 等比缩到宽 720（偶数——h264 契约）；竖屏高换算
     const w = 720
     const h = Math.max(2, Math.round(((geo.height * w) / geo.width) / 2) * 2)
+    // b64 行帧通道（v0.1.39 修：adb shell pty 层把 \n 翻 \r\n——h264 裸流二进制会被毁；
+    // screenrecord | base64 流式行帧，剥 \r 解码零损。带宽 +33% 记档——wifi 可承受。
+    // --output-format=h264 = Annex B 裸流——真机首训实证 'h264raw' 是笔误参数值，设备如实
+    // Unknown format 拒绝；toybox base64 块缓冲流式输出（2s 窗口实测涌出），非全缓冲）。
     // while 循环重启（screenrecord 180s 上限——重启 ~0.5s 缺口记档）
-    const loop = `while :; do screenrecord --size ${w}x${h} --bit-rate 4M --output-format=h264raw -; done`
+    const loop = `while :; do screenrecord --size ${w}x${h} --bit-rate 4M --output-format=h264 - | base64; done`
     const pipe = await this.#host.openPipe(boxId, {
       command: ['sh', '-c', loop],
     })
+    let lineBuf = ''
     const session: ScreenStreamSession = {
-      codec: 'h264', // Annex B 裸流——WebCodecs 解码管线直用（比宿主屏幕 L2 还高一档）
-      onData: (cb) => pipe.onData(cb),
+      codec: 'h264', // 解码后 Annex B 裸流——WebCodecs 解码管线直用
+      onData: (cb) => {
+        pipe.onData((chunk) => {
+          lineBuf += new TextDecoder('utf8').decode(chunk)
+          let idx = lineBuf.indexOf('\n')
+          while (idx >= 0) {
+            const line = lineBuf.slice(0, idx).replace(/\r/g, '')
+            lineBuf = lineBuf.slice(idx + 1)
+            if (line !== '') {
+              try {
+                cb(new Uint8Array(Buffer.from(line, 'base64')))
+              } catch {
+                // 坏帧跳过不拖累流（并行帧解码同哲学）
+              }
+            }
+            idx = lineBuf.indexOf('\n')
+          }
+        })
+      },
       onExit: (cb) => pipe.onExit(cb),
       stderrTail: () => pipe.stderrTail(),
       close: () => {

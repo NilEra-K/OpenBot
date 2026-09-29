@@ -82,18 +82,22 @@ export function sshQuote(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`
 }
 
-/** argv → 远端 sh 串（exec/openPipe 共用的单一构造点）：cd 前缀 + env K='V' 前缀 + 全元素
- *  单引号转义。全元素加引号同时消灭词切分与 glob 展开（与容器 exec 的 argv 直传语义对齐——
- *  远端 shell 只做引号解析，不做文件名展开） */
+/** argv → 远端 sh 串（exec/openPipe 共用的单一构造点）：cd 语句 + env 前缀命令 + 全元素
+ *  单引号转义，**分号分隔**（v0.1.39 修：空格拼接使 cd 携多参数——POSIX 里 env 赋值在命令名
+ *  之后=普通参数，真机实证 `cd: too many arguments`；分号后 env 前缀紧贴命令名才是环境注入。
+ *  Android 真机验收首证——SSH 真机链路此前未跑过，单测只锁 argv 形状锁不住执行语义） */
 export function buildRemoteScript(
   command: string[],
   opts: { cwd?: string; env?: Record<string, string> },
   workdir: string,
 ): string {
   const parts: string[] = [`cd ${sshQuote(opts.cwd ?? workdir)}`]
-  for (const [k, v] of Object.entries(opts.env ?? {})) parts.push(`${k}=${sshQuote(v)}`)
-  for (const arg of command) parts.push(sshQuote(arg))
-  return parts.join(' ')
+  const assignments: string[] = []
+  for (const [k, v] of Object.entries(opts.env ?? {})) assignments.push(`${k}=${sshQuote(v)}`)
+  for (const arg of command) assignments.push(sshQuote(arg))
+  const tail = assignments.join(' ')
+  if (tail !== '') parts.push(tail)
+  return parts.join('; ')
 }
 
 /** ssh 基础 argv（两载体共用——POSIX 与 Windows 机内同构；选项全在 destination 之前）。

@@ -151,3 +151,14 @@ adb connect 192.168.1.50:5555
 - **门控套件**：`OPENBOT_TEST_ADB=1 OPENBOT_TEST_ADB_HOST=<序列号或 ip:5555>` 基础链
   （attach/exec/env/fs）；`OPENBOT_TEST_ADB_GUI=1` 注入/截屏/screenrecord 全链
   （会真实触控设备——需人在旁监督）。
+
+### Android 真机经验（2026-09-29 小米设备 · wifi 首验补充）
+
+- **MIUI 注入权限**：普通「USB 调试」不够——须另开「USB 调试（安全设置）」（开发者选项内，
+  需插 SIM + 登录小米账号），否则 `input tap/swipe/text` 报 `Exception occurred while executing`。
+- **熄屏行为**：息屏后 `screencap` 挂起等帧（不报错）——GUI 操作/截屏链路须保持手机亮屏解锁。
+- **无线调试连接语义**：配对（`adb pair` + 配对码）**一次持久**——重开无线调试只换连接端口，
+  不必重新配对；连接端口每次开关会变，条目地址须同步编辑。新版 adb 有 mDNS 自动发现，
+  `adb devices` 里的别名 `adb-<guid>._adb-tls-connect._tcp` 可直接当 serial 用（免端口漂移）。
+- **`adb -s` 不自动 connect**：wifi 地址（`ip:port`）须先手动 `adb connect` 一次——产品化
+  「自动 connect」记为后续打磨项。

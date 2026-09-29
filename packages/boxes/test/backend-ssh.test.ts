@@ -95,7 +95,7 @@ describe('SshBoxBackend（脚本化替身）', () => {
     })
     expect(last(calls)).toEqual([
       ...BASE, 'vm.local',
-      `cd ${sshQuote('/tmp')} DISPLAY=${sshQuote(':0')} ${sshQuote('xdotool')} ${sshQuote('key')} ${sshQuote('Return')}`,
+      `cd ${sshQuote('/tmp')}; DISPLAY=${sshQuote(':0')} ${sshQuote('xdotool')} ${sshQuote('key')} ${sshQuote('Return')}`,
     ])
   })
 
@@ -106,7 +106,7 @@ describe('SshBoxBackend（脚本化替身）', () => {
     await backend.exec('ssh-vm.local', { command: ['echo', "it's a  test$HOME"] })
     expect(last(calls)).toEqual([
       ...BASE, 'vm.local',
-      `cd ${sshQuote('/work')} ${sshQuote('echo')} ${sshQuote("it's a  test$HOME")}`,
+      `cd ${sshQuote('/work')}; ${sshQuote('echo')} ${sshQuote("it's a  test$HOME")}`,
     ])
     // 转义正确性对拍：shQuote 产物在远端 sh 语义下还原原文（单测锁形状，真机套件锁行为）
     expect(sshQuote("it's")).toBe(`'it'\\''s'`)
@@ -154,7 +154,7 @@ describe('SshBoxBackend（脚本化替身）', () => {
     await expect(backend.fsRead('ssh-vm.local', '/etc/hostname')).resolves.toBe('vm-host\n')
     expect(last(calls)).toEqual([
       ...BASE, 'vm.local',
-      `cd ${sshQuote('/work')} ${sshQuote('cat')} ${sshQuote('--')} ${sshQuote('/etc/hostname')}`,
+      `cd ${sshQuote('/work')}; ${sshQuote('cat')} ${sshQuote('--')} ${sshQuote('/etc/hostname')}`,
     ])
     const { run: runFail } = scripted((spec) =>
       spec.command.at(-1)?.includes("'cat'") ? { ...OK, exitCode: 1 } : OK, // create（true/mkdir）放行，只失败 cat
@@ -241,7 +241,7 @@ describe('SshBoxBackend（脚本化替身）', () => {
     })
     expect(pipeArgv).toEqual([
       ...BASE, '-T', 'vm.local',
-      `cd ${sshQuote('/work')} DISPLAY=${sshQuote(':0')} ${sshQuote('sh')} ${sshQuote('-s')} ${sshQuote('openbot-gui-input')}`,
+      `cd ${sshQuote('/work')}; DISPLAY=${sshQuote(':0')} ${sshQuote('sh')} ${sshQuote('-s')} ${sshQuote('openbot-gui-input')}`,
     ])
     pipe.write('xdotool key Return\n')
     expect(wrote).toEqual(['xdotool key Return\n'])
@@ -292,11 +292,11 @@ describe('SshBoxBackend（脚本化替身）', () => {
 })
 
 describe('buildRemoteScript（远端命令构造纯函数）', () => {
-  it('cd 前缀恒在（cwd 缺省落工作目录）；env 键不加引号、值加引号；空 argv 合法（仅 cd）', () => {
+  it('cd 语句恒在（分号分隔——v0.1.39 修）；env 键不加引号、值加引号；空 argv 合法（仅 cd）', () => {
     expect(buildRemoteScript([], {}, '/work')).toBe(`cd ${sshQuote('/work')}`)
-    expect(buildRemoteScript(['true'], { cwd: '/a b' }, '/work')).toBe(`cd ${sshQuote('/a b')} ${sshQuote('true')}`)
+    expect(buildRemoteScript(['true'], { cwd: '/a b' }, '/work')).toBe(`cd ${sshQuote('/a b')}; ${sshQuote('true')}`)
     expect(buildRemoteScript(['sh', '-c', 'x'], { env: { A: '1', B: "q'z" } }, '/work')).toBe(
-      `cd ${sshQuote('/work')} A=${sshQuote('1')} B=${sshQuote("q'z")} ${sshQuote('sh')} ${sshQuote('-c')} ${sshQuote('x')}`,
+      `cd ${sshQuote('/work')}; A=${sshQuote('1')} B=${sshQuote("q'z")} ${sshQuote('sh')} ${sshQuote('-c')} ${sshQuote('x')}`,
     )
   })
 })

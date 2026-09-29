@@ -154,8 +154,12 @@ export class AdbBoxBackend implements BoxBackend {
   }
 
   async fsRead(boxId: BoxId, path: string): Promise<string | null> {
-    const r = await this.exec(boxId, { command: ['cat', path] })
-    return r.exitCode === 0 ? r.stdout : null
+    // b64 通道（v0.1.39 修：adb shell 的 pty 层把 stdout \n 翻成 \r\n——cat 直读内容被改写；
+    // b64 字符集不含 \r，剥洗零歧义，内容零损往返）
+    const r = await this.exec(boxId, { command: ['sh', '-c', `base64 ${sshQuote(path)}`] })
+    return r.exitCode === 0 && r.stdout !== ''
+      ? Buffer.from(r.stdout.replace(/\r/g, ''), 'base64').toString('utf8')
+      : null
   }
 
   async fsWrite(boxId: BoxId, path: string, content: string): Promise<void> {

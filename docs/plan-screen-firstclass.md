@@ -267,9 +267,32 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
 - [x] 6. E2E：Android 注册/设备未在场红 chip/重启持久/删除（mock 沙箱零真连）；门控套件
    `adb-real.test.ts`（`OPENBOT_TEST_ADB=1` 基础链 + `_GUI=1` 注入/截屏/screenrecord 全链 +
    注入往返实测打点）
-- [ ] 7. 真机监督验收：**待 Android 设备**（USB 调试或 wifi adb——`OPENBOT_TEST_ADB=1
-   OPENBOT_TEST_ADB_HOST=<序列号> [_GUI=1] pnpm vitest run packages/boxes/test/adb-real.test.ts`）
+- [x] 7. 真机监督验收（2026-09-29，小米 Android + wifi 无线调试，全绿——见下方验收记档）
 - [x] 8. 文档：ARCHITECTURE 十载体矩阵 + platforms.md adb 指引 + backlog ⑥ 状态
+
+### P9-3b 真机验收记档（2026-09-29，小米设备 · wifi 无线调试）
+
+- **全链绿**：attach → exec（分号拼接后 cwd/env 全对）→ fs b64 往返（中文无损）→ 几何
+  （wm size）→ 截屏（PNG）→ 注入（tap 真实触控）→ screenrecord 实况（b64 行帧满速）。
+- **实测数据回填**：注入往返 **199ms**（tap 单动作，含几何查询与 exec 双往返，wifi 链路）；
+  实况流 3s 窗口 **1493 个 b64 行帧 chunk**（数据量满速——设备编码器自适应，具体 fps 待
+  渲染端解码实测）。
+- **验收抓到三个真 bug 并当场修复**（门控套件价值二次兑现）：
+  ①**buildRemoteScript 空格拼接**——`cd '/w' VAR='v' cmd` 在 POSIX 是一个带多参数的 cd
+  （env 赋值在命令名后=普通参数），真机报 `cd: too many arguments`。**backend-ssh 既有
+  bug**（P8-1 起：单测只锁 argv 形状锁不住执行语义、SSH 真机验收从未跑过），P9-3b 复用
+  时继承暴露。修复 = `join('; ')`（cd 语句与命令段分号分隔，env 前缀紧贴命令名）。
+  ②**adb shell 的 CRLF 翻损**——pty 层把 stdout `\n` 翻 `\r\n`：fsRead cat 直读内容被改写、
+  h264 二进制流会被毁。修复 = b64 通道（fsRead `base64 <path>` 剥 `\r` 解码；stream
+  `screenrecord | base64` 行帧——b64 字符集不含 \r，剥洗零歧义，带宽 +33% wifi 可承受）。
+  ③**`--output-format=h264raw` 参数笔误**——合法值是 `h264`（Annex B 裸流）；设备如实报
+  Unknown format。真机实证 toybox base64 是块缓冲流式输出（2s 窗口涌出）——非全缓冲。
+- **真机经验记档（platforms.md 同步）**：MIUI 注入须额外开「USB 调试（安全设置）」（插
+  SIM + 登录小米账号），否则 `input tap` 报 SecurityException；熄屏时 screencap 挂起等帧
+  （20s 超时杀）——GUI 操作链路须保持亮屏；无线调试**配对一次持久**（重开只换连接端口，
+  不必重新 pair）；新版 adb 的 mDNS 自动发现可用别名 `adb-<guid>._adb-tls-connect._tcp`
+  作 serial（免端口漂移）；`adb -s` 不自动 connect——wifi 地址须先手动 `adb connect`
+  （产品化自动 connect 记为后续打磨项）。
 
 ### P9-3b 实施要点
 
