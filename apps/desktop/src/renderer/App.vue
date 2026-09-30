@@ -338,6 +338,32 @@ onUnmounted(() => kernel.shutdown())
   --info-rgb: 58, 111, 181;
 }
 
+/* ---- 浅色主题对称补强（v0.1.42 UI 精雕——设计审查：深色打磨多于浅色） ---- */
+/* chip 降饱和（白底上刺眼）——语义边框同步收敛 */
+:root[data-theme='light'] .chip-success {
+  background: rgba(var(--success-rgb), 0.08);
+  border-color: rgba(var(--success-rgb), 0.22);
+}
+
+:root[data-theme='light'] .chip-danger {
+  background: rgba(var(--danger-rgb), 0.07);
+  border-color: rgba(var(--danger-rgb), 0.22);
+}
+
+/* 次级按钮：边框加深一档 + hover 底色（原 hover 与默认难区分） */
+:root[data-theme='light'] .btn-secondary {
+  border-color: rgba(0, 0, 0, 0.26);
+}
+
+:root[data-theme='light'] .btn-secondary:hover {
+  background: var(--bg2);
+}
+
+/* 名册条目浅色边界（与栏底同明度导致边界模糊） */
+:root[data-theme='light'] .roster-item {
+  border-color: rgba(0, 0, 0, 0.07);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

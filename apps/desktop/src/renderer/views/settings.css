@@ -564,9 +564,22 @@
   background: var(--bg2);
 }
 
+/* 选中态（v0.1.42 UI 精雕）：radio 隐藏后此前只剩弱底色——无可见指示物，选中语义模糊
+ * （设计审查实证「多个选项看似高亮」）。加左侧圆点指示 + 边框提亮 + 字重一档 */
 .proto-opt.is-on {
-  border-color: rgba(var(--accent-rgb), 0.45);
+  border-color: rgba(var(--accent-rgb), 0.7);
   background: linear-gradient(0deg, var(--accent-weak), var(--accent-weak)), var(--bg1);
+  font-weight: 600;
+}
+
+.proto-opt.is-on::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  margin-right: 7px;
+  flex: none;
 }
 
 .proto-opt input[type='radio'] {
@@ -592,7 +605,7 @@
   align-items: center;
   gap: 12px;
   padding: 11px 14px;
-  margin-bottom: 6px;
+  margin-bottom: 8px; /* 4pt 刻度（v0.1.42）：行间距归 8——外距小于内距的模糊感修正 */
   background: var(--bg2);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -1296,4 +1309,73 @@
 .llm-icon-btn:hover {
   background: var(--bg3);
   color: var(--ink);
+}
+
+/* Android 设备发现/配对（P9-3c）：扫描列表 + 配对模态扫码视口 */
+.adb-device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.adb-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg0);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.adb-device-row:hover {
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.adb-device-meta {
+  color: var(--ink3);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.adb-pair-card {
+  max-width: 420px;
+}
+
+.adb-scan-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.adb-scan-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.adb-scan-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink3);
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 0 16px;
+  text-align: center;
 }

@@ -321,7 +321,7 @@ const goTo = (id: string): void => {
             ></circle>
           </template>
           <text class="glabel" :x="n.x" :y="n.y + n.r + 17">{{ n.label }}</text>
-          <text class="gcount" :x="n.x" :y="n.y + n.r + 30">×{{ nodeMsg[n.id] ?? 0 }}</text>
+          <text v-if="(nodeMsg[n.id] ?? 0) > 0" class="gcount" :x="n.x" :y="n.y + n.r + 30">×{{ nodeMsg[n.id] ?? 0 }}</text>
         </g>
       </svg>
 

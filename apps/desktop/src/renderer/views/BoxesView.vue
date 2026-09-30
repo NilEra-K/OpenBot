@@ -191,8 +191,9 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
         <span>运行 {{ sum.active }}</span>
         <span>休眠 {{ sum.sleeping }}</span>
         <span>快照态 {{ sum.snapshot }}</span>
-        <span class="box-sum-note">仪表按后端可测维度呈现（WSL：磁盘；CPU/内存属 OCI 后端项）</span>
       </div>
+      <!-- 说明文字独立次行（v0.1.42 UI 精雕：原挤在统计行内权重失衡） -->
+      <div class="box-sum-note">仪表按后端可测维度呈现（WSL：磁盘；CPU/内存属 OCI 后端项）</div>
 
       <div class="box-grid">
         <div v-for="box in kernel.boxes" :key="box.boxId" class="boxcard">
