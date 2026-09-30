@@ -36,6 +36,7 @@ import {
   SshWindowsScreenControl,
   AdbBoxBackend,
   AdbScreenControl,
+  AdbDiscovery,
   adbBoxId,
   UtmBoxBackend,
   RoutingBoxBackend,
@@ -1203,6 +1204,28 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       windowProbe ??= new HostScreenControl({ bridge: hostScreenBridge })
       return { windows: await windowProbe.listWindows() }
     })
+    // Android 设备发现与配对（plan-screen-firstclass P9-3c）：智能恢复优先的发现面——
+    // devices 列在场设备（USB/已连 wifi/mDNS），pair 走配对码（扫码 WIFI:S:..;P:..;;
+    // 解析出的服务名或手动 ip:配对端口）；只报告事实与执行配对，建条目仍走 v1.images.add
+    .register('v1.adb.devices', async () => {
+      const d = new AdbDiscovery()
+      try {
+        return { ok: true, devices: await d.listDevices() }
+      } catch (err) {
+        return { ok: false, reason: (err instanceof Error ? err.message : String(err)).slice(0, 200) }
+      }
+    })
+    .register('v1.adb.pair', async (payload) => {
+      const { target, code } = z.object({ target: z.string().trim().min(1).max(200), code: z.string().trim().min(4).max(8) }).parse(payload)
+      const d = new AdbDiscovery()
+      const fail = await d.pair(target, code)
+      if (fail !== null) return { ok: false, reason: fail }
+      // 配对成功 → mDNS 即将广播；对 ip:port 形态顺手 connect（服务名形态由 adb pair 已连）
+      if (target.includes(':')) {
+        await d.connect(target).catch(() => {})
+      }
+      return { ok: true }
+    }, z.object({ target: z.string().trim().min(1).max(200), code: z.string().trim().min(4).max(8) }))
     // 可用镜像探测（2026-09-14）：环境里实际在场的镜像清单（宿主 docker/podman + WSL 发行版内
     // docker）——注册表只含手动条目，此命令补「用户无从得知有哪些镜像」的发现面。
     // 按需触发（设置页按钮），只报告事实不自动入库；装配期已就绪的 platform 从作用域注入

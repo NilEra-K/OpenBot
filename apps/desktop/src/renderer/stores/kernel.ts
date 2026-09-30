@@ -692,6 +692,19 @@ export const useKernelStore = defineStore('kernel', {
       return await this.call<ImageTestResult>('v1.images.test', { id })
     },
     /** 宿主屏幕顶层窗口清单（P9-2——设置页绑定窗口下拉的事实源；按需枚举零常驻开销） */
+    /** Android 在场设备扫描（P9-3c——智能恢复优先发现面：USB/已连 wifi/mDNS） */
+    async scanAdbDevices(): Promise<Array<{ serial: string; state: string; product: string; model: string }>> {
+      const state = await this.call<{ ok: boolean; devices?: Array<{ serial: string; state: string; product: string; model: string }>; reason?: string }>('v1.adb.devices')
+      if (!state.ok || state.devices === undefined) {
+        throw new Error(state.reason ?? 'adb 设备扫描失败')
+      }
+      return state.devices
+    },
+    /** Android 无线配对（配对码——扫码服务名或手动 ip:配对端口） */
+    async adbPair(target: string, code: string): Promise<void> {
+      const r = await this.call<{ ok: boolean; reason?: string }>('v1.adb.pair', { target, code })
+      if (!r.ok) throw new Error(r.reason ?? '配对失败')
+    },
     async listHostWindows(): Promise<Array<{ title: string; x: number; y: number; width: number; height: number }>> {
       const state = await this.call<{ windows: Array<{ title: string; x: number; y: number; width: number; height: number }> }>('v1.hostscreen.windows')
       return state.windows

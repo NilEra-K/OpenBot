@@ -2038,3 +2038,40 @@ test('载体不可达不炸启动（v0.1.40 恢复降级）：绑定离线 andro
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('Android 配对向导（P9-3c）：扫描入口 + 配对模态双模式骨架（环境无关——摄像头/真机态门控外）', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-adbwiz-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '镜像' }).click()
+
+    await page.getByRole('button', { name: '＋ 添加镜像' }).click()
+    await page.locator('label.proto-opt', { hasText: 'Android 设备' }).click()
+    // 扫描按钮在场；点击后如实（有设备列行可点 / 无设备零行——环境无关只断言不炸）
+    await page.locator('[data-role="adb-scan"]').click()
+    await expect(page.locator('[data-role="adb-scan"]')).toBeEnabled({ timeout: 15_000 })
+
+    // 配对模态：双模式骨架 + 手动表单可填 + 失败如实（假地址——真 adb pair 拒绝）
+    await page.locator('[data-role="adb-pair-open"]').click()
+    const modal = page.locator('.adb-pair-card')
+    await expect(modal).toBeVisible()
+    await expect(modal.locator('.adb-scan-viewport')).toBeVisible()
+    await modal.locator('label.proto-opt', { hasText: '手动输入' }).click()
+    await page.locator('#adbPairTarget').fill('192.168.99.99:9999')
+    await page.locator('#adbPairCode').fill('123456')
+    await modal.locator('[data-role="adb-pair-submit"]').click()
+    await expect(modal.locator('.form-error')).toBeVisible({ timeout: 30_000 })
+    await modal.getByRole('button', { name: '取消' }).click()
+    await expect(modal).toHaveCount(0)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

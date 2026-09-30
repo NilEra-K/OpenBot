@@ -398,3 +398,28 @@ P9-1 一轮独立交付；P9-2/P9-3 按需。
   Google.PlatformTools_*/platform-tools、Android SDK 位、Program Files），惰性缓存；
   探测事实驱动惯例（probeAll 同哲学）——装在哪都能用，用户零 PATH 配置。
   `adbCommand` 可注入参数（测试锁 argv 用）。
+
+## P9-3c 实施记档（2026-09-30，用户裁定扫码为主配对模式——「优雅配对」轮）
+
+- [x] 1. jsQR 依赖引入（P9 首个 npm 依赖——用户豁免零依赖纪律：纯 JS/MIT/零原生零密码学，
+   摄像头扫码的唯一可行解码路径）
+- [x] 2. boxes/discovery.ts：parseAdbDevices（devices -l 解析）+ parsePairingQr（配对面板
+   `WIFI:S:服务名;P:码;;` 二维码格式）+ AdbDiscovery（listDevices/pair/connect——ProcRunner
+   注入，argv 锁死单测 5 例）
+- [x] 3. kernel：`v1.adb.devices`（在场清单——智能恢复优先发现面）/ `v1.adb.pair`（配对码
+   双形态：扫码服务名经 adb mDNS 解析 / 手动 ip:配对端口——成功后 ip 形态顺手 connect）
+- [x] 4. renderer：Android 表单「⟳ 扫描设备」（在场列表点选零输入）+「无线配对」模态——
+   扫码 tab（getUserMedia + 300ms 帧解码 jsQR，命中自动回填服务名+码）/ 手动 tab（兜底——
+   Windows mDNS 抽风时照手机屏输两值）；配对成功延迟 2s 自动重扫（mDNS 广播窗口）
+- [x] 5. E2E：向导骨架 + 手动配对失败如实态（环境无关）；真机三模式验收待用户实跑
+- [ ] 6. 真机验收：扫描选设备 / 扫码配对 / 手动配对三模式（用户小米实跑）
+
+### P9-3c 实施要点
+
+- **智能恢复优先**（配对失效真相分层的产品化）：扫描即恢复——USB 直插 / wifi 已连 / mDNS
+  发现的设备直接点选用，**多数「重新配对」场景实为端口漂移或手机重启后无线调试被系统关
+  （L1/L2），根本不该进配对流程**；只有 L3（真配对失效）才展开配对向导。
+- **扫码依赖 mDNS 的风险如实**：二维码只含服务名+码（无 IP）——`adb pair <服务名>` 由 adb
+  mDNS 解析；Windows mDNS 偶发抽风（已实证）→ 手动 tab 永久保留为兜底，不删。
+- **首个 npm 依赖的豁免依据**：jsQR 纯解码算法包（~50KB，MIT，无原生/网络/密码学面）——
+  与「CLI 即接口」纪律的边界（后者拒绝的是原生绑定与系统侵入面）记档区分。

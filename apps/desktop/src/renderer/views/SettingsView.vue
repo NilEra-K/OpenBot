@@ -7,7 +7,8 @@
  *   后端选择是装配期决策不热切换）。docker/podman 未实现前只读呈现（不放假选项）。
  * - 权限策略：呈现 Manual 审批闸门现状——不放假开关（内核无对应存储）。
  */
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import jsQR from 'jsqr'
 import { useKernelStore } from '../stores/kernel'
 import type { ProviderView, SandboxPref } from '../stores/kernel'
 import HelpTip from '../components/HelpTip.vue'
@@ -152,6 +153,111 @@ const imageForm = reactive<{
 /** 窗口绑定（P9-2）：顶层窗口清单（⟳ 枚举按钮按需拉取）+ 枚举中态 */
 const hostWindows = ref<Array<{ title: string; width: number; height: number }>>([])
 const hostWindowsLoading = ref(false)
+/** Android 设备发现与配对（P9-3c）：智能恢复优先——扫描在场设备（点选零输入）/ 配对向导（扫码主 + 手动兜底） */
+const adbDevices = ref<Array<{ serial: string; state: string; product: string; model: string }>>([])
+const adbScanning = ref(false)
+const scanAdbDevices = async (): Promise<void> => {
+  adbScanning.value = true
+  try {
+    adbDevices.value = await kernel.scanAdbDevices()
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  } finally {
+    adbScanning.value = false
+  }
+}
+/** 配对模态：扫码（摄像头 + jsQR 帧解码）主模式 / 手动（ip:配对端口 + 码）兜底 */
+const adbPairOpen = ref(false)
+const adbPairTab = ref<'scan' | 'manual'>('scan')
+const adbPairTarget = ref('')
+const adbPairCode = ref('')
+const adbPairBusy = ref(false)
+const adbPairError = ref<string | null>(null)
+/** 扫码状态：'idle' 无流 / 'scanning' 解码中 / 'denied' 摄像头不可用（如实 + 引导手动） */
+const adbScanCam = ref<'idle' | 'scanning' | 'denied'>('idle')
+const adbVideoEl = ref<HTMLVideoElement | null>(null)
+let adbScanTimer: ReturnType<typeof setInterval> | null = null
+let adbStream: MediaStream | null = null
+
+const openAdbPair = (): void => {
+  adbPairOpen.value = true
+  adbPairTab.value = 'scan'
+  adbPairTarget.value = ''
+  adbPairCode.value = ''
+  adbPairError.value = null
+}
+
+const stopAdbScanCam = (): void => {
+  if (adbScanTimer !== null) {
+    clearInterval(adbScanTimer)
+    adbScanTimer = null
+  }
+  adbStream?.getTracks().forEach((t) => t.stop())
+  adbStream = null
+  adbScanCam.value = 'idle'
+}
+
+const startAdbScanCam = async (): Promise<void> => {
+  try {
+    adbStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+  } catch {
+    adbScanCam.value = 'denied'
+    return
+  }
+  // 挂流到 video（模态内 ref）+ 定时帧解码（jsQR——WIFI:S:服务名;P:码;; 命中即回填）
+  const video = adbVideoEl.value
+  if (video !== null) {
+    video.srcObject = adbStream
+    await video.play().catch(() => {})
+  }
+  adbScanCam.value = 'scanning'
+  adbScanTimer = setInterval(() => {
+    const video = adbVideoEl.value
+    if (video === null || video.videoWidth === 0) return
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (ctx === null) return
+    ctx.drawImage(video, 0, 0)
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const hit = jsQR(img.data, img.width, img.height)
+    if (hit !== null && /^WIFI:S:[^;]+;P:[^;]+;;$/.test(hit.data.trim())) {
+      adbPairTarget.value = /^WIFI:S:([^;]+);P:([^;]+);;$/.exec(hit.data.trim())?.[1] ?? ''
+      adbPairCode.value = /^WIFI:S:([^;]+);P:([^;]+);;$/.exec(hit.data.trim())?.[2] ?? ''
+      toast.push('已识别配对码——确认配对', 'success')
+      stopAdbScanCam()
+    }
+  }, 300)
+}
+
+const submitAdbPair = async (): Promise<void> => {
+  if (adbPairBusy.value || adbPairTarget.value.trim() === '' || adbPairCode.value.trim() === '') return
+  adbPairBusy.value = true
+  adbPairError.value = null
+  try {
+    await kernel.adbPair(adbPairTarget.value.trim(), adbPairCode.value.trim())
+    toast.push('配对成功——等待设备出现在扫描列表（约 2 秒）', 'success')
+    adbPairOpen.value = false
+    stopAdbScanCam()
+    // mDNS 广播需要一点时间：延迟重扫，自动回填 host（零输入闭环）
+    setTimeout(() => {
+      void scanAdbDevices()
+    }, 2_000)
+  } catch (err) {
+    adbPairError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    adbPairBusy.value = false
+  }
+}
+
+const closeAdbPair = (): void => {
+  adbPairOpen.value = false
+  stopAdbScanCam()
+}
+
+onBeforeUnmount(stopAdbScanCam)
+
 const enumHostWindows = async (): Promise<void> => {
   hostWindowsLoading.value = true
   try {
@@ -1193,7 +1299,26 @@ const wslHelpNeeded = computed(() => {
             <template v-else-if="imageForm.carrier === 'android'">
               <div class="field">
                 <label class="field-label" for="ifHost">设备序列号或 wifi 地址</label>
-                <input id="ifHost" v-model="imageForm.host" class="field-input mono" placeholder="R58NXXXXXX 或 192.168.1.50:5555" autocomplete="off" spellcheck="false" />
+                <div class="cfg-inline">
+                  <input id="ifHost" v-model="imageForm.host" class="field-input mono" placeholder="点下方扫描选择，或手填" autocomplete="off" spellcheck="false" />
+                  <button class="btn btn-secondary btn-sm" type="button" data-role="adb-scan" :disabled="adbScanning" @click="scanAdbDevices">{{ adbScanning ? '扫描中…' : '⟳ 扫描设备' }}</button>
+                </div>
+                <!-- 在场设备（智能恢复：USB/已连 wifi/mDNS——点选零输入） -->
+                <div v-if="adbDevices.length > 0" class="adb-device-list">
+                  <button
+                    v-for="d in adbDevices"
+                    :key="d.serial"
+                    type="button"
+                    class="adb-device-row"
+                    data-role="adb-device"
+                    :title="'状态 ' + d.state"
+                    @click="imageForm.host = d.serial"
+                  >
+                    <span class="mono">{{ d.serial }}</span>
+                    <span class="adb-device-meta">{{ d.model || d.product || '' }} · {{ d.state }}</span>
+                  </button>
+                </div>
+                <button class="btn btn-ghost btn-sm" type="button" data-role="adb-pair-open" @click="openAdbPair">⧉ 无线配对新设备</button>
               </div>
               <div class="field">
                 <p class="field-note">
@@ -1264,6 +1389,64 @@ const wslHelpNeeded = computed(() => {
       </div>
 
       </div>
+      <!-- Android 无线配对模态（P9-3c）：扫码主模式（摄像头 + jsQR）/ 手动兜底（ip:配对端口 + 码） -->
+      <div v-if="adbPairOpen" class="wiz-overlay" @mousedown.self="closeAdbPair()">
+        <div class="wiz-card adb-pair-card" role="dialog" aria-label="Android 无线配对" @keydown.escape="closeAdbPair()">
+          <div class="wiz-head">
+            <span class="wiz-title">无线配对</span>
+            <button class="wiz-close" type="button" aria-label="关闭" @click="closeAdbPair()">✕</button>
+          </div>
+          <div class="wiz-body">
+            <div class="field">
+              <div class="proto-seg" role="radiogroup" aria-label="配对方式">
+                <label class="proto-opt" :class="{ 'is-on': adbPairTab === 'scan' }">
+                  <input type="radio" name="adb-pair-tab" value="scan" v-model="adbPairTab" @change="adbPairTab === 'scan' ? undefined : stopAdbScanCam()" />
+                  扫码（推荐）
+                </label>
+                <label class="proto-opt" :class="{ 'is-on': adbPairTab === 'manual' }">
+                  <input type="radio" name="adb-pair-tab" value="manual" v-model="adbPairTab" @change="adbPairTab === 'manual' ? stopAdbScanCam() : undefined" />
+                  手动输入
+                </label>
+              </div>
+            </div>
+            <template v-if="adbPairTab === 'scan'">
+              <p class="field-note">手机：开发者选项 → 无线调试 → 「使用配对码配对设备」→ 把屏幕上的二维码对准摄像头。</p>
+              <div class="adb-scan-viewport" data-role="adb-scan-viewport">
+                <video
+                  ref="adbVideoEl"
+                  class="adb-scan-video"
+                  autoplay
+                  muted
+                  playsinline
+                ></video>
+                <div v-if="adbScanCam === 'idle'" class="adb-scan-hint">
+                  <button class="btn btn-secondary btn-sm" type="button" data-role="adb-scan-start" @click="startAdbScanCam">开启摄像头</button>
+                </div>
+                <div v-else-if="adbScanCam === 'denied'" class="adb-scan-hint">摄像头不可用（无设备或被拒绝）——切「手动输入」照手机屏幕填写</div>
+                <div v-else-if="adbPairTarget === ''" class="adb-scan-hint">对准手机上的二维码…</div>
+              </div>
+            </template>
+            <template v-else>
+              <p class="field-note">照手机「使用配对码配对设备」面板填写：IP 地址和端口 + 配对码。</p>
+              <div class="field">
+                <label class="field-label" for="adbPairTarget">配对地址（IP:端口）</label>
+                <input id="adbPairTarget" v-model="adbPairTarget" class="field-input mono" placeholder="192.168.31.141:37547" autocomplete="off" spellcheck="false" />
+              </div>
+            </template>
+            <div class="field">
+              <label class="field-label" for="adbPairCode">配对码（6 位）</label>
+              <input id="adbPairCode" v-model="adbPairCode" class="field-input mono" placeholder="455194" maxlength="8" autocomplete="off" />
+            </div>
+            <p v-if="adbPairError" class="form-error">{{ adbPairError }}</p>
+          </div>
+          <div class="wiz-foot">
+            <button class="btn btn-primary" :disabled="adbPairBusy || adbPairTarget.trim() === '' || adbPairCode.trim() === ''" data-role="adb-pair-submit" @click="submitAdbPair">{{ adbPairBusy ? '配对中…' : '配对' }}</button>
+            <button class="btn btn-ghost" @click="closeAdbPair()">取消</button>
+          </div>
+        </div>
+      </div>
+
+
       <div v-show="activeSection === 'automation'" class="settings-section">
       <!-- 定时自动化（backlog ②）：规则到点 → 以用户身份给 agent 发消息（走既有审批管线）——
            说明收进 ⓘ；列表 + 模态（cron 即时预览下次触发——防写错） -->
