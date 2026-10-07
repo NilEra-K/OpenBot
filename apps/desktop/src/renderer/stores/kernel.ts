@@ -632,8 +632,8 @@ export const useKernelStore = defineStore('kernel', {
       const r = await this.call<{ sessionId: string }>('v1.session.clear', { agentId })
       return r.sessionId
     },
-    async sessionResume(agentId: string): Promise<void> {
-      await this.call('v1.session.resume', { agentId })
+    async sessionResume(agentId: string, sessionId?: string): Promise<void> {
+      await this.call('v1.session.resume', { agentId, ...(sessionId !== undefined ? { sessionId } : {}) })
     },
     async listSessions(agentId: string): Promise<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }>> {
       const r = await this.call<{ sessions: Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }> }>('v1.session.list', { agentId })

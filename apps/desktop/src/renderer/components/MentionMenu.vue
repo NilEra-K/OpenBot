@@ -41,16 +41,22 @@ const emit = defineEmits<{ pick: [index: number] }>()
 <style scoped>
 .mention-menu {
   position: absolute;
-  left: 18px;
-  right: 18px;
+  /* v0.1.47：与 composer-box 同宽（挂 composer-box 内，left/right 0 对齐输入框两缘）；
+   * 圆角同步 12px（输入框收小后一致）；阴影双段柔和（浅色不脏、深色可辨） */
+  left: 0;
+  right: 0;
   bottom: calc(100% + 6px);
   z-index: 40;
   padding: 4px;
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--bg2);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 12px 28px rgba(0, 0, 0, 0.14);
   overflow: hidden;
+}
+
+:root[data-theme='dark'] .mention-menu {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), 0 12px 28px rgba(0, 0, 0, 0.5);
 }
 
 .m-item {

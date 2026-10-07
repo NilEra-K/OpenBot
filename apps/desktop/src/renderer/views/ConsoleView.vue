@@ -18,6 +18,7 @@ import RosterPanel from '../components/RosterPanel.vue'
 import CtxPanel from '../components/CtxPanel.vue'
 import BoxScreen from '../components/BoxScreen.vue'
 import MentionMenu from '../components/MentionMenu.vue'
+import SlashMenu from '../components/SlashMenu.vue'
 import type { MentionItem } from '../components/MentionMenu.vue'
 import type { LiveStreamBlock } from '../stores/kernel'
 
@@ -325,51 +326,180 @@ const toggleTombstone = async (m: { messageId: string; from?: string; tombstoned
     toast.push(err instanceof Error ? err.message : String(err), 'error')
   }
 }
-/** 发送前拦截：/clear /resume 不进消息流——直接走命令面（返回 true = 已处理不发送） */
-const interceptSlash = async (raw: string): Promise<boolean> => {
-  const text = raw.trim()
-  if (text !== '/clear' && text !== '/resume') return false
-  try {
-    if (text === '/clear') {
-      const sid = await kernel.sessionClear(ui.activeAgentId)
-      toast.push(`已开启新会话 ${sid}（旧对话折叠保留）`, 'success')
-    } else {
-      await kernel.sessionResume(ui.activeAgentId)
-      toast.push('已恢复上一会话上下文', 'success')
+/** 发送前拦截：/clear /resume 不进消息流——直接走命令面（菜单关闭时的兜底路径） */
+const doSlashClear = async (): Promise<void> => {
+  const sid = await kernel.sessionClear(ui.activeAgentId)
+  toast.push(`已开启新会话 ${sid}（旧对话折叠保留）`, 'success')
+}
+const doSlashResume = async (): Promise<void> => {
+  await kernel.sessionResume(ui.activeAgentId)
+  toast.push('已恢复上一会话上下文', 'success')
+}
+
+// ---- Slash 命令菜单（v0.1.46 对齐 @ 提及形态）：输入 / 联想命令；/quote 两级选会话 ----
+type SlashMode = 'cmd' | 'agent' | 'session' | 'resume'
+const slash = ref<{ open: boolean; mode: SlashMode; start: number; sel: number; agentId: string | null; q: string }>({
+  open: false, mode: 'cmd', start: -1, sel: 0, agentId: null, q: '',
+})
+const slashLoading = ref(false)
+
+/** 命令清单（子串联想；/quote 进 agent 级） */
+const SLASH_COMMANDS: Array<{ name: string; sub: string }> = [
+  { name: '/clear', sub: '开启新会话——上下文清零（旧对话折叠保留）' },
+  { name: '/resume', sub: '选择回到某个历史会话（默认最近一个）' },
+  { name: '/quote', sub: '引用某个 Agent 的会话（随下条消息注入）' },
+]
+
+const slashItems = computed<Array<{ key: string; label: string; sub: string; color?: string; note?: string }>>(() => {
+  if (slash.value.mode === 'cmd') {
+    return SLASH_COMMANDS.filter((c) => c.name.slice(1).startsWith(slash.value.q)).map((c) => ({ key: c.name, label: c.name, sub: c.sub }))
+  }
+  if (slash.value.mode === 'agent') {
+    return kernel.roster.map((a) => ({
+      key: a.agentId,
+      label: a.name ?? a.agentId,
+      sub: a.agentId,
+      color: kernel.colorOf(a.agentId),
+    }))
+  }
+  // resume 级：当前 agent 的历史会话（排除当前会话——回到当前无意义）
+  if (slash.value.mode === 'resume') {
+    return refPickerSessions.value
+      .filter((s) => !s.current)
+      .slice()
+      .reverse()
+      .map((s) => ({
+        key: s.sessionId,
+        label: s.sessionId,
+        sub: `${fmtTime(s.lastAt)} · ${s.messageCount} 条`,
+        note: s.firstText !== '' ? s.firstText : '（空会话）',
+      }))
+  }
+  return refPickerSessions.value.slice().reverse().map((s) => ({
+    key: s.sessionId,
+    label: s.sessionId + (s.current ? '（当前）' : ''),
+    sub: `${fmtTime(s.lastAt)} · ${s.messageCount} 条`,
+    note: s.firstText !== '' ? s.firstText : '（空会话）',
+  }))
+})
+
+const slashTitle = computed(() => {
+  if (slash.value.mode === 'cmd') return '命令'
+  if (slash.value.mode === 'agent') return '引用会话 · 选择 Agent'
+  if (slash.value.mode === 'resume') return '恢复会话 · 选择要回到的会话'
+  return `引用会话 · ${nameOf(slash.value.agentId ?? '')}`
+})
+
+const closeSlash = (): void => {
+  slash.value = { open: false, mode: 'cmd', start: -1, sel: 0, agentId: null, q: '' }
+}
+
+/** 输入驱动（onComposerInput 内调用）：光标前缀 `/词` → 命令级联想；其余级随 draft 变化关闭 */
+const feedSlash = (value: string, caret: number): void => {
+  // agent/session 级：用户开始打字 = 放弃菜单（Backspace 回退不触发 input——键流分支保留）
+  if (slash.value.open && slash.value.mode !== 'cmd') {
+    closeSlash()
+    return
+  }
+  const m = value.slice(0, caret).match(/(?:^|\s)\/([a-z]*)$/)
+  if (m === null) {
+    if (slash.value.mode === 'cmd') closeSlash()
+    return
+  }
+  const q = m[1]!.toLowerCase()
+  if (!SLASH_COMMANDS.some((c) => c.name.slice(1).startsWith(q))) {
+    closeSlash()
+    return
+  }
+  slash.value = { open: true, mode: 'cmd', start: caret - m[1]!.length - 1, sel: 0, agentId: null, q }
+}
+
+/** 移除 draft 中 slash 触发词（含 /；cmd 级选中或 quote 展开时） */
+const removeSlashToken = (): void => {
+  const el = draftEl.value
+  const s = slash.value
+  if (el === null || s.start < 0) return
+  const caret = el.selectionStart ?? el.value.length
+  ui.draft = `${ui.draft.slice(0, s.start)}${ui.draft.slice(Math.max(caret, s.start + 1))}`
+  void nextTick(() => el.setSelectionRange(s.start, s.start))
+}
+
+const pickSlash = (i: number): void => {
+  const s = slash.value
+  const it = slashItems.value[i]
+  if (it === undefined) return
+  if (s.mode === 'cmd') {
+    if (it.key === '/clear') {
+      removeSlashToken()
+      closeSlash()
+      void doSlashClear().catch((err: unknown) => toast.push(String(err), 'error'))
+      return
     }
-  } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    if (it.key === '/resume') {
+      // v0.1.47 会话选择化：转入当前 agent 的历史会话级（默认选第一项=最近——Enter 即回上一个）
+      removeSlashToken()
+      slash.value = { open: true, mode: 'resume', start: -1, sel: 0, agentId: ui.activeAgentId, q: '' }
+      slashLoading.value = true
+      void kernel
+        .listSessions(ui.activeAgentId)
+        .then((list) => {
+          refPickerSessions.value = list
+        })
+        .catch((err: unknown) => {
+          toast.push(err instanceof Error ? err.message : String(err), 'error')
+          closeSlash()
+        })
+        .finally(() => {
+          slashLoading.value = false
+        })
+      return
+    }
+    // /quote：清触发词 → agent 级
+    removeSlashToken()
+    slash.value = { open: true, mode: 'agent', start: -1, sel: 0, agentId: null, q: '' }
+    return
   }
-  return true
+  if (s.mode === 'agent') {
+    slash.value = { open: true, mode: 'session', start: -1, sel: 0, agentId: it.key, q: '' }
+    slashLoading.value = true
+    void kernel
+      .listSessions(it.key)
+      .then((list) => {
+        refPickerSessions.value = list
+      })
+      .catch((err: unknown) => {
+        toast.push(err instanceof Error ? err.message : String(err), 'error')
+        closeSlash()
+      })
+      .finally(() => {
+        slashLoading.value = false
+      })
+    return
+  }
+  // resume 级（v0.1.47 会话选择化）：回到选定的历史会话
+  if (s.mode === 'resume') {
+    closeSlash()
+    const target = it.key === 's-0' ? undefined : it.key // 初始段无 start——缺省语义即回退窗口
+    void kernel
+      .sessionResume(ui.activeAgentId, target)
+      .then(() => toast.push(target !== undefined ? `已回到会话 ${target}` : '已恢复上一会话上下文', 'success'))
+      .catch((err: unknown) => toast.push(err instanceof Error ? err.message : String(err), 'error'))
+    return
+  }
+  // session 级（quote）：设置待发引用（胶囊呈现——所见即所发）
+  if (s.agentId !== null) pendingRef.value = { agentId: s.agentId, sessionId: it.key === 's-0' ? null : it.key }
+  closeSlash()
 }
-/** 引用会话选择器：composer「引用日期」按钮 → 两级（agent → session）→ 胶囊随下条消息携带 */
-const refPickerOpen = ref(false)
-const refPickerAgent = ref<string | null>(null)
+
+/** ＋ 菜单「引用」入口：与 /quote 同一管线（直接进 agent 级） */
+const openQuoteFromMenu = (): void => {
+  plusMenuOpen.value = false
+  slash.value = { open: true, mode: 'agent', start: -1, sel: 0, agentId: null, q: '' }
+}
+
+/** 引用会话数据源（slash session 级复用；保留 v0.1.45 状态名） */
 const refPickerSessions = ref<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }>>([])
-const refPickerLoading = ref(false)
 const pendingRef = ref<{ agentId: string; sessionId: string | null } | null>(null)
-const openRefPicker = (): void => {
-  refPickerOpen.value = true
-  refPickerAgent.value = null
-  refPickerSessions.value = []
-}
-const pickRefAgent = async (agentId: string): Promise<void> => {
-  refPickerAgent.value = agentId
-  refPickerLoading.value = true
-  try {
-    refPickerSessions.value = await kernel.listSessions(agentId)
-  } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
-    refPickerAgent.value = null
-  } finally {
-    refPickerLoading.value = false
-  }
-}
-const pickRefSession = (sessionId: string | null): void => {
-  if (refPickerAgent.value === null) return
-  pendingRef.value = { agentId: refPickerAgent.value, sessionId }
-  refPickerOpen.value = false
-}
 const clearPendingRef = (): void => {
   pendingRef.value = null
 }
@@ -689,11 +819,13 @@ const onComposerInput = (): void => {
   const el = draftEl.value
   if (!el) return
   const caret = el.selectionStart ?? el.value.length
+  feedSlash(el.value, caret) // slash 命令联想（v0.1.46——与 @ 同输入驱动）
   const m = el.value.slice(0, caret).match(/(?:^|[^一-龥A-Za-z0-9])@([一-龥A-Za-z0-9]*)$/)
   if (!m) {
     closeMention()
     return
   }
+  closeSlash() // @ 打开时 slash 收起（互斥）
   const q = m[1]!.toLowerCase()
   // @全员项（P5 Step 2）：前缀命中「全员」即置顶——扇出权事实驱动（用户恒可发）
   const items: MentionItem[] = []
@@ -739,6 +871,25 @@ const onComposerKeydown = (e: KeyboardEvent): void => {
     }
     return
   }
+  if (slash.value.open) {
+    const n = slashItems.value.length
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      slash.value.sel = (slash.value.sel + (e.key === 'ArrowDown' ? 1 : -1) + n) % n
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      pickSlash(slash.value.sel)
+    } else if (e.key === 'Escape') {
+      e.stopPropagation()
+      closeSlash()
+    } else if (e.key === 'Backspace' && slash.value.mode !== 'cmd') {
+      // agent/session 级回退一级（cmd 级回退交给文本编辑自然关闭）
+      e.preventDefault()
+      if (slash.value.mode === 'session') slash.value = { open: true, mode: 'agent', start: -1, sel: 0, agentId: null, q: '' }
+      else closeSlash() // resume 级无上级——直接关
+    }
+    return
+  }
   if (e.key === 'Enter') {
     e.preventDefault()
     void send()
@@ -748,6 +899,7 @@ const onComposerKeydown = (e: KeyboardEvent): void => {
 /** 失焦收起（延迟一拍——给菜单 mousedown 的点击留出路径） */
 const onComposerBlur = (): void => {
   window.setTimeout(closeMention, 120)
+  window.setTimeout(closeSlash, 120)
 }
 
 // ---- composer 工具行下拉（2026-09-06 图 1/3）：审批模式 + 模型档案 ----
@@ -840,12 +992,6 @@ const mentionsAll = (text: string): boolean =>
 const send = async (): Promise<void> => {
   const text = ui.draft.trim()
   if (text === '' || sending.value) return
-  // 「会话掌控」拦截：/clear /resume 走命令面不进消息流
-  if (await interceptSlash(text)) {
-    ui.draft = ''
-    draftEl.value?.focus()
-    return
-  }
   // 群会话（P5 Step 4）：直达群命令（内核有界轮转——supersede/上限/幂等在编排层）；
   // 群内 @提及是轮转优先信号（内核识别），不做单发路由
   if (ui.activeGroupId !== null) {
@@ -1230,69 +1376,6 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             </div>
           </div>
 
-          <!-- 引用会话选择器（「会话掌控」）：两级 agent → session -->
-          <!-- 引用会话选择器（「会话掌控」· v0.1.45 重设计）：面包屑导航 + 身份色 agent 行
-               + 信息完整的 session 行（徽标/时间/条数/摘要两行）——不再蹭设备扫描样式 -->
-          <div v-if="refPickerOpen" class="wiz-overlay" @mousedown.self="refPickerOpen = false">
-            <div class="wiz-card ref-card" role="dialog" aria-label="引用 Agent 会话" @keydown.escape="refPickerOpen = false">
-              <div class="wiz-head">
-                <div class="ref-crumbs">
-                  <button
-                    class="ref-crumb"
-                    :class="{ active: refPickerAgent === null }"
-                    type="button"
-                    @click="refPickerAgent = null"
-                  >Agent</button>
-                  <template v-if="refPickerAgent !== null">
-                    <span class="ref-crumb-sep">/</span>
-                    <span class="ref-crumb current">{{ nameOf(refPickerAgent) }}</span>
-                  </template>
-                </div>
-                <button class="wiz-close" type="button" aria-label="关闭" @click="refPickerOpen = false">✕</button>
-              </div>
-              <div class="wiz-body ref-body">
-                <template v-if="refPickerAgent === null">
-                  <button v-for="a in kernel.roster" :key="a.agentId" class="ref-row" type="button" @click="pickRefAgent(a.agentId)">
-                    <span class="ref-avatar" :style="{ background: kernel.colorOf(a.agentId) }">{{ (a.name ?? a.agentId).trim().charAt(0) || '?' }}</span>
-                    <span class="ref-row-main">
-                      <span class="ref-row-title">{{ a.name ?? a.agentId }}</span>
-                      <span class="ref-row-sub mono">{{ a.agentId }}</span>
-                    </span>
-                    <svg class="ref-row-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-                  </button>
-                </template>
-                <template v-else>
-                  <div v-if="refPickerLoading" class="ref-empty">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
-                    正在加载会话清单…
-                  </div>
-                  <div v-else-if="refPickerSessions.length === 0" class="ref-empty">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-                    该 Agent 尚无可引用的会话——先去和它聊几轮。
-                  </div>
-                  <template v-else>
-                    <button
-                      v-for="sess in refPickerSessions.slice().reverse()"
-                      :key="sess.sessionId"
-                      class="ref-row"
-                      type="button"
-                      @click="pickRefSession(sess.sessionId)"
-                    >
-                      <span class="ref-sess-badge mono" :class="{ current: sess.current }">{{ sess.sessionId }}</span>
-                      <span class="ref-row-main">
-                        <span class="ref-row-title ref-sess-summary">{{ sess.firstText !== '' ? sess.firstText : '（空会话）' }}</span>
-                        <span class="ref-row-sub">{{ fmtTime(sess.lastAt) }} · {{ sess.messageCount }} 条消息</span>
-                      </span>
-                      <svg v-if="sess.current" class="ref-row-live" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
-                    </button>
-                  </template>
-                </template>
-              </div>
-              <div class="wiz-foot ref-foot">
-                <span class="ref-foot-hint">被引会话内容将随你的下一条消息注入对话</span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -1310,12 +1393,6 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
 
       <div class="composer">
         <!-- @提及菜单（原型挂 .composer 下，向上弹出——left/right 18px 对齐 composer 内容区） -->
-        <MentionMenu
-          v-if="mention.open"
-          :items="mention.items"
-          :sel="mention.sel"
-          @pick="pickMention"
-        />
         <div class="composer-inner">
           <!-- 待发引用胶囊（「会话掌控」· v0.1.45）：选中后常驻输入框上方——所见即所发 -->
           <div v-if="pendingRef !== null" class="ref-pending" data-role="ref-pending">
@@ -1324,6 +1401,20 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <button type="button" aria-label="移除引用" @click="clearPendingRef">✕</button>
           </div>
           <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }">
+        <MentionMenu
+          v-if="mention.open"
+          :items="mention.items"
+          :sel="mention.sel"
+          @pick="pickMention"
+        />
+        <SlashMenu
+          v-if="slash.open"
+          :title="slashTitle"
+          :items="slashItems"
+          :sel="slash.sel"
+          :loading="slashLoading"
+          @pick="pickSlash"
+        />
             <input
               ref="draftEl"
               v-model="ui.draft"
@@ -1349,7 +1440,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
                       <span class="mt"><span class="ti">使用 @ 添加上下文</span></span>
                     </button>
-                    <button class="cb-menu-item" @click="openRefPicker(); plusMenuOpen = false">
+                    <button class="cb-menu-item" @click="openQuoteFromMenu()">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
                       <span class="mt"><span class="ti">引用某个 Agent 的会话</span><span class="ts">随下条消息注入被引会话内容</span></span>
                     </button>

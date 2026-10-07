@@ -634,12 +634,14 @@
    模式真值、右 主力模型真值 + 圆形上箭头发送）。附件/模型下拉/推理力度无底层支撑不做
    （不造假纪律）；审批模式桌面装配固定 Manual——只读真值呈现 ---- */
 .composer-box {
+  /* 菜单（@/slash）定位上下文（v0.1.47：菜单与输入框同宽——挂本元素内 left/right 0） */
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   background: var(--bg1);
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 12px; /* v0.1.47 用户裁定收小（原 20px 偏大——与卡片 12px 对齐，菜单同圆角） */
   padding: 10px 14px 10px;
   transition: border-color 160ms var(--ease);
 }

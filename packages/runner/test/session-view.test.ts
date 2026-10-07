@@ -113,3 +113,56 @@ describe('sessionView', () => {
     expect(v.currentSessionId).toBe('s-1')
   })
 })
+
+describe('resume 会话选择化（v0.1.47）', () => {
+  it('resume 带 sessionId：窗口移回该会话起点（其后时间线失效）', () => {
+    const v = sessionView([
+      msg('user', 'm1', 's0-话题'),
+      { kind: 'session-start', payload: { sessionId: 's-1' } },
+      msg('user', 'm2', 's1-话题'),
+      { kind: 'session-start', payload: { sessionId: 's-2' } },
+      msg('user', 'm3', 's2-话题'),
+      { kind: 'session-resume', payload: { sessionId: 's-1' } },
+      msg('user', 'm4', '继续 s1'),
+    ])
+    expect(v.records.map((r) => (r.payload as { text: string }).text)).toEqual(['s1-话题', '继续 s1'])
+    expect(v.currentSessionId).toBe('s-1')
+  })
+
+  it('resume 缺省：回上一个（原快捷语义不变）', () => {
+    const v = sessionView([
+      { kind: 'session-start', payload: { sessionId: 's-1' } },
+      msg('user', 'm1', 'a'),
+      { kind: 'session-start', payload: { sessionId: 's-2' } },
+      msg('user', 'm2', 'b'),
+      { kind: 'session-resume', payload: {} },
+      msg('user', 'm3', 'c'),
+    ])
+    expect(v.records.map((r) => (r.payload as { text: string }).text)).toEqual(['a', 'b', 'c'])
+    expect(v.currentSessionId).toBe('s-1')
+  })
+
+  it('resume 到早期会话后再 clear：正常开新会话（栈截断后自洽）', () => {
+    const v = sessionView([
+      { kind: 'session-start', payload: { sessionId: 's-1' } },
+      msg('user', 'm1', '一'),
+      { kind: 'session-start', payload: { sessionId: 's-2' } },
+      msg('user', 'm2', '二'),
+      { kind: 'session-resume', payload: { sessionId: 's-1' } },
+      msg('user', 'm3', '续一'),
+      { kind: 'session-start', payload: { sessionId: 's-3' } },
+      msg('user', 'm4', '三'),
+    ])
+    expect(v.records.map((r) => (r.payload as { text: string }).text)).toEqual(['三'])
+    expect(v.currentSessionId).toBe('s-3')
+  })
+
+  it('resume 目标不存在：无操作（如实忽略——不炸组装）', () => {
+    const v = sessionView([
+      { kind: 'session-start', payload: { sessionId: 's-1' } },
+      msg('user', 'm1', 'a'),
+      { kind: 'session-resume', payload: { sessionId: 's-9' } },
+    ])
+    expect(v.records.map((r) => (r.payload as { text: string }).text)).toEqual(['a']) // 目标不存在——窗口保持原样（s-1 后）
+  })
+})

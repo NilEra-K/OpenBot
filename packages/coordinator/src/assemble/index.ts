@@ -416,13 +416,19 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     })
     // /resume：抵消最近一次 clear（组装回上一会话）
     .register('v1.session.resume', async (payload) => {
-      const { agentId } = payload as { agentId: string }
+      const { agentId, sessionId } = payload as { agentId: string; sessionId?: string }
       const records = await transcript.readAll(agentId)
       if (!records.some((r) => r.kind === 'session-start')) {
         throw new KernelError('STATE_AGENT_NOT_FOUND', '没有可恢复的已清空会话')
       }
-      await transcript.append(agentId, 'session-resume', {})
-      bus.emit('v1.session.resumed', { agentId })
+      if (sessionId !== undefined) {
+        // 目标会话必须真实在场（悬空拒绝——用户当下反馈）
+        if (!records.some((r) => r.kind === 'session-start' && (r.payload as { sessionId?: string }).sessionId === sessionId)) {
+          throw new KernelError('STATE_AGENT_NOT_FOUND', '会话不存在')
+        }
+      }
+      await transcript.append(agentId, 'session-resume', { ...(sessionId !== undefined ? { sessionId } : {}) })
+      bus.emit('v1.session.resumed', { agentId, ...(sessionId !== undefined ? { sessionId } : {}) })
       return { ok: true }
     })
     // 会话清单（composer 引用选择器与 ctx 历史会话节数据源）：按 session-start 切分

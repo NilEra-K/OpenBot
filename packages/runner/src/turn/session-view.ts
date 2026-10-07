@@ -43,7 +43,9 @@ export function sessionView(records: SessionRecord[]): SessionView {
   /** 目标消息自身位置（截断窗不含目标——目标以新文本保留） */
   const targetIndex = new Map<string, number>()
   /** clear 栈（session-start 压栈 / resume 弹栈）——栈底之上的全部在窗口外 */
-  const startStack: Array<{ index: number; sessionId: string }> = []
+  let startStack: Array<{ index: number; sessionId: string }> = []
+  /** resume 目标与 resume 之间的失效区间（未走分支） */
+  const deadRanges: Array<[number, number]> = []
   records.forEach((record, index) => {
     const p = payloadOf(record)
     const id = typeof p['messageId'] === 'string' ? p['messageId'] : null
@@ -51,9 +53,24 @@ export function sessionView(records: SessionRecord[]): SessionView {
       case 'session-start':
         startStack.push({ index, sessionId: typeof p['sessionId'] === 'string' ? p['sessionId'] : `s-${startStack.length + 1}` })
         break
-      case 'session-resume':
-        startStack.pop() // 抵消最近一次 clear——组装回上一会话
+      case 'session-resume': {
+        // 恢复会话（v0.1.47 选择化）：带 sessionId = 窗口移回该会话起点；目标与 resume 之间的
+        // 后续会话时间线失效（回到 s-1 则 s-2 的内容到本 resume 之前的区间跳过）；
+        // 缺省 = 弹栈回上一个（快捷语义，等效区间跳过由窗口回退自然达成）
+        const target = typeof p['sessionId'] === 'string' ? p['sessionId'] : null
+        if (target === null) {
+          startStack.pop()
+        } else {
+          const idx = startStack.findIndex((s) => s.sessionId === target)
+          if (idx >= 0) {
+            // 目标之后、resume 之前的最近 start 起一段失效（未走分支）
+            const laterStart = startStack.slice(idx + 1).filter((s) => s.index < index)[0]
+            if (laterStart !== undefined) deadRanges.push([laterStart.index, index])
+            startStack = startStack.slice(0, idx + 1)
+          }
+        }
         break
+      }
       case 'tombstone':
         if (id !== null) tombstoned.add(id)
         break
@@ -82,6 +99,7 @@ export function sessionView(records: SessionRecord[]): SessionView {
   const out: SessionRecord[] = []
   records.forEach((record, index) => {
     if (index < windowStart) return // clear 窗口外（旧会话）
+    if (deadRanges.some(([from, to]) => index >= from && index < to)) return // resume 未走分支
     const p = payloadOf(record)
     const id = typeof p['messageId'] === 'string' ? p['messageId'] : null
     if (!isDomainMessage(record.kind)) {
