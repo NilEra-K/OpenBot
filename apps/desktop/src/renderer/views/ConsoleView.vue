@@ -1231,33 +1231,65 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           </div>
 
           <!-- 引用会话选择器（「会话掌控」）：两级 agent → session -->
+          <!-- 引用会话选择器（「会话掌控」· v0.1.45 重设计）：面包屑导航 + 身份色 agent 行
+               + 信息完整的 session 行（徽标/时间/条数/摘要两行）——不再蹭设备扫描样式 -->
           <div v-if="refPickerOpen" class="wiz-overlay" @mousedown.self="refPickerOpen = false">
-            <div class="wiz-card" role="dialog" aria-label="引用 Agent 会话" style="max-width: 440px" @keydown.escape="refPickerOpen = false">
+            <div class="wiz-card ref-card" role="dialog" aria-label="引用 Agent 会话" @keydown.escape="refPickerOpen = false">
               <div class="wiz-head">
-                <span class="wiz-title">引用 Agent 会话</span>
-                <button v-if="refPickerAgent !== null" class="btn btn-ghost btn-sm" @click="refPickerAgent = null">← 重选 Agent</button>
+                <div class="ref-crumbs">
+                  <button
+                    class="ref-crumb"
+                    :class="{ active: refPickerAgent === null }"
+                    type="button"
+                    @click="refPickerAgent = null"
+                  >Agent</button>
+                  <template v-if="refPickerAgent !== null">
+                    <span class="ref-crumb-sep">/</span>
+                    <span class="ref-crumb current">{{ nameOf(refPickerAgent) }}</span>
+                  </template>
+                </div>
                 <button class="wiz-close" type="button" aria-label="关闭" @click="refPickerOpen = false">✕</button>
               </div>
-              <div class="wiz-body">
+              <div class="wiz-body ref-body">
                 <template v-if="refPickerAgent === null">
-                  <button v-for="a in kernel.roster" :key="a.agentId" class="adb-device-row" @click="pickRefAgent(a.agentId)">
-                    <span>{{ a.name ?? a.agentId }}</span>
-                    <span class="adb-device-meta">{{ a.agentId }}</span>
+                  <button v-for="a in kernel.roster" :key="a.agentId" class="ref-row" type="button" @click="pickRefAgent(a.agentId)">
+                    <span class="ref-avatar" :style="{ background: kernel.colorOf(a.agentId) }">{{ (a.name ?? a.agentId).trim().charAt(0) || '?' }}</span>
+                    <span class="ref-row-main">
+                      <span class="ref-row-title">{{ a.name ?? a.agentId }}</span>
+                      <span class="ref-row-sub mono">{{ a.agentId }}</span>
+                    </span>
+                    <svg class="ref-row-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                   </button>
                 </template>
                 <template v-else>
-                  <p v-if="refPickerLoading" class="field-note">加载会话清单…</p>
-                  <p v-else-if="refPickerSessions.length === 0" class="field-note">该 Agent 尚无可引用的会话。</p>
-                  <button
-                    v-for="sess in refPickerSessions.slice().reverse()"
-                    :key="sess.sessionId"
-                    class="adb-device-row"
-                    @click="pickRefSession(sess.sessionId)"
-                  >
-                    <span class="mono">{{ sess.sessionId }}{{ sess.current ? '（当前）' : '' }} · {{ sess.messageCount }} 条</span>
-                    <span class="adb-device-meta">{{ sess.firstText.slice(0, 30) }}</span>
-                  </button>
+                  <div v-if="refPickerLoading" class="ref-empty">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+                    正在加载会话清单…
+                  </div>
+                  <div v-else-if="refPickerSessions.length === 0" class="ref-empty">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                    该 Agent 尚无可引用的会话——先去和它聊几轮。
+                  </div>
+                  <template v-else>
+                    <button
+                      v-for="sess in refPickerSessions.slice().reverse()"
+                      :key="sess.sessionId"
+                      class="ref-row"
+                      type="button"
+                      @click="pickRefSession(sess.sessionId)"
+                    >
+                      <span class="ref-sess-badge mono" :class="{ current: sess.current }">{{ sess.sessionId }}</span>
+                      <span class="ref-row-main">
+                        <span class="ref-row-title ref-sess-summary">{{ sess.firstText !== '' ? sess.firstText : '（空会话）' }}</span>
+                        <span class="ref-row-sub">{{ fmtTime(sess.lastAt) }} · {{ sess.messageCount }} 条消息</span>
+                      </span>
+                      <svg v-if="sess.current" class="ref-row-live" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
+                    </button>
+                  </template>
                 </template>
+              </div>
+              <div class="wiz-foot ref-foot">
+                <span class="ref-foot-hint">被引会话内容将随你的下一条消息注入对话</span>
               </div>
             </div>
           </div>
@@ -1285,6 +1317,12 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           @pick="pickMention"
         />
         <div class="composer-inner">
+          <!-- 待发引用胶囊（「会话掌控」· v0.1.45）：选中后常驻输入框上方——所见即所发 -->
+          <div v-if="pendingRef !== null" class="ref-pending" data-role="ref-pending">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+            <span>将引用 <b>{{ nameOf(pendingRef.agentId) }}</b> 的会话 <b class="mono">{{ pendingRef.sessionId ?? '初始' }}</b></span>
+            <button type="button" aria-label="移除引用" @click="clearPendingRef">✕</button>
+          </div>
           <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }">
             <input
               ref="draftEl"
