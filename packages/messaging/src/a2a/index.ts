@@ -31,6 +31,8 @@ export function summarizeRun(text: string): string {
 export interface UserChatRunPayload {
   messageId: string
   text: string
+  /** 引用会话（「会话掌控」）：runner 组装注入（同 SendUserMessageInput.sessionRef） */
+  sessionRef?: { agentId: string; sessionId: string | null }
 }
 
 /** agent lane run 负载（runner 解释执行） */
@@ -57,6 +59,9 @@ export interface SendUserMessageInput {
   text: string
   /** 调用方幂等键（transport 层生成，重试同键） */
   nonce: string
+  /** 引用会话（「会话掌控」composer 引用按钮）：随消息落盘 + run payload——组装层注入被引
+   *  会话内容（TurnRunner.#injectSessionRefs） */
+  sessionRef?: { agentId: string; sessionId: string | null }
 }
 
 export interface SendA2aInput {
@@ -93,12 +98,12 @@ export class A2aService {
       return stored ? { ...stored, first: false } : { messageId: '', runId: null, first: false }
     }
     const messageId = nextMessageId()
-    await transcript.append(input.toAgentId, 'user', { messageId, text: input.text, at: now() })
-    bus.emit('v1.message.user', { messageId, toAgentId: input.toAgentId, text: input.text })
+    await transcript.append(input.toAgentId, 'user', { messageId, text: input.text, at: now(), ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}) })
+    bus.emit('v1.message.user', { messageId, toAgentId: input.toAgentId, text: input.text, ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}) })
     const ticket: RunTicket = schedulerOf(input.toAgentId).enqueue({
       lane: 'user',
       kind: 'chat',
-      payload: { messageId, text: input.text } satisfies UserChatRunPayload,
+      payload: { messageId, text: input.text, ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}) } satisfies UserChatRunPayload,
       summary: summarizeRun(input.text),
     })
     const acceptance: MessageAcceptance = { messageId, runId: ticket.runId, first: true }

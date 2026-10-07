@@ -370,8 +370,84 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       return profile
     })
     .register('v1.message.sendUser', async (payload) =>
-      messaging.sendUserMessage(payload as { toAgentId: string; text: string; nonce: string }),
+      messaging.sendUserMessage(
+        payload as { toAgentId: string; text: string; nonce: string; sessionRef?: { agentId: string; sessionId: string | null } },
+      ),
     )
+    // ---- 「会话掌控」命令族（sessionView 元事件的写入面；组装解释在 runner） ----
+    // 编辑用户消息：append revision（regenerate=true 额外重驱——enqueue user lane chat，
+    // originMessageId=目标消息：组装剔除旧位置，userMessage 带新文本，revision 替换后流内一致）
+    .register('v1.session.editMessage', async (payload) => {
+      const { agentId, messageId, text, regenerate } = payload as {
+        agentId: string; messageId: string; text: string; regenerate?: boolean
+      }
+      if (text.trim() === '') throw new KernelError('STATE_AGENT_NOT_FOUND', '修订文本不能为空')
+      const rec = await transcript.append(agentId, 'revision', { messageId, text, regenerate: regenerate === true })
+      if (regenerate === true) {
+        const scheduler = schedulers.get(agentId)
+        if (scheduler === undefined) throw new KernelError('STATE_AGENT_NOT_FOUND', 'agent 不存在')
+        scheduler.enqueue({ lane: 'user', kind: 'chat', payload: { messageId, text }, summary: '编辑后重新生成' })
+      }
+      bus.emit('v1.session.revised', { agentId, messageId, text, regenerate: regenerate === true, revisionId: String(rec.seq) })
+      return { ok: true }
+    })
+    // agent 回复移出/恢复上下文（tombstone/revive——物理保留，组装跳过）
+    .register('v1.session.tombstone', async (payload) => {
+      const { agentId, messageId } = payload as { agentId: string; messageId: string }
+      await transcript.append(agentId, 'tombstone', { messageId })
+      bus.emit('v1.session.tombstoned', { agentId, messageId })
+      return { ok: true }
+    })
+    .register('v1.session.revive', async (payload) => {
+      const { agentId, messageId } = payload as { agentId: string; messageId: string }
+      await transcript.append(agentId, 'revive', { messageId })
+      bus.emit('v1.session.revived', { agentId, messageId })
+      return { ok: true }
+    })
+    // /clear：开新 session（sessionId 服务端生成 s-N；在跑 run 由 renderer 先 cancel——v1.scheduler.cancel 既有面）
+    .register('v1.session.clear', async (payload) => {
+      const { agentId } = payload as { agentId: string }
+      const records = await transcript.readAll(agentId)
+      const count = records.filter((r) => r.kind === 'session-start').length
+      const sessionId = 's-' + String(count + 1)
+      await transcript.append(agentId, 'session-start', { sessionId })
+      bus.emit('v1.session.cleared', { agentId, sessionId })
+      return { sessionId }
+    })
+    // /resume：抵消最近一次 clear（组装回上一会话）
+    .register('v1.session.resume', async (payload) => {
+      const { agentId } = payload as { agentId: string }
+      const records = await transcript.readAll(agentId)
+      if (!records.some((r) => r.kind === 'session-start')) {
+        throw new KernelError('STATE_AGENT_NOT_FOUND', '没有可恢复的已清空会话')
+      }
+      await transcript.append(agentId, 'session-resume', {})
+      bus.emit('v1.session.resumed', { agentId })
+      return { ok: true }
+    })
+    // 会话清单（composer 引用选择器与 ctx 历史会话节数据源）：按 session-start 切分
+    .register('v1.session.list', async (payload) => {
+      const { agentId } = payload as { agentId: string }
+      const records = await transcript.readAll(agentId)
+      const sessions: Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }> = []
+      let current: { sessionId: string; messageCount: number; firstText: string; lastAt: number } | null = null
+      for (const r of records) {
+        if (r.kind === 'session-start') {
+          if (current !== null) sessions.push({ ...current, current: false })
+          const p = r.payload as { sessionId?: string }
+          current = { sessionId: typeof p.sessionId === 'string' ? p.sessionId : 's-' + String(sessions.length + 1), messageCount: 0, firstText: '', lastAt: r.at }
+          continue
+        }
+        if (r.kind !== 'user' && r.kind !== 'agent') continue
+        if (current === null) current = { sessionId: 's-0', messageCount: 0, firstText: '', lastAt: r.at } // 初始段（首 clear 之前）也列出（可引用）
+        const text = typeof (r.payload as { text?: string }).text === 'string' ? (r.payload as { text: string }).text : ''
+        if (current.messageCount === 0) current.firstText = text
+        current.messageCount += 1
+        current.lastAt = r.at
+      }
+      if (current !== null) sessions.push({ ...current, current: true })
+      return { sessions }
+    })
     .register('v1.message.sendA2a', async (payload) =>
       messaging.sendA2a(
         payload as { fromAgentId: string; toAgentId: string; text: string; priority?: boolean; nonce: string },

@@ -1,3 +1,4 @@
+import { extractSession, sessionView } from './session-view.js'
 /**
  * turn 执行引擎：调度器 execute 回调的实现——chat（用户消息）与 a2a（私聊唤醒）两种 run。
  * 工具循环：llm 回 toolCalls → 逐个执行 → 结果回喂 → 直到无命令（终答）或预算耗尽。
@@ -26,6 +27,12 @@ export const RunnerErrorCodes = {
 } as const
 
 export const DEFAULT_MAX_TOOL_ROUNDS = 8
+
+/** session 内组装窗口上限（「会话掌控」裁定 D）：最近 N 条领域消息——会话再长不无限累积 */
+const SESSION_WINDOW_MESSAGES = 50
+
+/** 引用会话注入预算（字符）：尾部优先 + 总量提示（记忆注入同哲学） */
+const SESSION_REF_CHAR_BUDGET = 4000
 
 export interface TurnRunnerDeps {
   bus: EventBus
@@ -134,15 +141,65 @@ export class TurnRunner {
     throw new KernelError(RunnerErrorCodes.RUN_KIND_UNKNOWN, `未知 run 种类：${run.kind}`)
   }
 
+  /**
+   * 引用会话注入（「会话掌控」）：user 消息携带 sessionRef {agentId, sessionId} 时，把被引
+   * 会话内容（sessionView 变换后的有效流 + 字符预算截断）注入为该消息文本前缀——用户显式
+   * 引用（composer 引用按钮），所见即所引。注入发生在组装层（本轮上下文），transcript 原文
+   * 不变（payload.sessionRef 留痕，重放组装自然复现）。
+   */
+  async #injectSessionRefs(
+    viewerId: string,
+    records: { kind: string; payload: unknown; at?: number }[],
+  ): Promise<{ kind: string; payload: unknown; at?: number }[]> {
+    let touched = false
+    const out = await Promise.all(
+      records.map(async (record) => {
+        if (record.kind !== 'user' && record.kind !== 'group-user') return record
+        const payload =
+          typeof record.payload === 'object' && record.payload !== null ? (record.payload as Record<string, unknown>) : {}
+        const ref = payload['sessionRef']
+        if (typeof ref !== 'object' || ref === null) return record
+        const refAgentId = (ref as Record<string, unknown>)['agentId']
+        const refSessionId = (ref as Record<string, unknown>)['sessionId']
+        if (typeof refAgentId !== 'string' || typeof refSessionId !== 'string') return record
+        // 取被引 session 指定段（元事件变换后注入——tombstone/revision 语义在被引侧同样生效）
+        const refView = sessionView(extractSession(await this.#deps.transcript.readAll(refAgentId), refSessionId))
+        const lines: string[] = []
+        for (const m of refView.records) {
+          const p = typeof m.payload === 'object' && m.payload !== null ? (m.payload as Record<string, unknown>) : {}
+          const text = typeof p['text'] === 'string' ? p['text'] : ''
+          const who = m.kind === 'agent' || m.kind === 'group-agent' ? 'agent' : 'user'
+          lines.push(`${who === 'agent' ? refAgentId : '用户'}：${text}`)
+        }
+        const full = lines.join('\n')
+        const clipped = full.length > SESSION_REF_CHAR_BUDGET ? `${full.slice(full.length - SESSION_REF_CHAR_BUDGET)}\n（前文已截断，共 ${full.length} 字符）` : full
+        const original = typeof payload['text'] === 'string' ? payload['text'] : ''
+        const injected = `[@引用会话 ${refAgentId} · ${refSessionId}]\n${clipped}\n---\n${original}`
+        touched = true
+        return { ...record, payload: { ...payload, text: injected } }
+      }),
+    )
+    void viewerId
+    void touched
+    return out
+  }
+
   async #runTurn(run: ActiveRun, input: TurnInput): Promise<{ text: string }> {
     const { agentId } = run
     // 入站消息在受理时已落 transcript（durable acceptance）；组装历史时剔除，避免同消息双计。
-    // 会话键：群 turn 读群流（群历史），私聊 turn 读 agent 流
+    // 会话键：群 turn 读群流（群历史），私聊 turn 读 agent 流。
+    // 「会话掌控」（sessionView）：元事件解释器——session-start/resume 窗口、revision 替换与
+    // 截断、tombstone/revive；再叠 session 内窗口上限（最近 SESSION_WINDOW 条——会话再长
+    // 也不无限累积，长对话 token 纪律）
     const sessionKey = input.session?.groupId ?? agentId
-    const history = toChatMessages(
+    const view = sessionView(
       (await this.#deps.transcript.readAll(sessionKey)).filter(
         (record) => messageIdOf(record.payload) !== input.originMessageId,
       ),
+    )
+    const effective = view.records.slice(-SESSION_WINDOW_MESSAGES)
+    const history = toChatMessages(
+      await this.#injectSessionRefs(agentId, effective),
       agentId,
     )
     const messages: ChatMessage[] = []

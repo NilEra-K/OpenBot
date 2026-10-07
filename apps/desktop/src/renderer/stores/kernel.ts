@@ -333,6 +333,8 @@ export const useKernelStore = defineStore('kernel', {
     execs: [] as ExecCard[],
     runs: [] as RunCard[],
     boxes: [] as BoxCard[],
+    /** 会话边界（「会话掌控」boot/实时收集）：agentId → [{at, sessionId}]——ConsoleView 折叠呈现 */
+    sessionBoundaries: {} as Record<string, Array<{ at: number; sessionId: string }>>,
     edges: [] as GraphEdge[],
     /** 后端能力声明（caps 驱动 UI 按钮的依据） */
     caps: null as { persistent: boolean; snapshot: boolean; headless: boolean; resourceLimits: boolean; isolation: string; interactive: boolean; suspendable: boolean } | null,
@@ -560,11 +562,11 @@ export const useKernelStore = defineStore('kernel', {
      * 发送用户消息（乐观更新 + nonce 幂等）：本地占位 → 命令受理（messageId 升级占位）→
      * 事件镜像去重。事件先到/响应先到两个顺序都收敛到单条正式消息（at-most-one 呈现）。
      */
-    async sendUserMessage(toAgentId: string, text: string, reuseNonce?: string): Promise<void> {
+    async sendUserMessage(toAgentId: string, text: string, reuseNonce?: string, sessionRef?: { agentId: string; sessionId: string | null }): Promise<void> {
       const nonce = reuseNonce ?? crypto.randomUUID()
       const placeholderId = `~${nonce}`
       if (!this.messages.some((m) => m.messageId === placeholderId)) {
-        this.messages.push({ messageId: placeholderId, kind: 'user', from: 'user', to: toAgentId, text, at: Date.now(), pending: true })
+        this.messages.push({ messageId: placeholderId, kind: 'user', from: 'user', to: toAgentId, text, at: Date.now(), pending: true, ...(sessionRef !== undefined ? { sessionRef } : {}) })
       } else {
         // 重试：复用占位条目，翻回发送中态
         const idx = this.messages.findIndex((m) => m.messageId === placeholderId)
@@ -573,7 +575,7 @@ export const useKernelStore = defineStore('kernel', {
       try {
         const acceptance = await this.call<{ messageId: string; runId: string | null; first: boolean }>(
           'v1.message.sendUser',
-          { toAgentId, text, nonce },
+          { toAgentId, text, nonce, ...(sessionRef !== undefined ? { sessionRef } : {}) },
         )
         const idx = this.messages.findIndex((m) => m.messageId === placeholderId)
         if (idx >= 0) {
@@ -611,6 +613,31 @@ export const useKernelStore = defineStore('kernel', {
     /** 中止 run（打断工作中的 agent）：排队中直接结算，活跃中经 AbortSignal 传播 */
     async cancelRun(agentId: string, runId: string): Promise<void> {
       await this.call('v1.scheduler.cancel', { agentId, runId })
+    },
+    /** 「会话掌控」命令族（v1.session.*——组装解释在内核 sessionView） */
+    async sessionEdit(agentId: string, messageId: string, text: string, regenerate: boolean): Promise<void> {
+      await this.call('v1.session.editMessage', { agentId, messageId, text, regenerate })
+    },
+    async sessionTombstone(agentId: string, messageId: string): Promise<void> {
+      await this.call('v1.session.tombstone', { agentId, messageId })
+    },
+    async sessionRevive(agentId: string, messageId: string): Promise<void> {
+      await this.call('v1.session.revive', { agentId, messageId })
+    },
+    async sessionClear(agentId: string): Promise<string> {
+      // 在跑 run 先中止（clear = 新会话开始——旧话题的进行中工作不再继续）
+      for (const r of this.runs.filter((x) => x.agentId === agentId && (x.state === 'queued' || x.state === 'running'))) {
+        await this.cancelRun(agentId, r.runId).catch(() => {})
+      }
+      const r = await this.call<{ sessionId: string }>('v1.session.clear', { agentId })
+      return r.sessionId
+    },
+    async sessionResume(agentId: string): Promise<void> {
+      await this.call('v1.session.resume', { agentId })
+    },
+    async listSessions(agentId: string): Promise<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }>> {
+      const r = await this.call<{ sessions: Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }> }>('v1.session.list', { agentId })
+      return r.sessions
     },
     /** 刷新 provider 配置（boot 与 settings 视图操作后调用） */
     async refreshSettings(): Promise<void> {
@@ -737,6 +764,26 @@ export const useKernelStore = defineStore('kernel', {
       } catch (err) {
         loadedHistory.delete(agentId) // 失败回滚标记：boot 未完成/网络抖动后允许重试
         throw err
+      }
+      // 「会话掌控」元事件状态（boot 单遍收集——实时事件在事件流分支维护同款）
+      const bootTombstoned = new Set<string>()
+      const bootRevisions = new Map<string, string>()
+      const bootBoundaries: Array<{ at: number; sessionId: string }> = []
+      for (const record of records) {
+        if (record.kind === 'tombstone') bootTombstoned.add(String((record.payload as Record<string, unknown>)['messageId'] ?? ''))
+        else if (record.kind === 'revive') bootTombstoned.delete(String((record.payload as Record<string, unknown>)['messageId'] ?? ''))
+        else if (record.kind === 'revision') {
+          const rp = record.payload as Record<string, unknown>
+          if (typeof rp['messageId'] === 'string' && typeof rp['text'] === 'string') bootRevisions.set(rp['messageId'], rp['text'])
+        } else if (record.kind === 'session-start') {
+          bootBoundaries.push({ at: record.at, sessionId: String((record.payload as Record<string, unknown>)['sessionId'] ?? 's-?') })
+        }
+      }
+      if (bootBoundaries.length > 0) this.sessionBoundaries[agentId] = bootBoundaries
+      for (const m of this.messages) {
+        if (bootTombstoned.has(m.messageId)) m.tombstoned = true
+        const revised = bootRevisions.get(m.messageId)
+        if (revised !== undefined && m.kind === 'user') m.text = revised
       }
       for (const record of records) {
         const p = record.payload as Record<string, unknown>
@@ -865,6 +912,34 @@ export const useKernelStore = defineStore('kernel', {
           } else {
             this.messages.push({ messageId, kind: 'user', from: 'user', to: toAgentId, text, at: event.at })
           }
+          return
+        }
+        case 'v1.session.revised': {
+          // 编辑用户消息：本地文本即时更新（tombstone 无关——user 消息不可 tombstone）
+          const m = this.messages.find((x) => x.messageId === event.payload.messageId)
+          if (m !== undefined && m.kind === 'user') m.text = event.payload.text
+          return
+        }
+        case 'v1.session.tombstoned': {
+          const m = this.messages.find((x) => x.messageId === event.payload.messageId)
+          if (m !== undefined) m.tombstoned = true
+          return
+        }
+        case 'v1.session.revived': {
+          const m = this.messages.find((x) => x.messageId === event.payload.messageId)
+          if (m !== undefined) m.tombstoned = false
+          return
+        }
+        case 'v1.session.cleared': {
+          const b = this.sessionBoundaries[event.payload.agentId] ?? []
+          b.push({ at: event.at, sessionId: event.payload.sessionId })
+          this.sessionBoundaries[event.payload.agentId] = b
+          return
+        }
+        case 'v1.session.resumed': {
+          const b = this.sessionBoundaries[event.payload.agentId] ?? []
+          b.pop() // resume 抵消最近边界（呈现层同步——组装侧 sessionView 栈语义同款）
+          this.sessionBoundaries[event.payload.agentId] = b
           return
         }
         case 'v1.message.agent':

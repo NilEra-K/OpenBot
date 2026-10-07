@@ -64,6 +64,23 @@ export interface MessageUserPayload {
   text: string
 }
 
+/** 「会话掌控」事件族（sessionView 元事件写入面 → renderer 呈现刷新） */
+export interface SessionRevisedPayload {
+  agentId: string
+  messageId: string
+  text: string
+  regenerate: boolean
+  revisionId: string
+}
+export interface SessionTombstonedPayload {
+  agentId: string
+  messageId: string
+}
+export interface SessionClearedPayload {
+  agentId: string
+  sessionId: string
+}
+
 /** agent 回复 */
 export interface MessageAgentPayload {
   messageId: string
@@ -213,6 +230,11 @@ export interface KernelEventMap {
   'v1.system.roster': SystemRosterPayload
   'v1.system.remote-members': SystemRemoteMembersPayload
   'v1.box.gui-takeover': GuiTakeoverPayload
+  'v1.session.revised': SessionRevisedPayload
+  'v1.session.tombstoned': SessionTombstonedPayload
+  'v1.session.revived': SessionTombstonedPayload
+  'v1.session.cleared': SessionClearedPayload
+  'v1.session.resumed': { agentId: string }
   'v1.message.remote': MessageRemotePayload
 }
 

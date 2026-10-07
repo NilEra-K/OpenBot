@@ -7,7 +7,7 @@
  * 按时间序聚合在对话流，右栏 ctx 纯化为一块显示器。
  * 空缺态：管家缺失 / provider 未配置，均给出去向提示（协议纯度：只呈现事实与引导，不发 UI 指令）。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { GroupEntry } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
@@ -298,6 +298,81 @@ const endedOutcomeLabel = computed(() => {
 })
 
 // ---- 思考块折叠（渲染局部态——抽屉开合归 renderer，解耦纪律 #1） ----
+
+// ---- 「会话掌控」（编辑/移出/恢复 + /clear /resume 拦截 + 引用会话选择器） ----
+const editModal = reactive<{ open: boolean; messageId: string; text: string }>({ open: false, messageId: '', text: '' })
+const openEdit = (m: { messageId: string; text: string }): void => {
+  editModal.open = true
+  editModal.messageId = m.messageId
+  editModal.text = m.text
+}
+const submitEdit = async (regenerate: boolean): Promise<void> => {
+  if (editModal.text.trim() === '') return
+  try {
+    await kernel.sessionEdit(ui.activeAgentId, editModal.messageId, editModal.text, regenerate)
+    toast.push(regenerate ? '已修订并重新生成' : '已修订（后续对话生效）', 'success')
+    editModal.open = false
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+const toggleTombstone = async (m: { messageId: string; from?: string; tombstoned?: boolean }): Promise<void> => {
+  const agentId = m.from ?? ui.activeAgentId
+  try {
+    if (m.tombstoned === true) await kernel.sessionRevive(agentId, m.messageId)
+    else await kernel.sessionTombstone(agentId, m.messageId)
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+/** 发送前拦截：/clear /resume 不进消息流——直接走命令面（返回 true = 已处理不发送） */
+const interceptSlash = async (raw: string): Promise<boolean> => {
+  const text = raw.trim()
+  if (text !== '/clear' && text !== '/resume') return false
+  try {
+    if (text === '/clear') {
+      const sid = await kernel.sessionClear(ui.activeAgentId)
+      toast.push(`已开启新会话 ${sid}（旧对话折叠保留）`, 'success')
+    } else {
+      await kernel.sessionResume(ui.activeAgentId)
+      toast.push('已恢复上一会话上下文', 'success')
+    }
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+  return true
+}
+/** 引用会话选择器：composer「引用日期」按钮 → 两级（agent → session）→ 胶囊随下条消息携带 */
+const refPickerOpen = ref(false)
+const refPickerAgent = ref<string | null>(null)
+const refPickerSessions = ref<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }>>([])
+const refPickerLoading = ref(false)
+const pendingRef = ref<{ agentId: string; sessionId: string | null } | null>(null)
+const openRefPicker = (): void => {
+  refPickerOpen.value = true
+  refPickerAgent.value = null
+  refPickerSessions.value = []
+}
+const pickRefAgent = async (agentId: string): Promise<void> => {
+  refPickerAgent.value = agentId
+  refPickerLoading.value = true
+  try {
+    refPickerSessions.value = await kernel.listSessions(agentId)
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    refPickerAgent.value = null
+  } finally {
+    refPickerLoading.value = false
+  }
+}
+const pickRefSession = (sessionId: string | null): void => {
+  if (refPickerAgent.value === null) return
+  pendingRef.value = { agentId: refPickerAgent.value, sessionId }
+  refPickerOpen.value = false
+}
+const clearPendingRef = (): void => {
+  pendingRef.value = null
+}
 
 const expandedThink = ref(new Set<string>())
 
@@ -765,6 +840,12 @@ const mentionsAll = (text: string): boolean =>
 const send = async (): Promise<void> => {
   const text = ui.draft.trim()
   if (text === '' || sending.value) return
+  // 「会话掌控」拦截：/clear /resume 走命令面不进消息流
+  if (await interceptSlash(text)) {
+    ui.draft = ''
+    draftEl.value?.focus()
+    return
+  }
   // 群会话（P5 Step 4）：直达群命令（内核有界轮转——supersede/上限/幂等在编排层）；
   // 群内 @提及是轮转优先信号（内核识别），不做单发路由
   if (ui.activeGroupId !== null) {
@@ -821,7 +902,8 @@ const send = async (): Promise<void> => {
   ui.draft = ''
   sending.value = true
   try {
-    await kernel.sendUserMessage(to, text)
+    await kernel.sendUserMessage(to, text, undefined, pendingRef.value ?? undefined)
+    pendingRef.value = null // 引用一次性消费（随这条消息走）
   } catch {
     // 失败已标记在消息条目上（流内显示重试）——不弹全局错误
   } finally {
@@ -979,7 +1061,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           <template v-for="unit in streamUnits" :key="unit.key">
             <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
 
-            <!-- user 消息（右对齐气泡） -->
+            <!-- user 消息（右对齐气泡；「会话掌控」hover 编辑 + 引用胶囊） -->
             <div v-else-if="unit.kind === 'msg-user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
               <div class="avatar neutral">你</div>
               <div class="m-body">
@@ -988,7 +1070,14 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                   <span class="m-time">{{ fmtTime(unit.at) }}</span>
                   <span v-if="kernel.messages[unit.msgIndex!]!.pending" class="m-state">发送中…</span>
                   <button v-else-if="kernel.messages[unit.msgIndex!]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
+                  <button
+                    v-if="!kernel.messages[unit.msgIndex!]!.pending && !kernel.messages[unit.msgIndex!]!.failed"
+                    class="m-act"
+                    title="编辑这条消息"
+                    @click="openEdit(kernel.messages[unit.msgIndex!]!)"
+                  >编辑</button>
                 </div>
+                <div v-if="kernel.messages[unit.msgIndex!]!.sessionRef" class="m-ref-chip">引用日期 {{ kernel.messages[unit.msgIndex!]!.sessionRef!.agentId }} · {{ kernel.messages[unit.msgIndex!]!.sessionRef!.sessionId ?? '初始会话' }}</div>
                 <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
               </div>
             </div>
@@ -1054,6 +1143,12 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                   <!-- 已终结的无终答块组（run aborted/failed）：终态事实行，不再冒充进行中 -->
                   <span v-else-if="unit.kind === 'ended' && endedOutcomeLabel" class="m-state">{{ endedOutcomeLabel }}</span>
                   <span v-else-if="unit.msgIndex !== undefined" class="m-time">{{ fmtTime(unit.at) }}</span>
+                  <button
+                    v-if="unit.msgIndex !== undefined && kernel.messages[unit.msgIndex]!.kind === 'agent' && unit.kind !== 'pending'"
+                    class="m-act"
+                    :title="kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复进上下文' : '移出上下文（保留记录）'"
+                    @click="toggleTombstone(kernel.messages[unit.msgIndex!]!)"
+                  >{{ kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复' : '移出' }}</button>
                 </div>
 
                 <!-- 单元内按时间序交错：思考块与 task 卡不分层（think→task→think→…如实还原轮次） -->
@@ -1094,7 +1189,8 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                 </template>
 
                 <!-- 最终文本（markdown）；进行中且尚无任何输出块 → 三个点占位（首 token 到达即被实况取代） -->
-                <div v-if="unit.msgIndex !== undefined" class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
+                <div v-if="unit.msgIndex !== undefined" class="m-text md" :class="{ 'is-tombstoned': kernel.messages[unit.msgIndex]!.tombstoned }" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
+                <div v-if="unit.msgIndex !== undefined && kernel.messages[unit.msgIndex]!.tombstoned" class="m-tomb-note">已移出上下文（记录保留，后续对话不再携带）</div>
                 <div v-else-if="unit.kind === 'pending' && unit.parts.length === 0" class="m-text typing" aria-label="正在生成回复">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                 </div>
@@ -1113,6 +1209,56 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <div class="gate-actions">
               <button class="btn btn-primary btn-sm" @click="resolveGate(approval.nonce, 'approved')">批准</button>
               <button class="btn btn-danger-ghost btn-sm" @click="resolveGate(approval.nonce, 'denied')">拒绝</button>
+            </div>
+          </div>
+
+          <!-- 编辑消息模态（「会话掌控」）：仅修订 / 修订并重新生成 双动作 -->
+          <div v-if="editModal.open" class="wiz-overlay" @mousedown.self="editModal.open = false">
+            <div class="wiz-card" role="dialog" aria-label="编辑消息" style="max-width: 480px" @keydown.escape="editModal.open = false">
+              <div class="wiz-head">
+                <span class="wiz-title">编辑消息</span>
+                <button class="wiz-close" type="button" aria-label="关闭" @click="editModal.open = false">✕</button>
+              </div>
+              <div class="wiz-body">
+                <textarea v-model="editModal.text" class="field-input edit-textarea mono" rows="4" aria-label="修订文本"></textarea>
+                <p class="field-note">仅修订：后续对话使用新文本（本轮已答保留）。修订并重新生成：从这条消息截断重驱（旧时间线折叠保留）。</p>
+              </div>
+              <div class="wiz-foot">
+                <button class="btn btn-secondary" :disabled="editModal.text.trim() === ''" @click="submitEdit(false)">仅修订</button>
+                <button class="btn btn-primary" :disabled="editModal.text.trim() === ''" @click="submitEdit(true)">修订并重新生成</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 引用会话选择器（「会话掌控」）：两级 agent → session -->
+          <div v-if="refPickerOpen" class="wiz-overlay" @mousedown.self="refPickerOpen = false">
+            <div class="wiz-card" role="dialog" aria-label="引用 Agent 会话" style="max-width: 440px" @keydown.escape="refPickerOpen = false">
+              <div class="wiz-head">
+                <span class="wiz-title">引用 Agent 会话</span>
+                <button v-if="refPickerAgent !== null" class="btn btn-ghost btn-sm" @click="refPickerAgent = null">← 重选 Agent</button>
+                <button class="wiz-close" type="button" aria-label="关闭" @click="refPickerOpen = false">✕</button>
+              </div>
+              <div class="wiz-body">
+                <template v-if="refPickerAgent === null">
+                  <button v-for="a in kernel.roster" :key="a.agentId" class="adb-device-row" @click="pickRefAgent(a.agentId)">
+                    <span>{{ a.name ?? a.agentId }}</span>
+                    <span class="adb-device-meta">{{ a.agentId }}</span>
+                  </button>
+                </template>
+                <template v-else>
+                  <p v-if="refPickerLoading" class="field-note">加载会话清单…</p>
+                  <p v-else-if="refPickerSessions.length === 0" class="field-note">该 Agent 尚无可引用的会话。</p>
+                  <button
+                    v-for="sess in refPickerSessions.slice().reverse()"
+                    :key="sess.sessionId"
+                    class="adb-device-row"
+                    @click="pickRefSession(sess.sessionId)"
+                  >
+                    <span class="mono">{{ sess.sessionId }}{{ sess.current ? '（当前）' : '' }} · {{ sess.messageCount }} 条</span>
+                    <span class="adb-device-meta">{{ sess.firstText.slice(0, 30) }}</span>
+                  </button>
+                </template>
+              </div>
             </div>
           </div>
         </div>
@@ -1164,6 +1310,10 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                     <button class="cb-menu-item" @click="insertMentionTrigger(); plusMenuOpen = false">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
                       <span class="mt"><span class="ti">使用 @ 添加上下文</span></span>
+                    </button>
+                    <button class="cb-menu-item" @click="openRefPicker(); plusMenuOpen = false">
+                      <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                      <span class="mt"><span class="ti">引用某个 Agent 的会话</span><span class="ts">随下条消息注入被引会话内容</span></span>
                     </button>
                   </div>
                 </div>
