@@ -282,6 +282,9 @@ export interface LiveStreamBlock {
   agentId: string
   runId: string
   stream: 'llm' | 'exec'
+  /** llm 流类（v0.1.43 双通道）：true=思考增量（thinking_delta/reasoning_content）；缺席=正文。
+   *  exec 流无此字段 */
+  think?: boolean
   seq: number
   /** exec 流：命令行与所属 Box；llm 流：轮次序号 */
   command?: string[]
@@ -874,6 +877,11 @@ export const useKernelStore = defineStore('kernel', {
             text: event.payload.text,
             at: event.at,
           })
+          // 正文预览块让位真消息（v0.1.43）：终答事件可先于流 end 到达（事件时序）——不看 state
+          // 直接删（live/end 都删；流 end 随后到达时块已除名，onStreamEnd 无操作）；思考块保留
+          this.streams = this.streams.filter(
+            (b) => !(b.agentId === event.payload.agentId && b.stream === 'llm' && b.think !== true),
+          )
           return
         case 'v1.message.a2a':
           this.bumpEdge(event.payload.fromAgentId, event.payload.toAgentId)
@@ -1072,6 +1080,8 @@ export const useKernelStore = defineStore('kernel', {
     onStreamOpen(meta: NonNullable<import('../lib/stream').RunStreamOpenMeta['meta']>): void {
       const key = `${meta.runId}:${meta.stream}:${meta.seq}`
       if (this.streams.some((s) => s.key === key)) return // 防重（重连竞态）
+      // llm 流不预开块（v0.1.43）：一个 open 对应 think/text 双通道——首 chunk 按 th 开对应块
+      if (meta.stream === 'llm') return
       this.streams.push({
         key,
         agentId: meta.agentId,
@@ -1091,9 +1101,36 @@ export const useKernelStore = defineStore('kernel', {
 
     onStreamChunk(
       record: { agentId: string; runId: string; stream: 'llm' | 'exec' },
-      chunk: { t: string; ch?: 'stdout' | 'stderr' },
+      chunk: { t: string; ch?: 'stdout' | 'stderr'; th?: boolean },
     ): void {
-      // 同 run 同类的最新块（hub 与 renderer 同一路由语义）
+      if (record.stream === 'llm') {
+        // llm 双通道（v0.1.43）：th=true → 思考块 / 缺省 → 正文块（live 预览气泡）。
+        // open 不预开——首 chunk 惰性建，th 交替时各自续写已有通道块
+        let block = [...this.streams].reverse().find(
+          (s) =>
+            s.runId === record.runId &&
+            s.stream === 'llm' &&
+            s.state === 'live' &&
+            (s.think === true) === (chunk.th === true),
+        )
+        if (block === undefined) {
+          block = {
+            key: `${record.runId}:llm${chunk.th === true ? ':think' : ':text'}:${Date.now()}`,
+            agentId: record.agentId,
+            runId: record.runId,
+            stream: 'llm',
+            seq: 0,
+            stdout: '',
+            stderr: '',
+            state: 'live',
+            at: Date.now(),
+            ...(chunk.th === true ? { think: true } : {}),
+          }
+          this.streams.push(block)
+        }
+        block.stdout += chunk.t
+        return
+      }
       const block = [...this.streams].reverse().find(
         (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live',
       )
@@ -1103,12 +1140,14 @@ export const useKernelStore = defineStore('kernel', {
     },
 
     onStreamEnd(record: { agentId: string; runId: string; stream: 'llm' | 'exec' }, reason?: string): void {
-      const block = [...this.streams].reverse().find(
+      // llm 双通道（v0.1.43）：关闭该 run 全部 llm live 块（think 与 text 各一）
+      const live = this.streams.filter(
         (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live',
       )
-      if (!block) return
-      block.state = reason === undefined ? 'end' : 'abort'
-      if (reason !== undefined) block.abortReason = reason
+      for (const block of live) {
+        block.state = reason === undefined ? 'end' : 'abort'
+        if (reason !== undefined) block.abortReason = reason
+      }
     },
 
     // ---- PTY 会话（操作台终端；键入走命令面，输出走 /stream 的 pty 流） ----

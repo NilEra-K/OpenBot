@@ -168,7 +168,7 @@ const execStreamsOf = (runId?: string): LiveStreamBlock[] =>
  * （run 进行中，最终消息未到）。
  */
 /** 聚合单元的组成部分（保持插入序=时间序——think 与 exec 交错，不分层） */
-type UnitPart = { kind: 'think'; block: LiveStreamBlock } | { kind: 'exec'; index: number }
+type UnitPart = { kind: 'think'; block: LiveStreamBlock } | { kind: 'exec'; index: number } | { kind: 'live-msg'; block: LiveStreamBlock }
 
 interface StreamUnit {
   key: string
@@ -181,12 +181,12 @@ interface StreamUnit {
 
 /** 组成部分的发生时间（flush/进行中单元的排序值） */
 const partAt = (part: UnitPart): number =>
-  part.kind === 'think' ? part.block.at : kernel.execs[part.index]!.at
+  part.kind === 'exec' ? kernel.execs[part.index]!.at : part.block.at
 
 interface RawRow {
   key: string
   at: number
-  kind: 'msg-user' | 'msg-agent' | 'msg-remote' | 'relay' | 'exec' | 'think'
+  kind: 'msg-user' | 'msg-agent' | 'msg-remote' | 'relay' | 'exec' | 'think' | 'live-msg'
   msgIndex?: number
   execIndex?: number
   block?: LiveStreamBlock
@@ -215,12 +215,18 @@ const streamUnits = computed<StreamUnit[]>(() => {
   kernel.execs.forEach((e, i) => {
     if (agentOfRun(e.runId) === active) raw.push({ key: `e${i}`, at: e.at, kind: 'exec', execIndex: i })
   })
-  // 思考实况：该 agent 的 llm 增量块——全部轮次按时间留痕（多轮工具循环时与 exec 卡自然交错）。
-  // agentId 直配（比 runId 前缀推断更准）；实况断线不补，重启后历史只有事实事件（诚实分层）
+  // llm 实况双通道（v0.1.43）：think 块进思考卡；正文块按时间序作 live 消息行（终答到达由
+  // store 去重让位）。agentId 直配；实况断线不补，重启后历史只有事实事件（诚实分层）
   for (const block of kernel.streams) {
-    if (block.agentId === active && block.stream === 'llm' && block.stdout !== '') {
+    if (block.agentId !== active || block.stream !== 'llm' || block.stdout === '') continue
+    if (block.think === true) {
       raw.push({ key: `t-${block.key}`, at: block.at, kind: 'think', block })
+      continue
     }
+    // 正文预览幂等让位（v0.1.43）：同 agent 已有文本与预览全文一致的终答 → 不渲染（内容判据
+    // 精确且时序无关；中间轮正文不等任何消息文本 → 保留为过程事实）
+    if (kernel.messages.some((m) => m.kind === 'agent' && m.from === active && m.text === block.stdout)) continue
+    raw.push({ key: `p-${block.key}`, at: block.at, kind: 'live-msg', block })
   }
   raw.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key))
 
@@ -237,6 +243,14 @@ const streamUnits = computed<StreamUnit[]>(() => {
       pendingParts.push({ kind: 'exec', index: row.execIndex! })
     } else if (row.kind === 'think') {
       pendingParts.push({ kind: 'think', block: row.block! })
+    } else if (row.kind === 'live-msg') {
+      // 正文 live 预览：独立单元以 agent 气泡形态呈现（store 在真消息到达时去重让位——
+      // 无终答的 run（预算/失败/中止）它就是本轮正文的最后事实，保留）
+      if (pendingParts.length > 0) {
+        units.push({ key: `f-${row.key}`, at: partAt(pendingParts.at(-1)!), kind: 'agent', parts: pendingParts })
+        pendingParts = []
+      }
+      units.push({ key: row.key, at: row.at, kind: 'live-msg', block: row.block!, parts: [] })
     } else if (row.kind === 'msg-agent') {
       // agent 消息：吸收前置块——聚合单元
       units.push({ key: row.key, at: row.at, kind: 'agent', msgIndex: row.msgIndex, parts: pendingParts })
@@ -271,12 +285,15 @@ const streamUnits = computed<StreamUnit[]>(() => {
   return units
 })
 
-/** 已终结块组的状态行：该 agent 最新 run 的终态文案（aborted/failed 事实；无则不显示） */
+/** 已终结块组的状态行：该 agent 最新 run 的终态文案——v0.1.43 强化：所有非正常终态都醒目
+ *  交代（此前仅 aborted/failed 两条且弱呈现——「只有 think 没有终答」时用户不知为何） */
 const endedOutcomeLabel = computed(() => {
   const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId).at(-1)
   if (!last) return null
-  if (last.state === 'aborted') return '已中止'
-  if (last.state === 'failed') return last.code ? `失败 · ${last.code}` : '失败'
+  if (last.state === 'aborted') return '本轮已中止——未产出终答（过程与思考见上方）'
+  if (last.state === 'failed') return (last.code ? `失败 · ${last.code}` : '失败') + '——未产出终答（过程与思考见上方）'
+  if (last.state === 'escaped') return '已转后台继续——完成后结果仍会送达会话'
+  if (last.state === 'reaped') return '后台已结束——终答若已产出会在上方'
   return null
 })
 
@@ -1000,6 +1017,21 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
               </span>
               <span class="m-time">{{ fmtTime(unit.at) }}</span>
             </button>
+
+            <!-- 正文 live 预览（v0.1.43 双通道）：正在生成的正文以 agent 气泡形态流式呈现——
+                 终答消息到达由 store 去重让位；无终答的 run 它就是本轮正文的最后事实 -->
+            <div v-else-if="unit.kind === 'live-msg'" class="m" :data-livemsg="unit.block.key">
+              <div class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
+              <div class="m-body">
+                <div class="m-meta">
+                  <span class="m-name" :style="{ color: kernel.colorOf(ui.activeAgentId) }">{{ nameOf(ui.activeAgentId) }}</span>
+                  <span v-if="unit.block.state === 'live'" class="m-state">生成中…</span>
+                  <span class="m-time">{{ fmtTime(unit.at) }}</span>
+                </div>
+                <div class="m-text md" v-html="renderMarkdown(unit.block.stdout, mentionNames)"></div>
+                <span v-if="unit.block.state === 'live'" class="think-caret"></span>
+              </div>
+            </div>
 
             <!-- agent 聚合单元（含进行中/纯块组）：m-name 之下——思考块（可折叠）与 task 卡，最终文本（或三个点占位）收尾 -->
             <div v-else class="m">

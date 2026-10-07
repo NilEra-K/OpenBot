@@ -17,6 +17,9 @@ export interface RunStreamEvent {
   meta?: { command?: string[]; round?: number; boxId?: string }
   /** chunk 的文本增量 */
   text?: string
+  /** llm chunk 的流类（v0.1.43 双通道）：think=思考增量（onThinking）/ text=正文增量（缺省
+   *  text——旧事件流兼容：无 kind 的 llm chunk 一律按正文处理） */
+  think?: boolean
   /** exec chunk 通道（stdout/stderr；llm 无此字段） */
   channel?: 'stdout' | 'stderr'
   /** exec end 附带退出码 */

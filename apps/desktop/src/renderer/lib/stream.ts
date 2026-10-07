@@ -44,6 +44,8 @@ export interface RunStreamOpenMeta {
 export interface RunStreamChunk {
   t: string
   ch?: 'stdout' | 'stderr'
+  /** llm 双通道（v0.1.43）：true=思考增量（hub 的 th 透传） */
+  th?: boolean
 }
 
 /** gui 流（可选）：Box 桌面实况——h264 引擎 DATA 负载是 Annex B 字节流（AU 边界 renderer

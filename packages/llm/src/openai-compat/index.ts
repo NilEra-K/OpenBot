@@ -101,7 +101,7 @@ export class OpenAiCompatProvider implements ChatProvider {
     const timeoutSignal = AbortSignal.timeout(timeoutMs)
     const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
-    const streaming = request.onText !== undefined
+    const streaming = request.onText !== undefined || request.onThinking !== undefined
     const messages = toWireMessages(request)
     const body: Record<string, unknown> = {
       model: config.model,
@@ -160,7 +160,7 @@ export class OpenAiCompatProvider implements ChatProvider {
       throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, '流式响应缺少 body')
     }
     try {
-      return await consumeSse(response.body, request.onText!, config.model, combined)
+      return await consumeSse(response.body, request.onText ?? (() => {}), config.model, combined, request.onThinking)
     } catch (err) {
       if (err instanceof LlmError) throw err
       if (signal?.aborted) {
@@ -292,6 +292,7 @@ async function consumeSse(
   onText: (delta: string) => void,
   model: string,
   signal: AbortSignal,
+  onThinking?: (delta: string) => void,
 ): Promise<ChatResponse> {
   const decoder = new TextDecoder()
   let buffer = ''
@@ -332,6 +333,11 @@ async function consumeSse(
       if (typeof content === 'string' && content !== '') {
         text += content
         onText(content)
+      }
+      // reasoning_content（v0.1.43）：DeepSeek 系/GLM openai 面思考字段——此前被忽略（不可见）
+      const reasoning = delta['reasoning_content']
+      if (typeof reasoning === 'string' && reasoning !== '' && onThinking !== undefined) {
+        onThinking(reasoning) // 思考不进 text（正文事实分离——UI 实况分流）
       }
       const rawCalls = delta['tool_calls']
       if (Array.isArray(rawCalls)) {

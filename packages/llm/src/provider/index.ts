@@ -78,6 +78,12 @@ export interface ChatRequest {
    * 纯工具调用回合可能零次回调（无可视文本）。
    */
   onText?: (delta: string) => void
+  /**
+   * 思考增量回调（可选，v0.1.43）：与 onText 独立的推理流——anthropic 协议的
+   * thinking_delta / openai-compat 的 reasoning_content（GLM、DeepSeek 系思考字段）。
+   * 思考不进 ChatResponse（text 是正文事实——UI 实况分流用，见 runner 双通道 emit）。
+   */
+  onThinking?: (delta: string) => void
 }
 
 export interface ChatResponse {

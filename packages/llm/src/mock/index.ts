@@ -42,8 +42,8 @@ export class MockChatProvider implements ChatProvider {
       throw new LlmError(LlmErrorCodes.LLM_ABORTED, '请求前已被中止')
     }
     // 深拷贝留痕：调用方（turn 引擎）会在请求后继续原数组，引用会让观察失真；
-    // onText 是回调函数不可克隆，留痕剥离（回调本身不参与断言）
-    const { onText: _onText, ...cloneable } = request
+    // onText/onThinking 是回调函数不可克隆，留痕剥离（回调本身不参与断言——v0.1.43 补 onThinking）
+    const { onText: _onText, onThinking: _onThinking, ...cloneable } = request
     this.requests.push(structuredClone(cloneable))
     const step = this.#steps[this.#cursor]
     if (!step) {

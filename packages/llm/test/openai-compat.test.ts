@@ -275,3 +275,29 @@ describe('OpenAiCompatProvider 流式（onText）', () => {
     expect(body['stream']).toBe(false)
   })
 })
+
+describe('OpenAiCompatProvider 思考双通道（v0.1.43）', () => {
+  it('reasoning_content → onThinking（不进 text）；content 照常 onText——DeepSeek 系思考字段', async () => {
+    const mk = () =>
+      sseRes([
+        ev(delta({ role: 'assistant' })),
+        ev(delta({ reasoning_content: '推理中…' })),
+        ev(delta({ reasoning_content: '决定调用工具' })),
+        ev(delta({ content: '正文开始' })),
+        ev(delta({ content: '。' })),
+        'data: [DONE]\n\n',
+      ])
+    const { fetchImpl } = makeFetch(() => mk())
+    const provider = new OpenAiCompatProvider({ config, fetchImpl })
+    const think: string[] = []
+    const text: string[] = []
+    const response = await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      onText: (d) => text.push(d),
+      onThinking: (d) => think.push(d),
+    })
+    expect(think).toEqual(['推理中…', '决定调用工具'])
+    expect(text).toEqual(['正文开始', '。'])
+    expect(response.text).toBe('正文开始。') // 思考绝不进正文事实
+  })
+})

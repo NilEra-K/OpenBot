@@ -201,3 +201,60 @@ describe('AnthropicProvider 中止', () => {
 
 // LlmError 仅引用防 tree-shake 误删断言（风格对齐 openai-compat 测试）
 void LlmError
+
+describe('AnthropicProvider 思考双通道（v0.1.43）', () => {
+  it('thinking_delta → onThinking（不进 text/终答）；text_delta 照常 onText——GLM anthropic 面', async () => {
+    const a = makeFetch(() =>
+      sseRes([
+        { type: 'message_start', message: { role: 'assistant' } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '用户要列目录，' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '我用 exec 工具。' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '好的，' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '马上列出。' } },
+        { type: 'content_block_stop', index: 1 },
+        { type: 'message_stop' },
+      ]),
+    )
+    const provider = new AnthropicProvider({ config, fetchImpl: a.fetchImpl })
+    const think: string[] = []
+    const text: string[] = []
+    const response = await provider.chat({
+      ...req([{ role: 'user', content: '列目录' }]),
+      onText: (d) => text.push(d),
+      onThinking: (d) => think.push(d),
+    })
+    expect(think).toEqual(['用户要列目录，', '我用 exec 工具。'])
+    expect(text).toEqual(['好的，', '马上列出。'])
+    expect(response.text).toBe('好的，马上列出。') // 思考绝不进正文事实
+    // 请求侧（前半边）：思考显式开启 + temperature 剥离（官方约束）
+    const body = JSON.parse((a.calls[0]?.init?.body ?? '{}') as string)
+    expect(body['thinking']).toEqual({ type: 'enabled', budget_tokens: expect.any(Number) })
+    expect(body['temperature']).toBeUndefined()
+  })
+
+  it('仅 onThinking（无 onText）也走流式；无思考回调时 thinking_delta 静默忽略', async () => {
+    const mk = () =>
+      sseRes([
+        { type: 'message_start', message: { role: 'assistant' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '思考' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '答' } },
+        { type: 'message_stop' },
+      ])
+    const a = makeFetch(() => mk())
+    const providerA = new AnthropicProvider({ config, fetchImpl: a.fetchImpl })
+    const thinkOnly: string[] = []
+    const resA = await providerA.chat({
+      ...req([{ role: 'user', content: 'hi' }]),
+      onThinking: (d) => thinkOnly.push(d),
+    })
+    expect(thinkOnly).toEqual(['思考'])
+    expect(resA.text).toBe('答')
+    const b = makeFetch(() => mk())
+    const providerB = new AnthropicProvider({ config, fetchImpl: b.fetchImpl })
+    const resB = await providerB.chat({ ...req([{ role: 'user', content: 'hi' }]), onText: () => {} })
+    expect(resB.text).toBe('答') // 无 onThinking 时思考安全丢弃（不炸不进 text）
+  })
+})

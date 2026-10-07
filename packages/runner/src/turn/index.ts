@@ -174,7 +174,13 @@ export class TurnRunner {
           agentId,
           messages,
           run.signal,
-          emitStream ? (delta) => emit({ type: 'chunk', stream: 'llm', text: delta }) : undefined,
+          emitStream
+            ? (delta) => emit({ type: 'chunk', stream: 'llm', text: delta })
+            : undefined,
+          undefined,
+          emitStream
+            ? (delta) => emit({ type: 'chunk', stream: 'llm', text: delta, think: true })
+            : undefined,
         )
         emit({ type: 'end', stream: 'llm' })
       } catch (err) {
@@ -323,6 +329,7 @@ export class TurnRunner {
         run.signal,
         (delta) => emit({ type: 'chunk', stream: 'llm', text: delta }),
         [],
+        (delta) => emit({ type: 'chunk', stream: 'llm', text: delta, think: true }),
       )
       wrapupText = wrapup.text ?? ''
       emit({ type: 'end', stream: 'llm' })
@@ -345,10 +352,22 @@ export class TurnRunner {
 
   /** 边界转换：LlmError → 同 code 的 KernelError；未知异常归类 LLM_FAILED。
    *  toolSpecs 可选覆盖（缺省全量注册工具；预算收尾轮传 [] ——禁用工具强制文本总结） */
-  async #chat(agentId: string, messages: ChatMessage[], signal: AbortSignal, onText?: (delta: string) => void, toolSpecs?: ToolSpec[]) {
+  async #chat(
+    agentId: string,
+    messages: ChatMessage[],
+    signal: AbortSignal,
+    onText?: (delta: string) => void,
+    toolSpecs?: ToolSpec[],
+    onThinking?: (delta: string) => void,
+  ) {
     try {
       return await this.#deps.llmOf(agentId).chat(
-        { messages, tools: toolSpecs ?? this.#deps.tools.specs(), ...(onText ? { onText } : {}) },
+        {
+          messages,
+          tools: toolSpecs ?? this.#deps.tools.specs(),
+          ...(onText ? { onText } : {}),
+          ...(onThinking ? { onThinking } : {}),
+        },
         signal,
       )
     } catch (err) {

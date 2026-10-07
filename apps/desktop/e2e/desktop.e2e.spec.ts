@@ -2075,3 +2075,49 @@ test('Android 配对向导（P9-3c）：扫描入口 + 配对模态双模式骨�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('思考双通道（v0.1.43）：reasoning 流进思考卡、正文流为 live 气泡预览、终答替换预览', async () => {
+  const mock = await startMockOpenAi([
+    {
+      match: (last) => last.role === 'user' && last.content.includes('双通道'),
+      reasoning: '先想一下思路，然后分两步。',
+      text: '正文回答：双通道验证通过。',
+    },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-think2-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+    // 配 provider 指向 mock（首段漏配导致「provider 未配置」——快照实锤）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.locator('.llm-nav-item[data-provider="E2E mock"] .llm-nav-dot.on')).toBeVisible()
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.composer-box input').fill('双通道测试')
+    await page.locator('.composer-box input').press('Enter')
+    // 思考卡在场（含思考内容——可折叠体内）
+    const thinkCard = page.locator('.think').first()
+    await expect(thinkCard).toBeVisible({ timeout: 15_000 })
+    await thinkCard.locator('.think-head').click()
+    await expect(thinkCard.locator('.think-body')).toContainText('先想一下思路')
+    // 终答气泡（正文）到达——含正文文本
+    await expect(page.locator('.m-text', { hasText: '正文回答：双通道验证通过。' })).toBeVisible({ timeout: 15_000 })
+    // 终答到达后正文预览让位（无双份正文——live 预览块被去重删除）
+    await expect(page.locator('[data-livemsg]')).toHaveCount(0, { timeout: 5_000 })
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

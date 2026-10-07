@@ -13,10 +13,12 @@ import { StreamSession } from '@openbot/transport'
 import type { StreamOpenMeta } from '@openbot/transport'
 import type { RunStreamEvent } from '@openbot/runner'
 
-/** DATA 帧负载 JSON 形状（t=文本增量；ch 仅 exec 流携带，stdout/stderr） */
+/** DATA 帧负载 JSON 形状（t=文本增量；ch 仅 exec 流携带 stdout/stderr；
+ *  th 仅 llm 流携带（v0.1.43 思考双通道——true=思考增量，缺席=正文） */
 export interface StreamChunkPayload {
   t: string
   ch?: 'stdout' | 'stderr'
+  th?: boolean
 }
 
 interface HubStream {
@@ -79,6 +81,7 @@ export class StreamHub {
       const payload: StreamChunkPayload = {
         t: event.text ?? '',
         ...(event.channel !== undefined ? { ch: event.channel } : {}),
+        ...(event.think === true ? { th: true } : {}),
       }
       const bytes = encoder.encode(JSON.stringify(payload))
       for (const [session, streamId] of entry.targets) {

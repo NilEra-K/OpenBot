@@ -14,6 +14,8 @@ interface ScriptStep {
   match: (last: { role: string; content: string }, lastToolName: string | null) => boolean
   toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>
   text?: string
+  /** 思考增量（v0.1.43 双通道 E2E）：SSE 走 reasoning_content（先思考后正文——渲染层断言思考卡与正文预览各自落位） */
+  reasoning?: string
   /** 响应延迟毫秒（P5 Step 4：制造慢响应——群 supersede 等时序场景；流式与 JSON 同效） */
   delayMs?: number
 }
@@ -149,9 +151,16 @@ function respondSse(res: import('node:http').ServerResponse, step: ScriptStep, s
         ],
       })
     }
-  } else if (step.text !== undefined) {
-    for (let i = 0; i < step.text.length; i += 3) {
-      sse({ choices: [{ index: 0, delta: { content: step.text.slice(i, i + 3) } }] })
+  } else {
+    if (step.reasoning !== undefined) {
+      for (let i = 0; i < step.reasoning.length; i += 4) {
+        sse({ choices: [{ index: 0, delta: { reasoning_content: step.reasoning.slice(i, i + 4) } }] })
+      }
+    }
+    if (step.text !== undefined) {
+      for (let i = 0; i < step.text.length; i += 3) {
+        sse({ choices: [{ index: 0, delta: { content: step.text.slice(i, i + 3) } }] })
+      }
     }
   }
   res.write('data: [DONE]\n\n')

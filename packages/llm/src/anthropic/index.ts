@@ -76,18 +76,26 @@ export class AnthropicProvider implements ChatProvider {
     const timeoutSignal = AbortSignal.timeout(timeoutMs)
     const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
-    const streaming = request.onText !== undefined
+    const streaming = request.onText !== undefined || request.onThinking !== undefined
     const messages = toWireMessages(request)
     const system = systemOf(request)
+    const maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS
     const body: Record<string, unknown> = {
       model: config.model,
-      max_tokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
+      max_tokens: maxTokens,
       messages,
       stream: streaming,
     }
     if (system !== null) body['system'] = system
     if (request.tools && request.tools.length > 0) body['tools'] = toWireTools(request.tools)
     if (config.temperature !== undefined) body['temperature'] = config.temperature
+    // 思考显式开启（v0.1.43 前半边补全）：anthropic 协议思考必须显式请求（缺省关闭）——
+    // 此前从没带过 thinking 参数 → 端点从不输出思考块（「只有 text 没有 think」根因）。
+    // budget_tokens 官方下限 1024；须 < max_tokens（小 max_tokens 时钳制保请求合法）
+    if (request.onThinking !== undefined) {
+      body['thinking'] = { type: 'enabled', budget_tokens: Math.min(4096, Math.max(1024, Math.floor(maxTokens / 2))) }
+      delete body['temperature'] // 官方约束：思考开启时 temperature 须为 1/缺省——配置值剥离保请求合法
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -139,7 +147,7 @@ export class AnthropicProvider implements ChatProvider {
       throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, '流式响应缺少 body')
     }
     try {
-      return await consumeSse(response.body, request.onText!, config.model, combined)
+      return await consumeSse(response.body, request.onText ?? (() => {}), config.model, combined, request.onThinking)
     } catch (err) {
       if (err instanceof LlmError) throw err
       if (signal?.aborted) {
@@ -299,6 +307,7 @@ async function consumeSse(
   onText: (delta: string) => void,
   model: string,
   signal: AbortSignal,
+  onThinking?: (delta: string) => void,
 ): Promise<ChatResponse> {
   const decoder = new TextDecoder()
   let buffer = ''
@@ -351,6 +360,13 @@ async function consumeSse(
         if (delta?.['type'] === 'text_delta' && typeof delta['text'] === 'string' && delta['text'] !== '') {
           text += delta['text']
           onText(delta['text'])
+        } else if (
+          delta?.['type'] === 'thinking_delta' &&
+          typeof delta['thinking'] === 'string' &&
+          delta['thinking'] !== '' &&
+          onThinking !== undefined
+        ) {
+          onThinking(delta['thinking']) // 思考不进 text（正文事实分离——UI 实况分流）
         } else if (
           delta?.['type'] === 'input_json_delta' &&
           typeof delta['partial_json'] === 'string' &&
