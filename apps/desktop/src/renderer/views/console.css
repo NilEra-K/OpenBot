@@ -1058,12 +1058,85 @@
   margin-top: 2px;
 }
 
+/* 编辑消息模态（v0.1.47 重设计）：轻量专用卡——不复向导骨架 */
+.edit-card {
+  width: min(520px, 92vw);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--bg2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 12px 28px rgba(0, 0, 0, 0.14);
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+:root[data-theme='dark'] .edit-card {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+
+.edit-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.edit-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  flex: none;
+}
+
+.edit-sub {
+  font-size: 11.5px;
+  color: var(--ink3);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .edit-textarea {
   width: 100%;
-  height: auto;
+  min-height: 96px;
+  max-height: 40vh;
   resize: vertical;
-  padding: 8px 10px;
-  font-size: 12.5px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg1);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.edit-textarea:focus {
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.edit-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 按钮内动作语义提示（小字次行——比一大段灰字说明更轻） */
+.edit-act-hint {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10.5px;
+  opacity: 0.65;
 }
 
 /* 引用会话选择器（v0.1.45 重设计）：专用样式族——不再蹭设备扫描行 */
@@ -1130,3 +1203,31 @@
   font-size: 11px; padding: 0 2px; border-radius: 4px;
 }
 .ref-pending button:hover { color: var(--ink); background: var(--bg3); }
+
+/* 编辑模态 overlay（v0.1.47b 修复：wiz-overlay 样式源是 settings.css scoped 于
+ * SettingsView——ConsoleView 内同名类无样式，模态曾以文档流落在滚动流末尾，用户须滚到底
+ * 才能编辑。视图级自持 fixed overlay + 关闭钮，不再跨视图蹭 scoped 类） */
+.wiz-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+}
+
+.wiz-close {
+  background: none;
+  border: none;
+  color: var(--ink3);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.wiz-close:hover {
+  color: var(--ink);
+  background: var(--bg3);
+}

@@ -302,10 +302,16 @@ const endedOutcomeLabel = computed(() => {
 
 // ---- 「会话掌控」（编辑/移出/恢复 + /clear /resume 拦截 + 引用会话选择器） ----
 const editModal = reactive<{ open: boolean; messageId: string; text: string }>({ open: false, messageId: '', text: '' })
+const editAreaEl = ref<HTMLTextAreaElement | null>(null)
 const openEdit = (m: { messageId: string; text: string }): void => {
   editModal.open = true
   editModal.messageId = m.messageId
   editModal.text = m.text
+  // autofocus 属性对动态挂载元素不生效——挂载后手动聚焦 + 全选（编辑场景惯例）
+  void nextTick(() => {
+    editAreaEl.value?.focus()
+    editAreaEl.value?.select()
+  })
 }
 const submitEdit = async (regenerate: boolean): Promise<void> => {
   if (editModal.text.trim() === '') return
@@ -1358,20 +1364,32 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             </div>
           </div>
 
-          <!-- 编辑消息模态（「会话掌控」）：仅修订 / 修订并重新生成 双动作 -->
+          <!-- 编辑消息模态（「会话掌控」· v0.1.47 重设计）：轻量专用卡——不再复向导骨架；
+               舒适 textarea（正文非代码不 mono）+ 分行动作说明 + 三键明确层次 -->
           <div v-if="editModal.open" class="wiz-overlay" @mousedown.self="editModal.open = false">
-            <div class="wiz-card" role="dialog" aria-label="编辑消息" style="max-width: 480px" @keydown.escape="editModal.open = false">
-              <div class="wiz-head">
-                <span class="wiz-title">编辑消息</span>
+            <div class="edit-card" role="dialog" aria-label="编辑消息" @keydown.escape="editModal.open = false">
+              <div class="edit-head">
+                <span class="edit-title">编辑消息</span>
+                <span class="edit-sub">修改后，这条消息之后的对话可以保留或重写</span>
                 <button class="wiz-close" type="button" aria-label="关闭" @click="editModal.open = false">✕</button>
               </div>
-              <div class="wiz-body">
-                <textarea v-model="editModal.text" class="field-input edit-textarea mono" rows="4" aria-label="修订文本"></textarea>
-                <p class="field-note">仅修订：后续对话使用新文本（本轮已答保留）。修订并重新生成：从这条消息截断重驱（旧时间线折叠保留）。</p>
-              </div>
-              <div class="wiz-foot">
-                <button class="btn btn-secondary" :disabled="editModal.text.trim() === ''" @click="submitEdit(false)">仅修订</button>
-                <button class="btn btn-primary" :disabled="editModal.text.trim() === ''" @click="submitEdit(true)">修订并重新生成</button>
+              <textarea
+                ref="editAreaEl"
+                v-model="editModal.text"
+                class="edit-textarea"
+                aria-label="修订文本"
+                data-role="edit-textarea"
+              ></textarea>
+              <div class="edit-actions">
+                <button class="btn btn-ghost btn-sm" @click="editModal.open = false">取消</button>
+                <div class="edit-actions-group">
+                  <button class="btn btn-secondary btn-sm" :disabled="editModal.text.trim() === ''" title="后续对话使用新文本，本轮已生成的回复保留" @click="submitEdit(false)">
+                    仅修订<span class="edit-act-hint">保留已回复</span>
+                  </button>
+                  <button class="btn btn-primary btn-sm" :disabled="editModal.text.trim() === ''" title="从这条消息截断重新生成——旧时间线折叠保留" @click="submitEdit(true)">
+                    修订并重新生成<span class="edit-act-hint">重写回复</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
