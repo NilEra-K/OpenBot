@@ -866,13 +866,13 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
     await expect(page.locator('.m-text', { hasText: '已收到' })).toBeVisible({ timeout: 30_000 })
 
     // —— 进入档案模式：ctx-top（Settings + 会话名）+ 档案 kv 四行（全真值） ——
-    await page.locator('.sh-icon[title="会话档案（Settings）"]').click()
+    await page.locator('.sh-icon[title="会话档案"]').click()
     const ctx = page.locator('.ctx')
     await expect(ctx.locator('.ctx-top-title')).toHaveText('Settings')
     await expect(ctx.locator('.ctx-top-sub')).toHaveText('管家')
     await expect(ctx.locator('.ctx-name')).toHaveText('管家')
     await expect(ctx.locator('.kv', { hasText: '角色' })).toContainText('管家（steward）')
-    await expect(ctx.locator('.kv', { hasText: '模型' })).toContainText('默认模型（E2E mock）')
+    await expect(ctx.locator('.kv', { hasText: '模型' })).toContainText('默认模型（E2E mock · mock-model') // v2 供应商 1:N：粒度到模型
     await expect(ctx.locator('.kv', { hasText: 'Box 归属' })).toContainText(/box-\d+/)
     await expect(ctx.locator('.kv', { hasText: '权限现状' })).toContainText('出 Box 需批准（Manual 闸门）')
 
@@ -885,7 +885,7 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
     await expect(page.locator('.ctx-screen')).toBeVisible()
 
     // 空缺态如实（记忆/自动化无数据源不放占位）；worker1 档案的协作对象也应有回边
-    await page.locator('.sh-icon[title="会话档案（Settings）"]').click()
+    await page.locator('.sh-icon[title="会话档案"]').click()
     await expect(ctx.locator('.mem-empty').first()).toContainText('尚无记忆')
     const backEdge = ctx.locator('.edge-row', { hasText: '管家' })
     await expect(backEdge).toBeVisible()
@@ -1109,13 +1109,7 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
 
     // —— 配置两端点：默认 = E2E mock（首个自动成为默认）；坏端点 = 必然连接失败 ——
     await page.locator('.settings-nav-item', { hasText: '模型设置' }).click() // 切换式导航（从数据分节切回模型分节）
-    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
-    await page.locator('#pfName').fill('坏端点')
-    await page.locator('#pfUrl').fill('http://127.0.0.1:9/v1')
-    await page.getByRole('button', { name: '＋ 添加模型' }).click()
-    await page.locator('#pfModel').fill('x')
-    await page.locator('#pfModel').press('Enter')
-    await page.getByRole('button', { name: '保存', exact: true }).click()
+    // 先 E2E mock（首个自动成为默认——回退链的落点）再坏端点；协议分段交互随 E2E mock 表单（P4 Step 11）
     await page.getByRole('button', { name: '＋ 添加供应商' }).click()
     await page.locator('#pfName').fill('E2E mock')
     await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
@@ -1127,6 +1121,13 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
     await expect(page.locator('.proto-opt.is-on', { hasText: 'Anthropic' })).toBeVisible()
     await page.locator('.proto-opt', { hasText: 'OpenAI 兼容' }).click()
     await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('坏端点')
+    await page.locator('#pfUrl').fill('http://127.0.0.1:9/v1')
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('x')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
     await expect(page.locator('.llm-nav-item[data-provider="坏端点"]')).toBeVisible()
 
     // —— 向导创建绑定坏端点的 Agent：上游失败自动回退到默认模型（mock） ——
@@ -1136,7 +1137,7 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
     await expect(bindCard).toBeVisible()
     await bindCard.locator('#wizName').fill('回退员')
     await bindCard.getByRole('button', { name: '下一步' }).click()
-    await bindCard.locator('.wiz-kv', { hasText: '沙箱镜像' }).locator('select').selectOption('坏端点')
+    await bindCard.locator('.wiz-kv', { hasText: '模型' }).locator('select').selectOption('坏端点::x') // v2 复合键：供应商::模型（存量对位——原锚镜像下拉是 v0.1.28 旧形态）
     await bindCard.getByRole('button', { name: '下一步' }).click()
     await bindCard.getByRole('button', { name: '创建 agent' }).click()
     await expect(page.locator('.toast', { hasText: '回退员」已创建' })).toBeVisible({ timeout: 15_000 })
@@ -1483,6 +1484,10 @@ test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image
     await page.getByRole('button', { name: '＋ 添加模型' }).click()
     await page.locator('#pfModel').fill('mock-model')
     await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    // 编辑模型勾「视觉」（v2 存量对位：supportsImages 下沉模型级——未勾则截图回喂降级文本）
+    await page.locator('button[title="编辑模型"]').first().click()
+    await page.locator('label.proto-opt', { hasText: '视觉' }).click()
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await page.getByRole('button', { name: '控制台', exact: true }).click()
     await page.locator('.composer-box input').fill('看看桌面')

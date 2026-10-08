@@ -335,7 +335,7 @@ const toggleTombstone = async (m: { messageId: string; from?: string; tombstoned
 /** 发送前拦截：/clear /resume 不进消息流——直接走命令面（菜单关闭时的兜底路径） */
 const doSlashClear = async (): Promise<void> => {
   const sid = await kernel.sessionClear(ui.activeAgentId)
-  toast.push(`已开启新会话 ${sid}（旧对话折叠保留）`, 'success')
+  toast.push(`已开启新会话 ${sid}（上下文与界面已清空，transcript 留证）`, 'success')
 }
 const doSlashResume = async (): Promise<void> => {
   await kernel.sessionResume(ui.activeAgentId)
@@ -351,7 +351,7 @@ const slashLoading = ref(false)
 
 /** 命令清单（子串联想；/quote 进 agent 级） */
 const SLASH_COMMANDS: Array<{ name: string; sub: string }> = [
-  { name: '/clear', sub: '开启新会话——上下文清零（旧对话折叠保留）' },
+  { name: '/clear', sub: '开启新会话——上下文与界面清空（transcript 留证）' },
   { name: '/resume', sub: '选择回到某个历史会话（默认最近一个）' },
   { name: '/quote', sub: '引用某个 Agent 的会话（随下条消息注入）' },
 ]

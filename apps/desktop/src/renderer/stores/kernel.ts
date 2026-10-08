@@ -777,15 +777,21 @@ export const useKernelStore = defineStore('kernel', {
           if (typeof rp['messageId'] === 'string' && typeof rp['text'] === 'string') bootRevisions.set(rp['messageId'], rp['text'])
         } else if (record.kind === 'session-start') {
           bootBoundaries.push({ at: record.at, sessionId: String((record.payload as Record<string, unknown>)['sessionId'] ?? 's-?') })
+        } else if (record.kind === 'session-resume') {
+          bootBoundaries.pop() // 组装侧 sessionView 栈语义同款——boot 呈现窗口与内核一致
         }
       }
       if (bootBoundaries.length > 0) this.sessionBoundaries[agentId] = bootBoundaries
+      // 界面直接清空（v0.1.50 用户裁定）：有效窗口 = 最后边界之后——更早的消息不投影到呈现层
+      // （transcript append-only 留证；与实时 cleared 事件的 filter 同款语义）
+      const windowStartAt = bootBoundaries.length > 0 ? bootBoundaries[bootBoundaries.length - 1]!.at : Number.NEGATIVE_INFINITY
       for (const m of this.messages) {
         if (bootTombstoned.has(m.messageId)) m.tombstoned = true
         const revised = bootRevisions.get(m.messageId)
         if (revised !== undefined && m.kind === 'user') m.text = revised
       }
       for (const record of records) {
+        if (record.at < windowStartAt) continue // 清空呈现：边界之前的记录不投影（含过程事实）
         const p = record.payload as Record<string, unknown>
         // ---- 过程事实恢复（thinking/exec 记录）：投影为已结束的伪流块与 exec 卡——
         // 渲染层 streamUnits/execStreamsOf 零改动复用；实况块在场时跳过（按 runId+维度去重，
@@ -936,12 +942,19 @@ export const useKernelStore = defineStore('kernel', {
           const b = this.sessionBoundaries[event.payload.agentId] ?? []
           b.push({ at: event.at, sessionId: event.payload.sessionId })
           this.sessionBoundaries[event.payload.agentId] = b
+          // 界面直接清空（v0.1.50 用户裁定：不折叠）——边界之前的消息从呈现层移除
+          // （transcript append-only 留证；boot 恢复同款过滤，见 loadHistory）
+          this.messages = this.messages.filter((m) => m.at >= event.at)
           return
         }
         case 'v1.session.resumed': {
           const b = this.sessionBoundaries[event.payload.agentId] ?? []
           b.pop() // resume 抵消最近边界（呈现层同步——组装侧 sessionView 栈语义同款）
           this.sessionBoundaries[event.payload.agentId] = b
+          // 界面被清空的消息找回（v0.1.50 清空裁定的对偶）：重放历史——boot 栈语义
+          // （resume 弹栈）使窗口回到上一会话，旧消息重新投影
+          loadedHistory.delete(event.payload.agentId)
+          void this.loadHistory(event.payload.agentId).catch(() => {})
           return
         }
         case 'v1.message.agent':
