@@ -606,6 +606,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   /** 窗口清单探测（v1.hostscreen.windows——懒建单例通道，随应用退出 dispose） */
   let windowProbe: HostScreenControl | null = null
   /** 宿主 ffmpeg 在场性已内聚 HostScreenControl.streamTier（P9-2 三档判定单一来源） */
+  /** per-CLI OCI 后端（v0.1.52 容器条目解耦全局后端）：docker 优先、podman 次之；
+   * 惰性构造缓存（无状态 facade，一个 CLI 一个实例）。mock 强制沙箱（E2E 隔离）返回 null
+   *  ——不真建容器，OPENBOT_SANDBOX=mock 语义不变。CLI 均不在场也返回 null（test 如实报） */
+  const ociBackends = new Map<'docker' | 'podman', BoxBackend>()
+  const ociBackendFor = (): BoxBackend | null => {
+    if (chosen.backendId === 'mock') return null
+    const pick: 'docker' | 'podman' | null = probes.find((x) => x.id === 'docker')?.available
+      ? 'docker'
+      : probes.find((x) => x.id === 'podman')?.available
+        ? 'podman'
+        : null
+    if (pick === null) return null
+    let hit = ociBackends.get(pick)
+    if (hit === undefined) {
+      hit = pick === 'docker' ? new DockerBoxBackend({ image: dockerImage, now: Date.now }) : new PodmanBoxBackend({ image: podmanImage, now: Date.now })
+      ociBackends.set(pick, hit)
+    }
+    return hit
+  }
+
   const registerImageRoute = (entry: ImageEntry): void => {
     if (entry.carrier === 'ssh') {
       routingBackend.registerRoute(entry.id, {
@@ -668,13 +688,19 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         hasAndroidRoute = true
         if (gatewayStarted) ensureComputerTools('Android 设备条目运行中注册（input 注入）')
       }
-    } else if (chosen.backendId === 'docker' || chosen.backendId === 'podman') {
-      routingBackend.registerRoute(entry.id, {
-        backend,
-        translate: (spec) => ({ ...spec, image: entry.image ?? dockerImage }),
-      })
+    } else if (entry.carrier === 'container') {
+      // 容器条目解耦全局后端（v0.1.52 用户裁定「不再选默认沙箱，最终选屏幕」）：按 CLI 探测
+      // 构造 per-CLI OCI 后端（docker 优先），不要求全局默认后端是 OCI——wsl 默认下绑 GUI 容器
+      // 镜像照样路由（屏幕在容器内）。mock 强制沙箱（E2E 隔离）不做 per-CLI 路由——不真建容器。
+      const oci = ociBackendFor()
+      if (oci !== null) {
+        routingBackend.registerRoute(entry.id, {
+          backend: oci,
+          translate: (spec) => ({ ...spec, image: entry.image ?? dockerImage }),
+        })
+      }
+      // docker/podman CLI 均不在场：不注册路由（v1.images.test 如实报告不可路由）
     }
-    // 非 OCI 底座上的 container 条目：不注册路由（v1.images.test 如实报告不可路由）
   }
   for (const entry of await imageStore.list()) registerImageRoute(entry)
   /** 连接测试（D3——v1.images.test 的探测报告，如实不造假）：
@@ -774,10 +800,14 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         return { ok: false, reason: (err instanceof Error ? err.message : String(err)).slice(0, 200) }
       }
     }
-    if (chosen.backendId !== 'docker' && chosen.backendId !== 'podman') {
-      return { ok: false, reason: '当前沙箱后端不是 Docker/Podman——容器镜像条目不可路由（设置页切换后端后重试）' }
+    // 容器条目（v0.1.52 解耦全局后端）：per-CLI 查镜像在场（docker 优先——同 registerImageRoute
+    // 路由源）；mock 强制沙箱（E2E 隔离）/ CLI 均不在场 如实报告不可路由
+    if (entry.carrier === 'container' && ociBackendFor() === null) {
+      return { ok: false, reason: 'Docker/Podman CLI 均不可用——容器镜像条目不可路由（安装后重试）' }
     }
-    const cli = chosen.backendId
+    const cli = entry.carrier === 'container'
+      ? (probes.find((x) => x.id === 'docker')?.available ? 'docker' : 'podman')
+      : '' // 非 container 载体已在前序分支 return，此分支恒为 container——类型收窄保持 args 分支简单
     const args = cli === 'podman' ? ['image', 'exists', entry.image ?? ''] : ['image', 'inspect', entry.image ?? '']
     try {
       const r = await runProcess({ command: [cli, ...args], timeoutMs: 20_000 })
