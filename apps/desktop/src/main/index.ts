@@ -193,7 +193,21 @@ if (!locked) {
       desktop = await assembleDesktop()
     } catch (err) {
       console.error('[openbot] 内核装配失败：', err)
-      dialog.showErrorBox('OpenBot 内核装配失败', err instanceof Error ? err.stack ?? err.message : String(err))
+      // v0.1.51 用户裁定：报错人类可读可复制——完整堆栈落日志文件（弹窗给路径），弹窗文案结构化
+      const detail = err instanceof Error ? `${err.stack ?? err.message}\n\ncode: ${String((err as { code?: string }).code ?? '（无）')}` : String(err)
+      let logPath = '（日志写入失败）'
+      try {
+        const { appendFileSync } = await import('node:fs')
+        const target = join(app.getPath('userData'), 'kernel-error.log')
+        appendFileSync(target, `\n==== ${new Date().toISOString()} ====\n${detail}\n`)
+        logPath = target
+      } catch {
+        // 日志失败不掩盖原错误
+      }
+      dialog.showErrorBox(
+        'OpenBot 内核装配失败',
+        `应用无法完成启动装配。完整错误详情已写入日志（可直接把该文件发给调试）：\n${logPath}\n\n错误摘要：\n${detail.slice(0, 600)}`,
+      )
       app.quit()
       return
     }

@@ -476,7 +476,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     order: platformOrder[platform] ?? ['wsl', 'docker', 'podman'],
   })
   const mockPipe = mockGuiPipe()
-  const backend: BoxBackend =
+  // ---- 装配期后端可用性预检（v0.1.51 用户裁定：沙箱故障绝不炸启动——生产事故级防线）----
+  // 探测（probes）只验 CLI 在场；create 才暴露真实故障（vhdx 挂载失败/守护进程僵死/权限）。
+  // 真实 create+teardown 探测：失败 → 告警 + 全局后端降级 mock（应用照常起，状态栏如实「模拟」）。
+  let backend: BoxBackend =
     chosen.backendId === 'wsl'
       ? new WslBoxBackend({ rootfs: rootfsPath, dir: `${userDataRoot}/boxes`, now: Date.now })
       : chosen.backendId === 'docker'
@@ -502,6 +505,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
                     now: Date.now,
                   })
                 : new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
+  if (chosen.backendId !== 'mock') {
+    try {
+      const probeBox = await backend.create({ image: 'backend-probe' })
+      await backend.teardown(probeBox)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.warn(`[openbot] 沙箱后端（${chosen.backendId}）预检失败——本次启动降级模拟环境：${reason}`)
+      backend = new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
+    }
+  }
   // 镜像注册表（plan-image-firstclass P8-3）：镜像条目获得一等公民地位——Agent 绑定镜像
   // 而非后端（绑定随 P8-4）。路由后端包一层多路 facade：镜像条目 id → 后端实例（container
   // 条目复用全局 OCI 底座、create 时把路由 id 改写为实际镜像名；ssh 条目独立 SshBoxBackend）。

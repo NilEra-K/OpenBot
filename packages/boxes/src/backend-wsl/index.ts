@@ -7,7 +7,7 @@
  * 命令输出字节直传（Linux 侧进程输出 UTF-8）；所有 Box 共享 vmmem（wsl --shutdown 全杀——全局地雷，UI 层告知）。
  */
 import { KernelError } from '@openbot/core'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, realpath, stat } from 'node:fs/promises'
 import { readdir } from 'node:fs/promises'
 import { runProcess, spawnShellProcess, spawnPipeProcess, pipeSessionOf } from '../procexec/index.js'
 import type { ProcRunner, ShellSpawner, PipeSpawner } from '../procexec/index.js'
@@ -123,14 +123,21 @@ export class WslBoxBackend implements BoxBackend {
   async create(spec: BoxSpec): Promise<BoxId> {
     const boxId = this.#nextBoxId()
     const name = `${WSL_BOX_PREFIX}${boxId}`
-    const boxDir = `${this.#dir}/${name}`
+    // 真实路径解析（v0.1.51）：WSL 3.0.1 安全策略拒绝挂载含 junction/符号链接的路径
+    // （0x800701c0「不受信任的装入点」——userData 布局常用 junction 落 D 盘）。传给 wsl 的
+    // 安装位置必须先解析为物理路径（Node fs 自身走 junction 无碍，仅 wsl 侧需要）
+    // realpath 输出统一正斜杠（Windows 解析返回反斜杠——wsl.exe 双形态皆收，测试形状稳定）
+    const toFwd = (p: string): string => p.replaceAll('\\', '/')
+    const dirReal = await realpath(this.#dir).then(toFwd).catch(() => this.#dir)
+    const rootfsReal = await realpath(this.#rootfs).then(toFwd).catch(() => this.#rootfs)
+    const boxDir = `${dirReal}/${name}`
     // 跨重启幂等：发行版已存在则复用（Box 持久化真相，与 list() 同源判定）——
     // 桌面每次启动都为名册 agent 重建 Box，无条件 --import 会在第二次启动时同名冲突
     if (!(await this.#listNames()).includes(name)) {
       // --import 不自建父目录（与 --export 同款地雷；实证 exit 4294967295 且 stderr 空）
       await mkdir(this.#dir, { recursive: true })
       const r = await this.#run({
-        command: ['wsl', '--import', name, boxDir, this.#rootfs, '--version', '2'],
+        command: ['wsl', '--import', name, boxDir, rootfsReal, '--version', '2'],
         timeoutMs: 10 * 60_000,
         encoding: 'utf16le',
       })
@@ -147,6 +154,7 @@ export class WslBoxBackend implements BoxBackend {
     const init = await this.#run({
       command: ['wsl', '-d', name, '--', 'mkdir', '-p', this.#workdir],
       timeoutMs: 120_000,
+      encoding: 'utf16le', // wsl.exe 输出恒 UTF-16（v0.1.51：此前按 UTF-8 解码成乱码——错误串不可读）
     })
     if (init.exitCode !== 0) {
       throw new KernelError(
@@ -250,10 +258,12 @@ export class WslBoxBackend implements BoxBackend {
     const snapshotId = `snap-${this.#snapshotCounter}`
     // export 不自建目录（真实套件实证 exit -1）
     await mkdir(this.#snapshotDir, { recursive: true })
-    // 终止后再导出：保证文件系统一致性（进行中写入会损坏镜像层）
+    // 终止后再导出：保证文件系统一致性（进行中写入会损坏镜像层）；目标路径 realpath（v0.1.51 同
+    // import——wsl 3.0.1 拒绝 junction 路径，快照目录常在 userData junction 下）
     await this.#run({ command: ['wsl', '--terminate', box.name], timeoutMs: 60_000, encoding: 'utf16le' })
+    const snapshotReal = await realpath(this.#snapshotDir).then((p) => p.replaceAll('\\', '/')).catch(() => this.#snapshotDir)
     const r = await this.#run({
-      command: ['wsl', '--export', box.name, `${this.#snapshotDir}/${snapshotId}.tar.gz`],
+      command: ['wsl', '--export', box.name, `${snapshotReal}/${snapshotId}.tar.gz`],
       timeoutMs: 30 * 60_000,
       encoding: 'utf16le',
     })
