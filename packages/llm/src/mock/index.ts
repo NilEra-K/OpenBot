@@ -9,10 +9,11 @@
 import { LlmError, LlmErrorCodes } from '../provider/index.js'
 import type { ChatProvider, ChatRequest, ChatResponse, ToolCall } from '../provider/index.js'
 
-/** 脚本一步：text 与 toolCalls 可任意组合 */
+/** 脚本一步：text 与 toolCalls 可任意组合；reasoning = 思考增量（v0.1.48 真思考持久化测试面） */
 export interface MockStep {
   text?: string | null
   toolCalls?: ToolCall[]
+  reasoning?: string
 }
 
 export interface MockChatProviderOptions {
@@ -61,6 +62,11 @@ export class MockChatProvider implements ChatProvider {
     if (request.onText && response.text !== null) {
       for (let i = 0; i < response.text.length; i += MOCK_CHUNK_CODE_UNITS) {
         request.onText(response.text.slice(i, i + MOCK_CHUNK_CODE_UNITS))
+      }
+    }
+    if (request.onThinking && step.reasoning !== undefined) {
+      for (let i = 0; i < step.reasoning.length; i += MOCK_CHUNK_CODE_UNITS) {
+        request.onThinking(step.reasoning.slice(i, i + MOCK_CHUNK_CODE_UNITS))
       }
     }
     return response

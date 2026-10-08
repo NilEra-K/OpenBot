@@ -792,6 +792,7 @@ export const useKernelStore = defineStore('kernel', {
         // renderer 刷新而内核还活的场景不双计；与消息 messageId 去重同款哲学） ----
         if (record.kind === 'thinking') {
           if (typeof p['runId'] !== 'string' || typeof p['text'] !== 'string') continue
+          if (p['text'] === '') continue // 无思考轮（v0.1.48 空串留痕）——不投影
           const round = typeof p['round'] === 'number' ? p['round'] : undefined
           if (
             this.streams.some(
@@ -805,6 +806,7 @@ export const useKernelStore = defineStore('kernel', {
             agentId,
             runId: p['runId'],
             stream: 'llm',
+            think: true, // v0.1.48 修正：thinking 记录恢复为思考卡（此前无标记被当正文预览+幂等让位隐藏——重启思考消失的渲染层根因）
             seq: record.seq,
             ...(round !== undefined ? { round } : {}),
             stdout: p['text'],

@@ -346,8 +346,12 @@
   white-space: nowrap;
 }
 
-.relay-arrow {
+/* 转发 chevron（v0.1.49：文本 → 换图标——与全应用 SVG 图标惯例同族） */
+.relay-chev {
+  flex: none;
   color: var(--ink3);
+  vertical-align: -1px;
+  margin: 0 1px;
 }
 
 /* ---- Box 执行卡（agent 聚合单元内：m-name 之下，不再独立缩进） ---- */

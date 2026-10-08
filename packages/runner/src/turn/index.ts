@@ -222,10 +222,11 @@ export class TurnRunner {
       if (run.signal.aborted) {
         throw new KernelError(RunnerErrorCodes.RUN_ABORTED, `run 已中止（run ${run.runId}）`)
       }
-      // llm 流：open（轮次序号）→ onText 增量 chunk → end/abort（聚合终态语义在 chat 返回值里）
+      // llm 流：open（轮次序号）→ onText/onThinking 双通道增量 chunk → end/abort（聚合终态在返回值）
       chatRound += 1
       emit({ type: 'open', stream: 'llm', meta: { round: chatRound } })
       let response: Awaited<ReturnType<ChatProvider['chat']>>
+      let thinkingText = '' // 本轮思考聚合（v0.1.48：真思考持久化——落 transcript thinking 记录）
       try {
         response = await this.#chat(
           agentId,
@@ -235,21 +236,23 @@ export class TurnRunner {
             ? (delta) => emit({ type: 'chunk', stream: 'llm', text: delta })
             : undefined,
           undefined,
-          emitStream
-            ? (delta) => emit({ type: 'chunk', stream: 'llm', text: delta, think: true })
-            : undefined,
+          (delta) => {
+            thinkingText += delta // 无 emitStream 也聚合（持久化不依赖实况开关）
+            if (emitStream) emit({ type: 'chunk', stream: 'llm', text: delta, think: true })
+          },
         )
         emit({ type: 'end', stream: 'llm' })
       } catch (err) {
         emit({ type: 'abort', stream: 'llm', reason: err instanceof Error ? err.message : String(err) })
         throw err
       }
-      // 过程事实：本轮思考落 transcript（中间轮与终答轮都记、final 区分——终答文本在
-      // thinking 与 agent 消息各存一份，一致性优先；toChatMessages 不映射此 kind，不进 llm 历史）
+      // 过程事实：本轮思考落 transcript（v0.1.48 修正：存**真思考聚合**——onThinking 通道；
+      // 此前存终答文本是双通道前的旧语义，重启后"思考没了"的根因。终答文本的家在 agent 消息，
+      // 不再重复进 thinking；无思考的轮次记空串留过程痕迹（恢复投影跳过））
       await this.#deps.transcript.append(agentId, 'thinking', {
         runId: run.runId,
         round: chatRound,
-        text: truncateForTranscript(response.text ?? '', MAX_THINKING_CHARS),
+        text: truncateForTranscript(thinkingText, MAX_THINKING_CHARS),
         final: response.toolCalls.length === 0,
       })
       if (response.toolCalls.length === 0) {
@@ -379,6 +382,7 @@ export class TurnRunner {
     })
     emit({ type: 'open', stream: 'llm', meta: { round: nextChatRound } })
     let wrapupText: string
+    let wrapupThinking = '' // 收尾轮思考聚合（v0.1.48 同主轮；try 外声明供落盘）
     try {
       const wrapup = await this.#chat(
         agentId,
@@ -386,7 +390,10 @@ export class TurnRunner {
         run.signal,
         (delta) => emit({ type: 'chunk', stream: 'llm', text: delta }),
         [],
-        (delta) => emit({ type: 'chunk', stream: 'llm', text: delta, think: true }),
+        (delta) => {
+          wrapupThinking += delta
+          emit({ type: 'chunk', stream: 'llm', text: delta, think: true })
+        },
       )
       wrapupText = wrapup.text ?? ''
       emit({ type: 'end', stream: 'llm' })
@@ -397,7 +404,7 @@ export class TurnRunner {
     await this.#deps.transcript.append(agentId, 'thinking', {
       runId: run.runId,
       round: nextChatRound,
-      text: truncateForTranscript(wrapupText, MAX_THINKING_CHARS),
+      text: truncateForTranscript(wrapupThinking, MAX_THINKING_CHARS),
       final: false,
     })
     await this.#deliverFinal(agentId, input, run, wrapupText)

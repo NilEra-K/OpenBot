@@ -202,7 +202,7 @@ describe('TurnRunner chat（工具循环）', () => {
   it('过程事实：thinking（final 区分轮次）与 exec（命令/exitCode/输出）在完成点写入', async () => {
     const h = makeHarness({
       a1: [
-        { text: '先查一下版本', toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['node', '-v'] } }] },
+        { text: '先查一下版本', reasoning: '用户要装环境，先确认版本。', toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['node', '-v'] } }] },
         { text: '装好了' },
       ],
     })
@@ -212,18 +212,18 @@ describe('TurnRunner chat（工具循环）', () => {
 
     const records = await h.transcript.readAll('a1')
     expect(records.map((r) => r.kind)).toEqual(['user', 'thinking', 'exec', 'thinking', 'agent'])
-    expect(records[1]?.payload).toMatchObject({ round: 1, text: '先查一下版本', final: false })
+    expect(records[1]?.payload).toMatchObject({ round: 1, text: '用户要装环境，先确认版本。', final: false }) // v0.1.48：thinking 存真思考（reasoning 聚合）
     expect(records[2]?.payload).toMatchObject({
       command: ['node', '-v'],
       exitCode: 0,
       stdout: 'mock: node -v',
       stderr: '',
     })
-    expect(records[3]?.payload).toMatchObject({ round: 2, text: '装好了', final: true })
+    expect(records[3]?.payload).toMatchObject({ round: 2, text: '', final: true }) // v0.1.48：终答文本的家在 agent 消息
   })
 
   it('过程事实截断：超长思考与输出加尾标（诚实标记不静默丢）', async () => {
-    const h = makeHarness({ a1: [{ text: 'x'.repeat(20_000) }] })
+    const h = makeHarness({ a1: [{ text: '终答', reasoning: 'x'.repeat(20_000) }] })
     const a1 = await h.register('a1')
     await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '说说', nonce: 'n1' })
     await waitIdle([a1])
@@ -247,7 +247,8 @@ describe('TurnRunner chat（工具循环）', () => {
     const provider = h.llms.get('a1')!
     const second = provider.requests[1]?.messages ?? []
     expect(second[second.length - 1]?.content).toContain('错误 TOOL_NOT_FOUND')
-    expect((await h.transcript.readAll('a1'))[2]?.payload).toMatchObject({ text: '换了个办法' })
+    const recs2 = await h.transcript.readAll('a1')
+    expect(recs2.find((r) => r.kind === 'agent')?.payload).toMatchObject({ text: '换了个办法' })
   })
 
   it('无 Box 的 agent：in-box 工具报 TOOL_NO_BOX（回喂文本）', async () => {

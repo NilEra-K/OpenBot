@@ -1249,10 +1249,10 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             </div>
 
             <button v-else-if="unit.kind === 'relay'" class="relay" :title="`跳到 ${kernel.messages[unit.msgIndex!]!.to} 的会话`" @click="ui.activeAgentId = kernel.messages[unit.msgIndex!]!.to">
-              <span class="relay-arrow">→</span>
+              <!-- v0.1.48：行首装饰箭头移除（与 from → to 箭头重复致语义不清——「→ steward → worker1」两个箭头各司其职但视觉混淆） -->
               <span class="relay-text">
                 <b :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex!]!.from) }">{{ kernel.messages[unit.msgIndex!]!.from }}</b>
-                →
+                <svg class="relay-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="转发给" role="img"><path d="M9 6l6 6-6 6" /></svg>
                 <b :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex!]!.to) }">{{ kernel.messages[unit.msgIndex!]!.to }}</b>
                 · <span v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></span>
               </span>
