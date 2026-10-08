@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 本机沙箱视图（prototype.html 迁移）：Box 卡列表 + caps 驱动按钮。
+ * 执行载体视图（prototype.html 迁移，v0.1.49 叙事迁移：本机沙箱 → 执行载体）：Box 卡列表 + caps 驱动按钮。
  * caps 纪律：快照按钮仅 caps.snapshot=true 渲染——永不出现「UI 有按钮但后端不支持」。
  * 资源仪表（Step 6）：v1.box.stats 最新值驱动，按在场字段渲染——缺席=后端不可测，不造假仪表
  * （WSL 只有磁盘 vhdx 真值；CPU/内存属 OCI 后端接入项）。宿主磁盘压力条同理纯事实呈现。
@@ -163,12 +163,12 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
 <template>
   <section class="view view-scroll">
     <div class="view-head">
-      <div class="view-title">本机沙箱 · Box 群</div>
+      <div class="view-title">Box · 执行载体</div>
       <div class="view-sub">
-        云电脑的本地替代：重活全部在本机 Box 内执行。按钮按后端能力声明渲染——后端不支持的操作永不出现。
+        agent 的执行载体一览：本地容器、远程主机、宿主屏幕——按各自绑定呈现，未绑定的 agent 用默认沙箱（本地容器不可用时为模拟环境）。按钮按载体能力声明渲染，不支持的操作永不出现。
       </div>
       <div v-if="kernel.caps" class="view-toolbar mono">
-        <span>caps：</span>
+        <span>默认沙箱 caps：</span>
         <span>快照 <b>{{ kernel.caps.snapshot ? '✓' : '✗' }}</b></span>
         <span>常驻 <b>{{ kernel.caps.persistent ? '✓' : '✗' }}</b></span>
         <span>无头 <b>{{ kernel.caps.headless ? '✓' : '✗' }}</b></span>
@@ -183,7 +183,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
         <span class="stat-dot err"></span>
         <b>{{ kernel.pressure.level === 'critical' ? '磁盘空间严重不足' : '磁盘空间偏低' }}</b>
         <span class="mono">剩余 {{ fmtGb(kernel.pressure.freeBytes) }} / {{ fmtGb(kernel.pressure.totalBytes) }}</span>
-        <span class="disk-banner-note">Box 的 vhdx、快照与 transcript 都写此卷——请清理后再继续派活</span>
+        <span class="disk-banner-note">本地容器的 vhdx、快照与 transcript 都写此卷——远程与屏幕载体不占此盘；请清理后再继续派活</span>
       </div>
 
       <div class="box-sum mono">
@@ -193,7 +193,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
         <span>快照态 {{ sum.snapshot }}</span>
       </div>
       <!-- 说明文字独立次行（v0.1.42 UI 精雕：原挤在统计行内权重失衡） -->
-      <div class="box-sum-note">仪表按后端可测维度呈现（WSL：磁盘；CPU/内存属 OCI 后端项）</div>
+      <div class="box-sum-note">仪表按各载体可测维度呈现（本地容器：磁盘；CPU/内存属容器后端；远程/屏幕载体无本地仪表）</div>
 
       <div class="box-grid">
         <div v-for="box in kernel.boxes" :key="box.boxId" class="boxcard">
@@ -304,7 +304,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
         </div>
       </div>
 
-      <p v-if="kernel.boxes.length === 0" class="placeholder">暂无 Box——注册 agent 时内核自动创建（mock 后端）</p>
+      <p v-if="kernel.boxes.length === 0" class="placeholder">暂无 Box——注册 agent 时按其绑定的载体创建；未绑定则用默认沙箱（本地容器不可用时为模拟环境）</p>
 
       <div class="box-claim">
         <svg
@@ -317,7 +317,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
           stroke-linejoin="round"
           aria-hidden="true"
         ><path d="M12 3l7 3v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z"></path></svg>
-        <span>Box 即本机云电脑。agent 在 Box 内自由执行；触碰宿主机文件或出网，经审批闸门逐条批准（对话流内 gate 卡）。</span>
+        <span>Box 是 agent 的执行载体（本地容器 / 远程主机 / 宿主屏幕）。容器与远程主机内 agent 自由执行，触碰宿主文件或出网经审批闸逐条批准（对话流内 gate 卡）；宿主屏幕载体零隔离——agent 的每次屏幕注入均逐条过闸。</span>
       </div>
     </div>
   </section>

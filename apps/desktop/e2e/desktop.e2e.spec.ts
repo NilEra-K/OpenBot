@@ -1199,9 +1199,9 @@ test('Boxes/图谱小项（P4 Step 12）：归属 chip + box-claim shield + 节�
     await expect(ownerChip).toBeVisible({ timeout: 15_000 })
     await expect(ownerChip.locator('.stat-dot')).toBeVisible()
 
-    // box-claim：shield 形态（svg 图标 + 如实叙事在场）
+    // box-claim：shield 形态（svg 图标 + 如实叙事在场；v0.1.49 叙事迁移——执行载体三档语义）
     await expect(page.locator('.box-claim svg')).toBeVisible()
-    await expect(page.locator('.box-claim')).toContainText('本机云电脑')
+    await expect(page.locator('.box-claim')).toContainText('执行载体')
 
     // —— 图谱状态点（runs 投影）：管家 working（run 挂起中）/ worker1 idle ——
     await page.getByRole('button', { name: '图谱', exact: true }).click()
