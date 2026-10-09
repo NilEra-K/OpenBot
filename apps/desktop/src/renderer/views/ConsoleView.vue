@@ -1512,7 +1512,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                         <span class="ti">{{ it.provider }}</span>
                         <span class="ts">{{ it.model }}</span>
                       </span>
-                      <svg v-if="kernel.defaultProvider === p.name" class="mk" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>
+                      <svg v-if="kernel.defaultProvider === it.provider && (kernel.defaultModel === it.model || kernel.defaultModel === null)" class="mk" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>
                     </button>
                     <div class="cb-menu-sep" />
                     <button class="cb-menu-item" @click="goModelSettings">
