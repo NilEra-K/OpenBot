@@ -1111,36 +1111,24 @@ const wslHelpNeeded = computed(() => {
 
       </div>
       <div v-show="activeSection === 'runtime'" class="settings-section">
-      <!-- 容器与镜像（P8-4 语义）：Agent 经镜像绑定选载体；默认沙箱按平台自动择优 -->
+      <!-- 容器与镜像（v0.1.53 语义）：Agent 经镜像条目选载体（屏幕一等公民）；默认沙箱卡退役 -->
       <div class="set-sec-row">
         <div class="set-sec">容器与镜像</div>
         <HelpTip
-          text="各执行载体的可用性与能力一览（探测事实驱动）。Agent 通过绑定镜像条目选择载体（向导/ctx 均可）；未绑定镜像的 agent 使用默认沙箱——按平台自动择优，env OPENBOT_SANDBOX 可强制指定；不可用时如实回退 mock 并注明原因。"
+          text="各执行载体的可用性与能力一览（探测事实驱动）。Agent 通过绑定镜像条目选择载体（向导/ctx 均可）——容器条目按声明的运行时（Docker/Podman）自持路由；装配期底座不可用时降级模拟保启动并在此告警。"
         />
       </div>
       <template v-if="kernel.sandbox">
-        <!-- 默认沙箱（状态行——非选择器）：未绑定镜像的 agent 落在这里 -->
-        <div class="settings-card">
-          <div class="appearance-row">
-            <div class="appearance-main">
-              <div class="appearance-name">默认沙箱</div>
-              <div class="appearance-desc">
-                未绑定镜像的 agent 使用——按平台自动择优，env OPENBOT_SANDBOX 可强制指定。
-                <template v-if="kernel.sandbox.reason">降级原因：{{ kernel.sandbox.reason }}</template>
-              </div>
-            </div>
-            <span class="chip chip-accent">{{ backendLabel(kernel.sandbox.backendId) }}</span>
-          </div>
-          <p v-if="kernel.sandbox.reason" class="sandbox-warn">⚠ {{ kernel.sandbox.reason }}</p>
-          <p v-if="wslRelevant" class="sandbox-warn">
-            WSL 基础镜像未就绪：请把 Ubuntu rootfs 压缩包（tar.gz）放到
-            <span class="mono">{{ kernel.sandbox.rootfsPath }}</span>，或设环境变量 OPENBOT_WSL_ROOTFS 指向已有文件后重启。
-          </p>
-          <p v-if="wslHelpNeeded" class="sandbox-warn">
-            一键安装暂不提供（自动安装系统级软件风险高于收益）：WSL2 启用与 rootfs 制作步骤见仓库文档
-            <span class="mono">docs/platforms.md</span>，完成后重启应用即可生效。
-          </p>
-        </div>
+        <!-- 装配降级如实告警（v0.1.51 防线的呈现面——默认沙箱卡退役后独立保留） -->
+        <p v-if="kernel.sandbox.reason" class="sandbox-warn">⚠ {{ kernel.sandbox.reason }}</p>
+        <p v-if="wslRelevant" class="sandbox-warn">
+          WSL 基础镜像未就绪：请把 Ubuntu rootfs 压缩包（tar.gz）放到
+          <span class="mono">{{ kernel.sandbox.rootfsPath }}</span>，或设环境变量 OPENBOT_WSL_ROOTFS 指向已有文件后重启。
+        </p>
+        <p v-if="wslHelpNeeded" class="sandbox-warn">
+          一键安装暂不提供（自动安装系统级软件风险高于收益）：WSL2 启用与 rootfs 制作步骤见仓库文档
+          <span class="mono">docs/platforms.md</span>，完成后重启应用即可生效。
+        </p>
 
         <!-- 各后端可用性与能力（探测事实 × 每后端 caps 常量——P8-4 后全局偏好选择退役，Agent 经镜像绑定选载体） -->
         <div class="settings-card">
