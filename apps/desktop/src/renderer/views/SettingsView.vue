@@ -101,7 +101,8 @@ onMounted(() => {
 type SettingsSectionId = 'llm' | 'runtime' | 'automation' | 'policy' | 'data' | 'general' | 'appearance' | 'about'
 const activeSection = ref<SettingsSectionId>('llm')
 const ICON = (paths: string): string =>
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>'
+  // width/height 内联属性（v0.1.55b 用户裁定 14px）——scoped CSS 对 v-html 插入内容不生效（无 data-v），尺寸须内联
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>'
 const SETTINGS_GROUPS: Array<{ label: string; items: Array<{ id: SettingsSectionId; label: string; icon: string }> }> = [
   {
     label: '智能与应用',

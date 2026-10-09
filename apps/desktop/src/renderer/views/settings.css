@@ -1223,7 +1223,7 @@
   background: rgba(var(--danger-rgb), 0.1);
 }
 
-/* 图标精修（用户反馈：过大不优雅）——22px 命中区 + 12px 细描边图标 + 收紧间距 */
+/* 图标精修（用户裁定 v0.1.55b：14px 图标 + 22px 命中区 + 收紧间距） */
 .llm-model-actions {
   gap: 2px;
 }
@@ -1235,8 +1235,8 @@
 }
 
 .llm-icon-btn svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   stroke-width: 1.5;
 }
 
