@@ -460,7 +460,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // 异平台 CLI 必然不在，跑了也是噪音；auto 序随之（win wsl 主力/linux nspawn 优先/mac utm 优先）；
   // ssh 三平台皆可能在场照探（P8-1），且永不在 auto 序内——远端机器是显式 opt-in
   const platform = process.platform
+  const _bootT0 = Date.now()
+  const _lap = (tag: string): void => console.log(`[openbot] 启动耗时 ${Date.now() - _bootT0}ms @${tag}`)
+  _lap('begin-probes')
   const probes = await probeAll(runProcess, platform, sshOpts)
+  _lap('probes-done')
   const platformOrder: Record<string, Array<'wsl' | 'docker' | 'podman' | 'nspawn' | 'utm'>> = {
     win32: ['wsl', 'docker', 'podman'],
     linux: ['nspawn', 'docker', 'podman'],
@@ -506,9 +510,19 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
                   })
                 : new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
   if (chosen.backendId !== 'mock') {
+    _lap('preflight-begin')
+    // 轻量化（v0.1.57）：已有 Box 用首个发行版 exec true 探活（毫秒级）；仅零 Box 才真
+    // import probe——首启保护不变，常态启动不再重复解压 1.27GB rootfs（实测 21.5s 纯浪费）
     try {
-      const probeBox = await backend.create({ image: 'backend-probe' })
-      await backend.teardown(probeBox)
+      const existing = await backend.list()
+      const first = existing[0]
+      if (first !== undefined) {
+        await backend.exec(first.boxId, { command: ['true'], timeoutMs: 120_000 })
+      } else {
+        const probeBox = await backend.create({ image: 'backend-probe' })
+        await backend.teardown(probeBox)
+      }
+      _lap('preflight-done')
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.warn(`[openbot] 沙箱后端（${chosen.backendId}）预检失败——本次启动降级模拟环境：${reason}`)
@@ -1389,13 +1403,18 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }, z.object({ path: z.string().trim().min(1).max(500).nullable() }))
 
   await applyProvider()
+  _lap('assemble-done')
   await kernel.addAgent({ agentId: 'steward', name: '管家', llm: provider, steward: true })
+  _lap('steward-added')
 
   // boot 恢复持久化名册的运行时态（P5 后修复）：agentStore 是唯一真相，但调度器/Box/llm 是内存态——
   // 重启后不重建则自建 agent「名册在、调度器无」：建群/发消息按 STATE_AGENT_NOT_FOUND 拒绝。
   // addAgent 幂等分支只重建内存态（名册不重复写）；steward 已上方装配（跳过防 mock 后端二次建 Box）
-  for (const profile of await kernel.agentStore.list()) {
-    if (profile.agentId === 'steward') continue
+  _lap('restore-begin')
+  // 恢复并行化（v0.1.57）：各 agent 的 create（mkdir 预热）互不冲突，VM 冷启动成本
+  // 一次分摊；失败各自降级不拖累他人（原串行 4.5s×N）
+  const restoreOne = async (profile: { agentId: string; name: string; color?: string; modelProvider?: string; imageId?: string; role: string }): Promise<void> => {
+    if (profile.agentId === 'steward') return
     // 镜像绑定恢复（P8-4）：悬空（条目已删）静默回默认 + 告警留痕——modelProvider 悬空双语义同款；
     // **载体不可达同样降级**（v0.1.40 真机实锤：android/ssh/win 设备临时不在场炸掉整个应用
     // 启动——桌面单机语义下不可接受）：恢复路径 create 失败 → 告警 + 回默认沙箱重试（绑定
@@ -1409,6 +1428,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         console.warn(`[openbot] agent ${profile.agentId} 绑定的镜像条目 ${profile.imageId} 已删除——回默认沙箱`)
       }
     }
+    _lap('restore-pre:' + profile.agentId)
     const restored = {
       agentId: profile.agentId,
       name: profile.name,
@@ -1419,7 +1439,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }
     if (imageId === undefined) {
       await kernel.addAgent(restored)
-      continue
+      return
     }
     try {
       await kernel.addAgent({ ...restored, imageId })
@@ -1431,6 +1451,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await kernel.addAgent(restored)
     }
   }
+  await Promise.all((await kernel.agentStore.list()).map((profile) => restoreOne(profile)))
+  _lap('restore-done')
 
   // 装配配置（E2E/演示用）：附加 worker agent——A2A 需要至少两名成员；共享同一
   // SwitchableChatProvider（主力模型切换对管家与全部 agent 生效，符合设置页语义）。
