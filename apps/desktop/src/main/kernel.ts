@@ -13,7 +13,7 @@
 import { app, desktopCapturer, safeStorage, screen as electronScreen } from 'electron'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { stat, statfs } from 'node:fs/promises'
 import { assembleKernel, chooseBackend } from '@openbot/coordinator'
 import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinator'
@@ -430,6 +430,33 @@ function migrateTranscripts(oldRoot: string, newRoot: string): number {
     }
   }
   return migrated.length
+}
+
+/** 数据目录迁移（v0.1.64 自动迁移）：旧目录全家（settings/agent 档案/记忆/账本/transcript——
+ *  所有 store 落盘物）→ 新目录；transcript 已独立（data 外）时不在其中，自然不受影响。
+ *  两阶段：①cpSync 全量复制（任一失败抛——旧目录无损、标记不写、未切换；目标同名覆盖，
+ *  当前数据是真相）；②全部成功后清空旧目录顶层（失败仅留冗余，无害） */
+function migrateDataDir(oldDir: string, newDir: string): number {
+  if (!existsSync(oldDir)) return 0
+  mkdirSync(newDir, { recursive: true })
+  const countFiles = (dir: string): number => {
+    let n = 0
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) n += countFiles(`${dir}/${e.name}`)
+      else n++
+    }
+    return n
+  }
+  const files = countFiles(oldDir)
+  cpSync(oldDir, newDir, { recursive: true })
+  for (const entry of readdirSync(oldDir)) {
+    try {
+      rmSync(`${oldDir}/${entry}`, { recursive: true, force: true })
+    } catch {
+      /* 文件占用等——冗余留旧位（标记已指向新目录，不再读），无害 */
+    }
+  }
+  return files
 }
 
 /** 装配桌面内核（app ready 后调用；safeStorage 依赖 ready 状态） */
@@ -1439,25 +1466,40 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }, z.object({ agentId: z.string().min(1), imageId: z.string().trim().min(1).max(32).nullable() }))
     // 数据目录设置（UI 优化 0.1.26，用户需求）：写 userData 根下 data-root.txt 标记（重启生效；
     // 旧目录数据不自动迁移）。轻校验绝对路径形状；探测写删验证目录可用——失败如实拒绝
+    // 数据目录设置（UI 优化 0.1.26，用户需求）：写 userData 根下 data-root.txt 标记（重启生效）。
+    // 切换自动迁移（v0.1.64 用户需求）：两阶段全家搬迁（见 migrateDataDir）；恢复默认同逻辑迁回。
+    // 轻校验绝对路径形状；探测写删验证目录可用——失败如实拒绝（未切换、旧数据无损）
     .register('v1.system.setDataRoot', async (payload) => {
       const { path } = z
         .object({ path: z.string().trim().min(1).max(500).nullable() })
         .parse(payload)
-      if (path === null || path === '') {
-        await fs.write(dataRootMarker, '')
-        return { ok: true, restartRequired: true }
+      const toDefault = path === null || path === ''
+      const target = toDefault ? `${userDataRoot}/data` : path.replaceAll('\\', '/')
+      if (!toDefault) {
+        if (!/^[a-zA-Z]:[\\/]/.test(path) && !path.startsWith('/')) {
+          throw new KernelError('STATE_DATA_ROOT_INVALID', `须为绝对路径（如 D:\\OpenBotData）：${path}`)
+        }
+        try {
+          await fs.write(`${target}/.openbot-root-probe`, '1')
+          await fs.remove(`${target}/.openbot-root-probe`)
+        } catch (err) {
+          throw new KernelError('STATE_DATA_ROOT_INVALID', `目录不可用：${err instanceof Error ? err.message : String(err)}`)
+        }
       }
-      if (!/^[a-zA-Z]:[\\/]/.test(path) && !path.startsWith('/')) {
-        throw new KernelError('STATE_DATA_ROOT_INVALID', `须为绝对路径（如 D:\\OpenBotData）：${path}`)
+      const norm = (p: string): string => p.replaceAll('\\', '/').replace(/\/+$/, '')
+      let moved = 0
+      if (norm(dataRoot) !== norm(target)) {
+        try {
+          moved = migrateDataDir(dataRoot, target)
+        } catch (err) {
+          throw new KernelError(
+            'STATE_DATA_MIGRATE_FAILED',
+            `数据目录迁移失败（未切换，原目录数据无损）：${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
       }
-      try {
-        await fs.write(`${path}/.openbot-root-probe`, '1')
-        await fs.remove(`${path}/.openbot-root-probe`)
-      } catch (err) {
-        throw new KernelError('STATE_DATA_ROOT_INVALID', `目录不可用：${err instanceof Error ? err.message : String(err)}`)
-      }
-      await fs.write(dataRootMarker, path)
-      return { ok: true, restartRequired: true }
+      await fs.write(dataRootMarker, toDefault ? '' : path)
+      return { ok: true, moved, restartRequired: true }
     }, z.object({ path: z.string().trim().min(1).max(500).nullable() }))
     // 会话记录目录独立设置（v0.1.63，用户需求）：写 transcript-root.txt 标记（重启生效）。
     // null/空 = 清除标记回数据目录内；轻校验与探测同 setDataRoot。

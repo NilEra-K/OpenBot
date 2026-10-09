@@ -698,9 +698,10 @@ export const useKernelStore = defineStore('kernel', {
       await this.call('v1.sandbox.set', { preference: pref })
       await this.refreshSandbox()
     },
-    /** 数据目录设置（UI 优化 0.1.26，用户需求）：写标记文件重启生效（旧数据不自动迁移） */
-    async setDataRoot(path: string | null): Promise<void> {
-      await this.call('v1.system.setDataRoot', { path })
+    /** 数据目录设置（UI 优化 0.1.26）：切换自动迁移全家（v0.1.64——两阶段安全搬运）；
+     *  返回迁移文件数；null = 恢复默认（同样自动迁回） */
+    async setDataRoot(path: string | null): Promise<{ moved: number }> {
+      return await this.call<{ moved: number }>('v1.system.setDataRoot', { path })
     },
     /** 会话记录目录独立设置（v0.1.63）：切换自动迁移（只搬 transcript.jsonl，档案/记忆不动）；
      *  返回迁移文件数；null = 回数据目录内（同样自动迁回） */

@@ -805,8 +805,9 @@ const saveDataRoot = async (path: string | null = dataRootDraft.value.trim()): P
   dataRootSaving.value = true
   dataRootError.value = null
   try {
-    await kernel.setDataRoot(path)
-    toast.push(path === null ? '数据目录已恢复默认——重启应用后生效' : '数据目录已更新——重启应用后生效', 'success')
+    const r = await kernel.setDataRoot(path)
+    const movedNote = r.moved > 0 ? `已自动迁移 ${r.moved} 个文件，` : ''
+    toast.push(`${movedNote}${path === null ? '数据目录已恢复默认' : '数据目录已更新'}——重启应用后生效`, 'success')
     dataRootOpen.value = false
   } catch (err) {
     dataRootError.value = err instanceof Error ? err.message : String(err)
@@ -1603,7 +1604,7 @@ const wslHelpNeeded = computed(() => {
                 <input id="drPath" v-model="dataRootDraft" class="field-input mono" placeholder="D:\\OpenBotData" autocomplete="off" spellcheck="false" />
                 <button class="btn btn-ghost" type="button" @click="browseDirectory('data')">浏览…</button>
               </div>
-              <p class="wiz-note">重启应用后生效。切换目录不会自动迁移数据——将现有 data 文件夹整体搬到新位置后指向它，即可无缝继承全部设置与对话记录；恢复默认则回到应用数据目录下的 data。</p>
+              <p class="wiz-note">重启应用后生效。保存时自动把全部数据（设置、agent 档案、记忆、会话记录等）迁移到新目录——已独立的会话记录目录不受影响；「恢复默认」同样自动迁回。迁移失败时不会切换，原目录数据无损。</p>
             </div>
             <p v-if="dataRootError" class="form-error">{{ dataRootError }}</p>
           </div>
