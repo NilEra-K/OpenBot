@@ -610,13 +610,15 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
    * 惰性构造缓存（无状态 facade，一个 CLI 一个实例）。mock 强制沙箱（E2E 隔离）返回 null
    *  ——不真建容器，OPENBOT_SANDBOX=mock 语义不变。CLI 均不在场也返回 null（test 如实报） */
   const ociBackends = new Map<'docker' | 'podman', BoxBackend>()
-  const ociBackendFor = (): BoxBackend | null => {
-    if (chosen.backendId === 'mock') return null
-    const pick: 'docker' | 'podman' | null = probes.find((x) => x.id === 'docker')?.available
-      ? 'docker'
-      : probes.find((x) => x.id === 'podman')?.available
-        ? 'podman'
-        : null
+  const ociBackendFor = (declared?: 'docker' | 'podman'): BoxBackend | null => {
+    if (chosen.backendId === 'mock') return null // E2E 强制沙箱隔离纪律——不真建容器
+    // v0.1.53 用户裁定「不自动找路」：条目显式声明 runtime 按声明走；缺省（旧条目）回退 docker 优先探测（一次性迁移语义——编辑保存后带上声明）
+    const pick: 'docker' | 'podman' | null =
+      declared !== undefined ? declared : probes.find((x) => x.id === 'docker')?.available
+        ? 'docker'
+        : probes.find((x) => x.id === 'podman')?.available
+          ? 'podman'
+          : null
     if (pick === null) return null
     let hit = ociBackends.get(pick)
     if (hit === undefined) {
@@ -692,7 +694,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       // 容器条目解耦全局后端（v0.1.52 用户裁定「不再选默认沙箱，最终选屏幕」）：按 CLI 探测
       // 构造 per-CLI OCI 后端（docker 优先），不要求全局默认后端是 OCI——wsl 默认下绑 GUI 容器
       // 镜像照样路由（屏幕在容器内）。mock 强制沙箱（E2E 隔离）不做 per-CLI 路由——不真建容器。
-      const oci = ociBackendFor()
+      const oci = ociBackendFor(entry.runtime)
       if (oci !== null) {
         routingBackend.registerRoute(entry.id, {
           backend: oci,

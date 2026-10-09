@@ -149,7 +149,8 @@ const imageForm = reactive<{
   controlProtocol: ImageFormProtocol
   display: string
   windowTitle: string
-}>({ name: '', carrier: 'ssh', image: '', host: '', port: null, user: '', keyPath: '', controlProtocol: 'x11', display: '', windowTitle: '' })
+  runtime: 'docker' | 'podman' | ''
+}>({ name: '', carrier: 'ssh', image: '', host: '', port: null, user: '', keyPath: '', controlProtocol: 'x11', display: '', windowTitle: '', runtime: '' })
 /** 窗口绑定（P9-2）：顶层窗口清单（⟳ 枚举按钮按需拉取）+ 枚举中态 */
 const hostWindows = ref<Array<{ title: string; width: number; height: number }>>([])
 const hostWindowsLoading = ref(false)
@@ -302,11 +303,19 @@ const IMAGE_EMPTY_FORM = {
   controlProtocol: 'x11' as const,
   display: '',
   windowTitle: '',
+  runtime: '' as const,
 }
 
 const openImageCreate = (): void => {
   imageEditingId.value = null
   Object.assign(imageForm, IMAGE_EMPTY_FORM)
+  // 容器运行时预选（v0.1.53 显式声明）：探测到的第一个可用项（docker 优先）——用户可改
+  const probe = kernel.sandbox?.probes ?? []
+  imageForm.runtime = probe.find((x) => x.id === 'docker')?.available
+    ? 'docker'
+    : probe.find((x) => x.id === 'podman')?.available
+      ? 'podman'
+      : ''
   imageFormError.value = null
   imageFormOpen.value = true
 }
@@ -324,6 +333,7 @@ const openImageEdit = (img: { id: string; name: string; carrier: ImageFormCarrie
     controlProtocol: img.controlProtocol,
     display: img.display ?? '',
     windowTitle: img.windowTitle ?? '',
+    runtime: img.runtime ?? '',
   })
   imageFormError.value = null
   imageFormOpen.value = true
@@ -360,7 +370,7 @@ const saveImage = async (): Promise<void> => {
     ...(imageForm.carrier === 'host-screen'
       ? {}
       : imageForm.carrier === 'container'
-        ? { image: imageForm.image.trim() }
+        ? { image: imageForm.image.trim(), ...(imageForm.runtime !== '' ? { runtime: imageForm.runtime } : {}) }
         : {
             host: imageForm.host.trim(),
             ...(imageForm.port !== null && Number.isFinite(imageForm.port) ? { port: Number(imageForm.port) } : {}),
@@ -1331,6 +1341,15 @@ const wslHelpNeeded = computed(() => {
             <div v-else class="field">
               <label class="field-label" for="ifImage">镜像名</label>
               <input id="ifImage" v-model="imageForm.image" class="field-input mono" placeholder="openbot-gui:24.04" autocomplete="off" spellcheck="false" />
+              <!-- 运行时显式声明（v0.1.53 用户裁定「不自动找路」）：缺省预选探测到的可用项，可改；
+                   容器条目路由按此声明构造后端，声明与实际缺席时 create 如实报错 -->
+              <div class="cfg-inline" style="margin-top: 6px">
+                <span class="field-label" style="margin: 0">运行时</span>
+                <select id="ifRuntime" v-model="imageForm.runtime" class="field-input" style="width: auto" aria-label="OCI 运行时">
+                  <option value="docker">Docker</option>
+                  <option value="podman">Podman</option>
+                </select>
+              </div>
             </div>
             <div v-if="imageForm.carrier === 'windows'" class="field">
               <span class="field-label">控制协议</span>

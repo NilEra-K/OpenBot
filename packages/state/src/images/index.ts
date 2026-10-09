@@ -50,6 +50,9 @@ export interface ImageEntry {
   display?: string
   /** carrier=host-screen：绑定窗口标题子串（P9-2 裁定 B；空缺=整屏。窗口重开同名即恢复） */
   windowTitle?: string
+  /** carrier=container：OCI 运行时显式声明（v0.1.53 用户裁定「不自动找路」）——docker/podman；
+   *  缺省读取端回退 docker 优先探测（旧条目一次性迁移语义，编辑保存后带上） */
+  runtime?: 'docker' | 'podman'
   createdAt: number
 }
 
@@ -64,6 +67,7 @@ export interface ImageInput {
   controlProtocol: ImageControlProtocol
   display?: string
   windowTitle?: string
+  runtime?: 'docker' | 'podman'
 }
 
 export interface ImageStoreOptions {
@@ -141,6 +145,11 @@ function validateEntry(entry: ImageEntry): void {
     if (entry.windowTitle !== undefined && (entry.windowTitle === '' || entry.windowTitle.length > 200)) {
       throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '绑定窗口标题须为 1-200 字（空缺=整屏）')
     }
+    // runtime 是 container 专属事实（此处已 narrow 到 host-screen 分支——他在场即非法；
+    // container 分支在前序已自行校验值域，update 收尾对他载体一律清除）
+    if (entry.runtime !== undefined) {
+      throw new KernelError(ImageErrorCodes.STATE_IMAGE_INVALID, '运行时声明只接受 container 载体')
+    }
   }
 }
 
@@ -214,6 +223,8 @@ export class ImageStore {
       controlProtocol: input.controlProtocol,
       ...(input.display !== undefined && input.display !== '' ? { display: input.display } : {}),
       ...(input.windowTitle !== undefined && input.windowTitle !== '' ? { windowTitle: input.windowTitle } : {}),
+    // runtime 无条件落盘：错配（非 container 载体）由 validateEntry 显式拒绝——不静默丢弃
+    ...(input.runtime !== undefined ? { runtime: input.runtime } : {}),
       createdAt: this.#now(),
     }
     validateEntry(entry)
@@ -263,6 +274,7 @@ export class ImageStore {
     if (next.display === undefined) delete (next as Partial<ImageEntry>).display
     // 窗口绑定是 host-screen 专属事实——他载体一律清除（切载体即失效）
     if (next.carrier !== 'host-screen') delete (next as Partial<ImageEntry>).windowTitle
+    if (next.carrier !== 'container') delete (next as Partial<ImageEntry>).runtime
     if (next.windowTitle === undefined) delete (next as Partial<ImageEntry>).windowTitle
     validateEntry(next)
     file.images.splice(file.images.indexOf(entry), 1, next)

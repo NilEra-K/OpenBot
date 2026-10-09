@@ -183,3 +183,23 @@ describe('Android 载体（P9-3b）', () => {
     expect(asAndroid.keyPath).toBeUndefined()
   })
 })
+
+describe('runtime 显式声明（v0.1.53）', () => {
+  it('container 条目可声明 docker/podman；他载体拒绝；切载体清除', async () => {
+    const { store } = make()
+    const c = await store.add({ name: 'GUI 容器', carrier: 'container', image: 'a:1', controlProtocol: 'x11', runtime: 'podman' })
+    expect(c.runtime).toBe('podman')
+    await expect(
+      store.add({ name: 'x', carrier: 'host-screen', controlProtocol: 'host', runtime: 'docker' }),
+    ).rejects.toMatchObject({ code: 'STATE_IMAGE_INVALID' })
+    const switched = await store.update(c.id, { carrier: 'ssh', host: 'h', controlProtocol: 'x11' })
+    expect(switched.runtime).toBeUndefined()
+  })
+
+  it('ssh 条目保留自身字段，不受 runtime 清除影响（同形组内切换语义独立）', async () => {
+    const { store } = make()
+    const s = await store.add({ ...SSH_ENTRY })
+    const edited = await store.update(s.id, { runtime: 'docker' as never }) // 非 container 载体不落 runtime
+    expect(edited.runtime).toBeUndefined()
+  })
+})
