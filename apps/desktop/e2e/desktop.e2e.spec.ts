@@ -23,8 +23,8 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
       match: (l) => l.role === 'user' && l.content.startsWith('[A2A'),
       toolCalls: [{ id: 'c2', name: 'exec', args: { command: ['ls', '/work'] } }],
     },
-    // 3. worker1 收 exec 结果 → 文本完成
-    { match: (_l, t) => t === 'exec', text: '目录是空的' },
+    // 3. worker1 收 exec 结果 → 文本完成（reasoning 供思考卡断言——v0.1.48 thinking 存真思考）
+    { match: (_l, t) => t === 'exec', text: '目录是空的', reasoning: '执行结果回来了，目录是空的。' },
     // 4. steward 收 send_message 结果 → 出 Box 抓取（触发审批闸门）
     {
       match: (_l, t) => t === 'send_message',
@@ -69,7 +69,7 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     // 沙箱后端：OPENBOT_SANDBOX=mock env 覆盖 → 装配链路落在 mock（不依赖宿主 WSL/Docker）——
     // 默认沙箱状态卡呈现（P8-4 后 UI 优化：全局偏好选择退役，per-backend 可用性 + caps）
     await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click() // 切换式导航
-    await expect(page.locator('.settings-card', { hasText: '默认沙箱' })).toContainText('模拟')
+    await expect(page.locator('.backend-row', { hasText: '模拟' })).toBeVisible() // v0.1.53 默认沙箱卡退役——后端清单行呈现
 
     // —— console：发消息 ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
@@ -105,7 +105,7 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
 
     // —— 对话流聚合（P3 调整）：worker1 会话——思考块在流内（llm 增量全部轮次留痕），
     // task 卡内嵌输出区（$ 命令行 + mock 输出一体），ctx 右栏纯化为一块显示器 ——
-    await expect(page.locator('.think', { hasText: '目录是空的' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.think', { hasText: '执行结果回来了' }).first()).toBeVisible({ timeout: 15_000 }) // v0.1.48：思考卡显示真思考（reasoning；.first 容双块镜像）
     await expect(page.locator('.task .bt-line', { hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.task .bt-line', { hasText: 'mock: ls /work' })).toBeVisible()
     const screen = page.locator('.ctx-screen')
