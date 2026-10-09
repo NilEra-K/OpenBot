@@ -994,9 +994,9 @@ const wslHelpNeeded = computed(() => {
                     @click="makeDefault(selected.name, m.id)"
                     v-html="ICON('<path d=\'M12 2l3 6 6 1-5 5 1 7-5-3-5 3 1-7-5-5 6-1z\'/>')"
                   />
-                  <button class="llm-icon-btn" title="测试模型可调用" @click="testModelRow(`saved:${selected.name}:${m.id}`, { name: selected.name, model: m.id })" v-html="ICON('<path d=\'M9 7V3\'/><path d=\'M15 7V3\'/><path d=\'M6 7h12v3a6 6 0 0 1-12 0V7z\'/><path d=\'M12 16v5\'/>')" />
+                  <button class="llm-icon-btn" title="测试模型可调用" @click="testModelRow(`saved:${selected.name}:${m.id}`, { name: selected.name, model: m.id })" v-html="ICON('<path d=\'M13 2 3 14 12 14 11 22 21 10 12 10 13 2\'/>')" />
                   <button class="llm-icon-btn" title="编辑模型" @click="openModelModal(m.id, selected.name)" v-html="ICON('<path d=\'M17 3l4 4L7 21H3v-4L17 3z\'/>')" />
-                  <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeSavedModel(selected, m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4h8v2\'/><path d=\'M19 6l-1 14H6L5 6\'/><path d=\'M10 11v6\'/><path d=\'M14 11v6\'/>')" />
+                  <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeSavedModel(selected, m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\'/><path d=\'M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\'/>')" />
                 </div>
               </div>
               </div>
@@ -1062,9 +1062,9 @@ const wslHelpNeeded = computed(() => {
                   >{{ modelTestResults[`form:${m.id}`].text.length > 18 ? modelTestResults[`form:${m.id}`].text.slice(0, 18) + '…' : modelTestResults[`form:${m.id}`].text }}</span>
                 </div>
                 <div class="llm-model-actions">
-                  <button class="llm-icon-btn" title="测试模型可调用（需先填 Base URL）" @click="testModelRow(`form:${m.id}`, { model: m.id, baseUrl: form.baseUrl.trim() || undefined, apiKey: form.apiKey.trim() || undefined, protocol: form.protocol })" v-html="ICON('<path d=\'M9 7V3\'/><path d=\'M15 7V3\'/><path d=\'M6 7h12v3a6 6 0 0 1-12 0V7z\'/><path d=\'M12 16v5\'/>')" />
+                  <button class="llm-icon-btn" title="测试模型可调用（需先填 Base URL）" @click="testModelRow(`form:${m.id}`, { model: m.id, baseUrl: form.baseUrl.trim() || undefined, apiKey: form.apiKey.trim() || undefined, protocol: form.protocol })" v-html="ICON('<path d=\'M13 2 3 14 12 14 11 22 21 10 12 10 13 2\'/>')" />
                   <button class="llm-icon-btn" title="编辑模型" @click="openModelModal(m.id, null)" v-html="ICON('<path d=\'M17 3l4 4L7 21H3v-4L17 3z\'/>')" />
-                  <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeFormModel(m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4h8v2\'/><path d=\'M19 6l-1 14H6L5 6\'/><path d=\'M10 11v6\'/><path d=\'M14 11v6\'/>')" />
+                  <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeFormModel(m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\'/><path d=\'M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\'/>')" />
                 </div>
               </div>
               </div>
