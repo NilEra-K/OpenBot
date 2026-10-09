@@ -1192,6 +1192,9 @@
 /* 模型行图标动作（测试/编辑/删除/设默认——图例交互 2026-09-15） */
 .llm-model-actions {
   margin-left: auto;
+  /* v0.1.58b 用户裁定：actions 移入 model-box 内——竖线分隔，右侧对齐恒定 */
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
 }
 
 .llm-icon-btn {

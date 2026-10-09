@@ -985,8 +985,7 @@ const wslHelpNeeded = computed(() => {
                     :class="modelTestResults[`saved:${selected.name}:${m.id}`].ok ? 'chip-success' : 'chip-danger'"
                     :title="modelTestResults[`saved:${selected.name}:${m.id}`].text"
                   >{{ modelTestResults[`saved:${selected.name}:${m.id}`].text.length > 18 ? modelTestResults[`saved:${selected.name}:${m.id}`].text.slice(0, 18) + '…' : modelTestResults[`saved:${selected.name}:${m.id}`].text }}</span>
-                </div>
-                <div class="llm-model-actions">
+                  <div class="llm-model-actions">
                   <button
                     v-if="!(isSelectedDefault && isDefaultPair(selected.name, m.id))"
                     class="llm-icon-btn"
@@ -997,6 +996,7 @@ const wslHelpNeeded = computed(() => {
                   <button class="llm-icon-btn" title="测试模型可调用" @click="testModelRow(`saved:${selected.name}:${m.id}`, { name: selected.name, model: m.id })" v-html="ICON('<path d=\'M13 2 3 14 12 14 11 22 21 10 12 10 13 2\'/>')" />
                   <button class="llm-icon-btn" title="编辑模型" @click="openModelModal(m.id, selected.name)" v-html="ICON('<path d=\'M17 3l4 4L7 21H3v-4L17 3z\'/>')" />
                   <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeSavedModel(selected, m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\'/><path d=\'M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\'/>')" />
+                  </div>
                 </div>
               </div>
               </div>
@@ -1060,11 +1060,11 @@ const wslHelpNeeded = computed(() => {
                     :class="modelTestResults[`form:${m.id}`].ok ? 'chip-success' : 'chip-danger'"
                     :title="modelTestResults[`form:${m.id}`].text"
                   >{{ modelTestResults[`form:${m.id}`].text.length > 18 ? modelTestResults[`form:${m.id}`].text.slice(0, 18) + '…' : modelTestResults[`form:${m.id}`].text }}</span>
-                </div>
-                <div class="llm-model-actions">
+                  <div class="llm-model-actions">
                   <button class="llm-icon-btn" title="测试模型可调用（需先填 Base URL）" @click="testModelRow(`form:${m.id}`, { model: m.id, baseUrl: form.baseUrl.trim() || undefined, apiKey: form.apiKey.trim() || undefined, protocol: form.protocol })" v-html="ICON('<path d=\'M13 2 3 14 12 14 11 22 21 10 12 10 13 2\'/>')" />
                   <button class="llm-icon-btn" title="编辑模型" @click="openModelModal(m.id, null)" v-html="ICON('<path d=\'M17 3l4 4L7 21H3v-4L17 3z\'/>')" />
                   <button class="llm-icon-btn llm-icon-danger" title="删除模型" @click="removeFormModel(m.id)" v-html="ICON('<path d=\'M3 6h18\'/><path d=\'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\'/><path d=\'M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\'/>')" />
+                  </div>
                 </div>
               </div>
               </div>
