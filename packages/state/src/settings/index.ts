@@ -12,6 +12,8 @@ export const SettingsErrorCodes = {
   SETTINGS_NO_DEFAULT_PROVIDER: 'SETTINGS_NO_DEFAULT_PROVIDER',
   /** 供应商至少要有一个可调用模型（图例语义：添加供应商前须先添加模型） */
   SETTINGS_PROVIDER_NO_MODEL: 'SETTINGS_PROVIDER_NO_MODEL',
+  /** 改名目标与其他既有档案同名（v0.1.62 renameFrom 语义）——吞并他档须显式删除，不做隐式合并 */
+  SETTINGS_PROVIDER_NAME_CONFLICT: 'SETTINGS_PROVIDER_NAME_CONFLICT',
 } as const
 
 /** 协议族：openai-compat（chat completions 兼容面）/ anthropic（messages API）；缺省前者（旧档案读取端兼容） */
@@ -109,6 +111,9 @@ export interface ProviderModelInput {
 
 export interface ProviderInput {
   name: string
+  /** 改名来源（v0.1.62）：携带时按此名寻旧档（密文随档迁移），name 即新档案键；
+   *  defaultProvider / fallbackProvider 引用级联更新。缺省 = 同名替换（现行为不变） */
+  renameFrom?: string
   baseUrl: string
   /** 模型列表（v2）——至少一个 */
   models: ProviderModelInput[]
@@ -203,7 +208,9 @@ export class SettingsStore {
   }
 
   /** 新增/更新（同名替换）；省略 apiKey 时保留既有密文。模型列表全量替换且须非空；
-   *  默认模型悬空（不在新列表内）时回落首个——不产生悬空引用 */
+   *  默认模型悬空（不在新列表内）时回落首个——不产生悬空引用。
+   *  改名（v0.1.62 renameFrom）：按来源名寻旧档、密文随档迁移，name 为新档案键；
+   *  defaultProvider / fallbackProvider 引用级联更新（defaultModel 不动——模型 id 不变） */
   async upsert(input: ProviderInput): Promise<ProviderProfileView> {
     const models = input.models
       .map((m) => ({ id: m.id, ...(m.supportsImages !== undefined ? { supportsImages: m.supportsImages } : {}) }))
@@ -211,8 +218,21 @@ export class SettingsStore {
     if (models.length === 0) {
       throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NO_MODEL, '供应商至少要有一个模型')
     }
+    const sourceName = input.renameFrom ?? input.name
+    const renamed = input.renameFrom !== undefined && input.renameFrom !== input.name
     const settings = await this.load()
-    const existing = settings.providers.find((p) => p.name === input.name)
+    if (input.renameFrom !== undefined) {
+      if (!settings.providers.some((p) => p.name === input.renameFrom)) {
+        throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NOT_FOUND, `provider 不存在：${input.renameFrom}`)
+      }
+      if (settings.providers.some((p) => p.name === input.name && p.name !== input.renameFrom)) {
+        throw new KernelError(
+          SettingsErrorCodes.SETTINGS_PROVIDER_NAME_CONFLICT,
+          `已存在同名供应商：${input.name}——改名不吞并他档（请先删除或换名）`,
+        )
+      }
+    }
+    const existing = settings.providers.find((p) => p.name === sourceName)
     const apiKey =
       input.apiKey !== undefined && input.apiKey !== ''
         ? this.#encrypt(input.apiKey)
@@ -228,10 +248,14 @@ export class SettingsStore {
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.protocol !== undefined ? { protocol: input.protocol } : {}),
     }
-    const providers = settings.providers.filter((p) => p.name !== input.name)
+    const providers = settings.providers.filter((p) => p.name !== sourceName)
     providers.push(profile)
-    // 首个模型自动成为默认（0.1.28 默认语义）：免一步「设为默认」操作；已有默认时不抢占
-    const defaultProvider = settings.defaultProvider ?? input.name
+    // 首个模型自动成为默认（0.1.28 默认语义）：免一步「设为默认」操作；已有默认时不抢占；
+    // 改名级联：默认/回退引用随档案键走（settings.defaultProvider 未设置时首档语义保持）
+    const defaultProvider =
+      renamed && settings.defaultProvider === input.renameFrom
+        ? input.name
+        : (settings.defaultProvider ?? input.name)
     // 默认模型随默认供应商的模型列表维护：缺省取首个；不在列表内（被改掉）回落首个
     const defaultModel =
       defaultProvider === input.name
@@ -239,7 +263,11 @@ export class SettingsStore {
             ? settings.defaultModel
             : models[0]!.id)
         : settings.defaultModel
-    await this.#save({ ...settings, providers, defaultProvider, defaultModel })
+    const fallbackProvider =
+      renamed && settings.fallbackProvider === input.renameFrom
+        ? input.name
+        : settings.fallbackProvider
+    await this.#save({ ...settings, providers, defaultProvider, defaultModel, fallbackProvider })
     return {
       name: profile.name,
       baseUrl: profile.baseUrl,

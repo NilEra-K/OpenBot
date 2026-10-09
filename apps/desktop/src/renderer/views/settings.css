@@ -595,6 +595,9 @@
   user-select: text;
   white-space: normal;
   max-width: 70%;
+  /* 吸收行内全部剩余空间（v0.1.62 间距修正）：路径值与右侧 kv-actions 仅隔 gap（10px）成组右靠——
+   * space-between 的空隙均分会让 path↔actions 之间留一大段空白 */
+  margin-left: auto;
 }
 
 

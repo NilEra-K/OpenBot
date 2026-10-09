@@ -173,6 +173,8 @@ const providerModelSchema = z.object({
 })
 const providerInputSchema = z.object({
   name: z.string().min(1),
+  /** 改名来源（v0.1.62）：携带时按此名寻旧档（密文随档迁移）、引用级联；缺省 = 同名替换 */
+  renameFrom: z.string().min(1).optional(),
   baseUrl: z.string().url(),
   /** 模型列表（v2 供应商 1:N 模型，2026-09-15）：至少一个——图例语义「添加供应商前先添加模型」 */
   models: z.array(providerModelSchema).min(1),

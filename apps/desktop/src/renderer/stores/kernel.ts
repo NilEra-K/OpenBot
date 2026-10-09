@@ -237,6 +237,8 @@ export interface ImageScanSourceView {
 /** provider 表单输入（v1.settings.upsertProvider 载荷；apiKey 留空=保留原密文；模型列表至少一个） */
 export interface ProviderInput {
   name: string
+  /** 改名来源（v0.1.62 编辑态携带）：内核按此名寻旧档迁移密文并级联默认/回退引用；缺省 = 同名替换 */
+  renameFrom?: string
   baseUrl: string
   models: ProviderModelView[]
   apiKey?: string

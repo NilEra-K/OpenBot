@@ -535,7 +535,7 @@ const themeChoice = computed({
   set: (v: ThemePref) => ui.setTheme(v),
 })
 
-// ---- provider 表单（右栏内联——v2 供应商 1:N 模型；编辑时 name 锁定——name 是档案键，改名=新建） ----
+// ---- provider 表单（右栏内联——v2 供应商 1:N 模型；v0.1.62 起编辑态可改名：renameFrom 语义，密文随档迁移） ----
 
 interface ProviderFormModel {
   id: string
@@ -555,6 +555,8 @@ const form = reactive<{ name: string; baseUrl: string; apiKey: string; proxyUrl:
 })
 const saving = ref(false)
 const formError = ref<string | null>(null)
+/** 编辑态的原档案名（v0.1.62 改名）：保存时若 name 已变则以 renameFrom 告知内核迁移密文并级联引用 */
+const editingName = ref<string | null>(null)
 /** 删除二段确认（进行中的名字；再点确认，点其他名字/取消则复位） */
 const confirmingRemove = ref<string | null>(null)
 
@@ -572,6 +574,7 @@ const resetForm = (): void => {
   Object.assign(form, { name: '', baseUrl: '', apiKey: '', proxyUrl: '', protocol: 'openai-compat', models: [] })
   formError.value = null
   modelTestResults.value = {}
+  editingName.value = null
 }
 
 const openCreate = (): void => {
@@ -590,6 +593,7 @@ const openEdit = (p: ProviderView): void => {
   })
   formError.value = null
   modelTestResults.value = {}
+  editingName.value = p.name
   pane.value = 'edit'
 }
 
@@ -688,6 +692,8 @@ const save = async (): Promise<void> => {
   try {
     await kernel.upsertProvider({
       name: form.name.trim(),
+      // 改名（v0.1.62）：编辑态名字变了 → 以原名寻旧档，密文随档迁移 + 默认/回退引用级联
+      ...(editingName.value !== null && form.name.trim() !== editingName.value ? { renameFrom: editingName.value } : {}),
       baseUrl: form.baseUrl.trim(),
       models: form.models.map((m) => ({ id: m.id, ...(m.supportsImages ? { supportsImages: true } : {}) })),
       ...(form.apiKey.trim() !== '' ? { apiKey: form.apiKey.trim() } : {}),
@@ -1009,11 +1015,11 @@ const wslHelpNeeded = computed(() => {
             <div class="llm-detail-head">
               <span class="llm-detail-title">{{ pane === 'add' ? '添加模型供应商' : '编辑供应商' }}</span>
             </div>
-            <p class="kv-note">{{ pane === 'add' ? '配置一个完全自定义的 API 端点和模型列表。' : '同名替换；API Key 留空保留原密文。' }}</p>
+            <p class="kv-note">{{ pane === 'add' ? '配置一个完全自定义的 API 端点和模型列表。' : '同名替换；API Key 留空保留原密文。改名会同步更新默认/回退引用，密文随档迁移。' }}</p>
             <div class="llm-form-body">
             <div class="field">
               <label class="field-label" for="pfName">名称</label>
-              <input id="pfName" v-model="form.name" class="field-input" :disabled="pane === 'edit'" placeholder="例：智谱中转（供应商记名，不是模型名）" autocomplete="off" maxlength="16" />
+              <input id="pfName" v-model="form.name" class="field-input" :placeholder="pane === 'edit' ? '改名将迁移档案（密文与引用随之走）' : '例：智谱中转（供应商记名，不是模型名）'" autocomplete="off" maxlength="16" />
             </div>
             <div class="field">
               <label class="field-label" for="pfUrl">Base URL</label>
@@ -1529,7 +1535,15 @@ const wslHelpNeeded = computed(() => {
             <button class="btn btn-ghost btn-sm kv-icon" aria-label="设置数据目录" title="设置数据目录（重启生效）" @click="openDataRoot"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           </span>
         </div>
-        <div class="kv"><span class="k">transcript</span><span class="v mono kv-path">{{ dataPaths.transcript }}</span></div>
+        <!-- transcript 落 data/agents（main/index.ts 布局约定）：路径由数据目录派生不可独立设置——
+             「打开」直达 agents/（白名单同数据目录行；数据目录行打开的是其父目录） -->
+        <div class="kv">
+          <span class="k">transcript</span>
+          <span class="v mono kv-path">{{ dataPaths.transcript }}</span>
+          <span class="kv-actions">
+            <button class="btn btn-ghost btn-sm kv-icon" aria-label="打开 transcript 文件夹" title="打开 transcript 文件夹" @click="openFolder(dataPaths.transcript)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+          </span>
+        </div>
       </template>
       <p v-else class="settings-empty">开发模式（无壳）——数据路径由桌面壳提供</p>
 
@@ -1662,6 +1676,13 @@ const wslHelpNeeded = computed(() => {
 
       <div class="kv"><span class="k">版本</span><span class="v mono">{{ appVersion ? `v${appVersion}` : '开发模式（无壳）' }}</span></div>
       <div class="kv"><span class="k">许可</span><span class="v">Apache-2.0 · 净室自研</span></div>
+      <!-- 检查更新（v0.1.62 用户需求）：开发版无更新通道——诚实占位，不假装检查、不造假版本源 -->
+      <div class="kv">
+        <span class="k">更新</span>
+        <span class="v"><button class="btn btn-ghost btn-sm" type="button" @click="toast.push('开发版：更新通道暂未开放（后续版本提供）', 'info')">检查更新</button></span>
+      </div>
+      <!-- 隐私（真话直陈）：本地优先是架构事实，不设云端政策页占位——key 系统加密、数据不出本机 -->
+      <div class="kv"><span class="k">隐私</span><span class="v">本地优先 · 数据不出本机（API key 系统加密落盘）</span></div>
       </div>
 
       </div>

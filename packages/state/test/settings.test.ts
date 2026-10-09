@@ -209,6 +209,36 @@ describe('SettingsStore', () => {
     expect(await store.getFallback()).toBeNull()
   })
 
+  it('renameFrom 改名（v0.1.62）：密文随档迁移 + 默认/回退引用级联 + 冲突拒绝 + 幂等', async () => {
+    const { store } = makeStore()
+    await store.upsert({ name: '智谱中转', baseUrl: 'https://old/v1', models: [{ id: 'glm-5.3' }], apiKey: 'sk-旧' })
+    await store.upsert({ name: 'other', baseUrl: 'https://other/v1', models: [{ id: 'm' }] })
+    await store.setDefault('智谱中转', 'glm-5.3')
+    await store.setFallback('智谱中转')
+    // 改名（省略 apiKey）：密文随档迁移到新键、旧键不复存在
+    await store.upsert({ name: '智谱主力', renameFrom: '智谱中转', baseUrl: 'https://new/v1', models: [{ id: 'glm-5.3' }] })
+    expect((await store.resolve('智谱主力')).apiKey).toBe('sk-旧')
+    expect((await store.resolve('智谱主力')).baseUrl).toBe('https://new/v1')
+    await expect(store.resolve('智谱中转')).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
+    // 默认与回退引用级联到新名；defaultModel 不动（模型 id 未变）
+    const settings = await store.load()
+    expect(settings.defaultProvider).toBe('智谱主力')
+    expect(settings.defaultModel).toBe('glm-5.3')
+    expect(settings.fallbackProvider).toBe('智谱主力')
+    // 目标名撞他档 → 显式拒绝（不隐式吞并）
+    await expect(
+      store.upsert({ name: 'other', renameFrom: '智谱主力', baseUrl: 'https://x/v1', models: [{ id: 'm' }] }),
+    ).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NAME_CONFLICT' })
+    // 来源档不存在 → NOT_FOUND
+    await expect(
+      store.upsert({ name: '新档', renameFrom: 'ghost', baseUrl: 'https://x/v1', models: [{ id: 'm' }] }),
+    ).rejects.toMatchObject({ code: 'SETTINGS_PROVIDER_NOT_FOUND' })
+    // 幂等：renameFrom 与 name 相同 = 同名替换现行为（密文保留、档案数不变）
+    const again = await store.upsert({ name: '智谱主力', renameFrom: '智谱主力', baseUrl: 'https://new/v1', models: [{ id: 'glm-5.3' }] })
+    expect(again.hasKey).toBe(true)
+    expect((await store.load()).providers).toHaveLength(2)
+  })
+
   it('relays 多房间（P7 多房间轮）：全量写入与读回；旧 relay 单字段读取端回退；写入后旧键清除', async () => {
     const { store, fs } = makeStore()
     const relays = [
