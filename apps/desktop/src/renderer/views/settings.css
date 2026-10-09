@@ -371,6 +371,7 @@
 .kv {
   display: flex;
   justify-content: space-between;
+  align-items: center; /* v0.1.63：kv-path 多行折行时，标签与右侧按钮组垂直居中（原 stretch 贴顶） */
   gap: 10px;
   font-size: 12.5px;
   padding: 5px 0;
@@ -598,6 +599,19 @@
   /* 吸收行内全部剩余空间（v0.1.62 间距修正）：路径值与右侧 kv-actions 仅隔 gap（10px）成组右靠——
    * space-between 的空隙均分会让 path↔actions 之间留一大段空白 */
   margin-left: auto;
+  /* v0.1.63：折行后逐行左对齐（原继承 .kv .v 右对齐——每行右缘齐左缘参差，阅读奇怪；单行无差异） */
+  text-align: left;
+}
+
+/* 目录选择行（v0.1.63）：路径输入框 + 「浏览…」按钮并排（系统对话框选目录） */
+.field-pick {
+  display: flex;
+  gap: 8px;
+}
+
+.field-pick .field-input {
+  flex: 1;
+  min-width: 0;
 }
 
 

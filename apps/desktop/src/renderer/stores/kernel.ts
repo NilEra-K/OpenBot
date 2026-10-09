@@ -27,10 +27,12 @@ interface OpenbotGlobal {
   gateway: { info(): Promise<GatewayEndpoint | null> }
   app: {
     version(): Promise<string>
-    /** 数据路径（设置页数据区块）：userData / data / transcript 目录 */
-    paths(): Promise<{ userData: string; data: string; transcript: string }>
+    /** 数据路径（设置页数据区块）：userData / data / transcript 目录 + 会话记录标记原值（null = 随数据目录） */
+    paths(): Promise<{ userData: string; data: string; transcript: string; transcriptRoot: string | null }>
     /** 打开数据文件夹（白名单限定 userData 内；返回错误消息，空串 = 成功） */
     openPath(path: string): Promise<string>
+    /** 目录选择对话框（v0.1.63）：系统原生选目录（Win 资源管理器 / mac 访达）；取消返回 null */
+    pickDirectory(title: string): Promise<string | null>
   }
 }
 declare global {
@@ -699,6 +701,11 @@ export const useKernelStore = defineStore('kernel', {
     /** 数据目录设置（UI 优化 0.1.26，用户需求）：写标记文件重启生效（旧数据不自动迁移） */
     async setDataRoot(path: string | null): Promise<void> {
       await this.call('v1.system.setDataRoot', { path })
+    },
+    /** 会话记录目录独立设置（v0.1.63）：切换自动迁移（只搬 transcript.jsonl，档案/记忆不动）；
+     *  返回迁移文件数；null = 回数据目录内（同样自动迁回） */
+    async setTranscriptRoot(path: string | null): Promise<{ moved: number }> {
+      return await this.call<{ moved: number }>('v1.system.setTranscriptRoot', { path })
     },
     /** 镜像注册表（P8-3）：刷新/增改删/连接测试——add/update 后服务端即时维护路由表 */
     async refreshImages(): Promise<void> {

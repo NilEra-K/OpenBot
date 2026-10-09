@@ -141,7 +141,8 @@ ipcMain.handle('openbot:auto-launch:set', (_e, enabled: boolean) => {
 })
 
 // 数据路径（P4 Step 11 设置页数据区块）：与 kernel 装配同源布局——<userData>/data（state root），
-// transcript 落 <data>/agents/<agentId>/transcript.jsonl（state 包布局约定）
+// transcript 落 <data>/agents/<agentId>/transcript.jsonl（state 包布局约定）；
+// transcript 独立目录（v0.1.63）：transcript-root.txt 标记——与 kernel.ts 装配端同一真相
 ipcMain.handle('openbot:paths', () => {
   const userData = app.getPath('userData')
   // 自定义数据目录（P8-4 后 UI 优化）：userData 根下 data-root.txt 标记——与 kernel.ts 装配端同一真相
@@ -152,10 +153,24 @@ ipcMain.handle('openbot:paths', () => {
   } catch {
     /* 无标记——默认目录 */
   }
+  // 会话记录目录：缺省随数据目录（<data>/agents）；标记非空时独立（文件落 <标记>/agents/<agentId>/）
+  let transcriptDir = join(dataDir, 'agents')
+  let transcriptRoot: string | null = null
+  try {
+    const customT = readFileSync(join(userData, 'transcript-root.txt'), 'utf8').trim()
+    if (customT !== '') {
+      transcriptDir = join(customT, 'agents')
+      transcriptRoot = customT
+    }
+  } catch {
+    /* 无标记——随数据目录 */
+  }
   return {
     userData,
     data: dataDir,
-    transcript: join(dataDir, 'agents'),
+    transcript: transcriptDir,
+    // 标记原值（v0.1.63 设置模态预填用；null = 未自定义、随数据目录）
+    transcriptRoot,
   }
 })
 
@@ -169,6 +184,14 @@ ipcMain.handle('openbot:open-path', (_e, target: string) => {
     return Promise.resolve(`拒绝打开数据目录之外的路径：${target}`)
   }
   return shell.openPath(resolved)
+})
+
+// 目录选择对话框（v0.1.63，用户需求）：系统原生选目录（Win 资源管理器 / mac 访达）——
+// 对话框在 main 侧弹出，renderer 只收结果字符串（无文件系统访问面）；取消返回 null
+ipcMain.handle('openbot:pick-directory', async (_e, title: string) => {
+  if (!win) return null
+  const r = await dialog.showOpenDialog(win, { title, properties: ['openDirectory'] })
+  return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0] ?? null
 })
 
 // 网关接入点：renderer 经 preload 异步拉取（port/token 只活在内存链路，不落盘）

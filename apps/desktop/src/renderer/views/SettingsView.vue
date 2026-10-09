@@ -780,11 +780,11 @@ const dropOn = (target: string): void => {
 
 // ---- 数据区块（P4 Step 11，裁定 E 一期只读：路径展示 + 打开文件夹） ----
 
-const dataPaths = ref<{ userData: string; data: string; transcript: string } | null>(null)
+const dataPaths = ref<{ userData: string; data: string; transcript: string; transcriptRoot: string | null } | null>(null)
 onMounted(() => {
   void window.openbot?.app
     ?.paths()
-    .then((p: { userData: string; data: string; transcript: string }) => (dataPaths.value = p))
+    .then((p: { userData: string; data: string; transcript: string; transcriptRoot: string | null }) => (dataPaths.value = p))
     .catch(() => (dataPaths.value = null)) // 桥缺失（浏览器 dev）——如实降级
 })
 
@@ -817,6 +817,47 @@ const saveDataRoot = async (path: string | null = dataRootDraft.value.trim()): P
 
 const saveDataRootDefault = (): void => {
   void saveDataRoot(null)
+}
+
+// ---- 会话记录目录独立设置（v0.1.63，用户需求）：transcript-root.txt 标记重启生效，旧记录不自动迁移 ----
+const transcriptRootOpen = ref(false)
+const transcriptRootDraft = ref('')
+const transcriptRootError = ref<string | null>(null)
+const transcriptRootSaving = ref(false)
+
+const openTranscriptRoot = (): void => {
+  // 预填标记原值（transcriptRoot 为 null = 未自定义、随数据目录——预填空让 placeholder 引导）
+  transcriptRootDraft.value = dataPaths.value?.transcriptRoot ?? ''
+  transcriptRootError.value = null
+  transcriptRootOpen.value = true
+}
+
+const saveTranscriptRoot = async (path: string | null = transcriptRootDraft.value.trim()): Promise<void> => {
+  if (transcriptRootSaving.value) return
+  transcriptRootSaving.value = true
+  transcriptRootError.value = null
+  try {
+    const r = await kernel.setTranscriptRoot(path)
+    const movedNote = r.moved > 0 ? `已自动迁移 ${r.moved} 个 agent 的会话记录，` : ''
+    toast.push(`${movedNote}${path === null ? '会话记录已回到数据目录内' : '会话记录目录已更新'}——重启应用后生效`, 'success')
+    transcriptRootOpen.value = false
+  } catch (err) {
+    transcriptRootError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    transcriptRootSaving.value = false
+  }
+}
+
+const saveTranscriptRootDefault = (): void => {
+  void saveTranscriptRoot(null)
+}
+
+/** 系统对话框选目录（v0.1.63，用户需求）：回填到对应草稿（取消/无壳不动） */
+const browseDirectory = async (draft: 'data' | 'transcript'): Promise<void> => {
+  const picked = await window.openbot?.app?.pickDirectory(draft === 'data' ? '选择数据目录' : '选择会话记录目录')
+  if (picked === null || picked === undefined) return
+  if (draft === 'data') dataRootDraft.value = picked
+  else transcriptRootDraft.value = picked
 }
 
 /** 打开数据文件夹（main 白名单限定 userData 内；返回错误消息，空串 = 成功） */
@@ -1521,7 +1562,7 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">数据</div>
         <HelpTip
-          text="对话与执行记录以 JSONL 追加落盘（append-only——只增不改，永不就地改写历史）；全部数据只在本机，不上传。导出全部 / 清空 transcript 属后续版本。"
+          text="对话与执行记录（会话记录/transcript）以 JSONL 追加落盘（append-only——只增不改，永不就地改写历史）；全部数据只在本机，不上传。导出全部 / 清空会话记录属后续版本。"
         />
       </div>
       <div class="settings-card">
@@ -1535,13 +1576,14 @@ const wslHelpNeeded = computed(() => {
             <button class="btn btn-ghost btn-sm kv-icon" aria-label="设置数据目录" title="设置数据目录（重启生效）" @click="openDataRoot"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           </span>
         </div>
-        <!-- transcript 落 data/agents（main/index.ts 布局约定）：路径由数据目录派生不可独立设置——
-             「打开」直达 agents/（白名单同数据目录行；数据目录行打开的是其父目录） -->
+        <!-- 会话记录（transcript 中文化 v0.1.63）：默认落数据目录 agents/（路径由数据目录派生）；
+             v0.1.63 起可独立设置目录（transcript-root.txt 标记）——「打开」直达 agents/（白名单同数据目录行） -->
         <div class="kv">
-          <span class="k">transcript</span>
+          <span class="k">会话记录</span>
           <span class="v mono kv-path">{{ dataPaths.transcript }}</span>
           <span class="kv-actions">
-            <button class="btn btn-ghost btn-sm kv-icon" aria-label="打开 transcript 文件夹" title="打开 transcript 文件夹" @click="openFolder(dataPaths.transcript)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+            <button class="btn btn-ghost btn-sm kv-icon" aria-label="打开会话记录文件夹" title="打开会话记录文件夹" @click="openFolder(dataPaths.transcript)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+            <button class="btn btn-ghost btn-sm kv-icon" aria-label="设置会话记录目录" title="设置会话记录目录（重启生效）" @click="openTranscriptRoot"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           </span>
         </div>
       </template>
@@ -1557,7 +1599,10 @@ const wslHelpNeeded = computed(() => {
           <div class="wiz-body provider-form">
             <div class="field">
               <label class="field-label" for="drPath">数据目录（绝对路径）</label>
-              <input id="drPath" v-model="dataRootDraft" class="field-input mono" placeholder="D:\\OpenBotData" autocomplete="off" spellcheck="false" />
+              <div class="field-pick">
+                <input id="drPath" v-model="dataRootDraft" class="field-input mono" placeholder="D:\\OpenBotData" autocomplete="off" spellcheck="false" />
+                <button class="btn btn-ghost" type="button" @click="browseDirectory('data')">浏览…</button>
+              </div>
               <p class="wiz-note">重启应用后生效。切换目录不会自动迁移数据——将现有 data 文件夹整体搬到新位置后指向它，即可无缝继承全部设置与对话记录；恢复默认则回到应用数据目录下的 data。</p>
             </div>
             <p v-if="dataRootError" class="form-error">{{ dataRootError }}</p>
@@ -1567,6 +1612,33 @@ const wslHelpNeeded = computed(() => {
             <button class="btn btn-ghost" @click="dataRootOpen = false">取消</button>
             <span class="wiz-spacer"></span>
             <button class="btn btn-ghost" :disabled="dataRootSaving" @click="saveDataRootDefault()">恢复默认</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 会话记录目录设置（v0.1.63，模态同数据目录款；重启生效，旧记录不自动迁移） -->
+      <div v-if="transcriptRootOpen" class="wiz-overlay" @mousedown.self="transcriptRootOpen = false">
+        <div class="wiz-card" role="dialog" aria-label="会话记录目录设置" @keydown.escape="transcriptRootOpen = false">
+          <div class="wiz-head">
+            <span class="wiz-title">设置会话记录目录</span>
+            <button class="wiz-close" type="button" aria-label="关闭" @click="transcriptRootOpen = false">✕</button>
+          </div>
+          <div class="wiz-body provider-form">
+            <div class="field">
+              <label class="field-label" for="trPath">会话记录目录（绝对路径）</label>
+              <div class="field-pick">
+                <input id="trPath" v-model="transcriptRootDraft" class="field-input mono" placeholder="D:\\OpenBotTranscript" autocomplete="off" spellcheck="false" />
+                <button class="btn btn-ghost" type="button" @click="browseDirectory('transcript')">浏览…</button>
+              </div>
+              <p class="wiz-note">重启应用后生效。保存时自动把现有会话记录（各 agent 的 transcript.jsonl）迁移到新目录；agent 档案与记忆仍留在数据目录，不受影响。「恢复默认」同样自动迁回数据目录内。</p>
+            </div>
+            <p v-if="transcriptRootError" class="form-error">{{ transcriptRootError }}</p>
+          </div>
+          <div class="wiz-foot">
+            <button class="btn btn-primary" :disabled="transcriptRootSaving || transcriptRootDraft.trim() === ''" @click="saveTranscriptRoot()">{{ transcriptRootSaving ? '保存中…' : '保存' }}</button>
+            <button class="btn btn-ghost" @click="transcriptRootOpen = false">取消</button>
+            <span class="wiz-spacer"></span>
+            <button class="btn btn-ghost" :disabled="transcriptRootSaving" @click="saveTranscriptRootDefault()">恢复默认</button>
           </div>
         </div>
       </div>

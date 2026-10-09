@@ -13,7 +13,7 @@
 import { app, desktopCapturer, safeStorage, screen as electronScreen } from 'electron'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { stat, statfs } from 'node:fs/promises'
 import { assembleKernel, chooseBackend } from '@openbot/coordinator'
 import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinator'
@@ -398,6 +398,40 @@ function mockGuiPipe(): ((boxId: string, spec: PipeSpec) => PipeSession) | undef
   }
 }
 
+/** 会话记录迁移（v0.1.63 自动迁移）：旧根 → 新根，只搬 agents/<id>/transcript.jsonl——
+ *  同目录的 profile.json/memory.json 归数据目录侧 store，永不动。两阶段：
+ *  ①全量复制（任一失败抛出——旧根无损、标记不写、未切换）；②全部成功后删源 + 清空目录
+ *  （删源/清目录失败仅留冗余，无害——任何时刻至少一侧全量） */
+function migrateTranscripts(oldRoot: string, newRoot: string): number {
+  const oldAgents = `${oldRoot.replaceAll('\\', '/')}/agents`
+  const newAgents = `${newRoot.replaceAll('\\', '/')}/agents`
+  if (!existsSync(oldAgents)) return 0
+  const migrated: Array<{ src: string; srcDir: string }> = []
+  for (const entry of readdirSync(oldAgents)) {
+    const src = `${oldAgents}/${entry}/transcript.jsonl`
+    if (!existsSync(src)) continue
+    mkdirSync(`${newAgents}/${entry}`, { recursive: true })
+    copyFileSync(src, `${newAgents}/${entry}/transcript.jsonl`)
+    migrated.push({ src, srcDir: `${oldAgents}/${entry}` })
+  }
+  for (const m of migrated) {
+    try {
+      rmSync(m.src)
+    } catch {
+      /* 文件占用等——冗余副本留旧位（未读），无害 */
+    }
+  }
+  // 尽力清空搬空的 agent 目录；目录非空（profile/memory 在场）自然保留
+  for (const m of migrated) {
+    try {
+      rmdirSync(m.srcDir)
+    } catch {
+      /* 非空或占用 */
+    }
+  }
+  return migrated.length
+}
+
 /** 装配桌面内核（app ready 后调用；safeStorage 依赖 ready 状态） */
 export async function assembleDesktop(): Promise<DesktopKernel> {
   // NodeFs 路径约定 posix 风格（Windows 同样接受 '/'）
@@ -425,6 +459,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   }
   const fs = new NodeFs()
   const settings = new SettingsStore({ fs, root: dataRoot, encrypt: encryptKey, decrypt: decryptKey })
+  // 会话记录（transcript）目录独立设置（v0.1.63，用户需求）：transcript-root.txt 标记——同
+  // data-root 模式（探测失败如实回退数据目录内）；标记值为 TranscriptStore 的 root，文件落
+  // <root>/agents/<agentId>/transcript.jsonl（与数据目录内布局同构）。旧数据不自动迁移
+  const transcriptRootMarker = `${userDataRoot}/transcript-root.txt`
+  let transcriptRootOverride: string | undefined
+  try {
+    const customT = (existsSync(transcriptRootMarker) ? readFileSync(transcriptRootMarker, 'utf8') : '').trim()
+    if (customT !== '') {
+      mkdirSync(customT, { recursive: true })
+      rmSync(`${customT}/.openbot-root-probe`, { force: true })
+      writeFileSync(`${customT}/.openbot-root-probe`, '1')
+      rmSync(`${customT}/.openbot-root-probe`, { force: true })
+      transcriptRootOverride = customT
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn('[openbot] 自定义会话记录目录标记读取失败——回退数据目录内：', err)
+    }
+    transcriptRootOverride = undefined
+  }
   const provider = new SwitchableChatProvider()
 
   // ---- 沙箱后端选择（plan-p3 Step 5）：偏好 × 探测 × 实现白名单 → 诚实降级 ----
@@ -899,6 +953,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
+    // 会话记录独立根（v0.1.63）：缺省 undefined = 随 dataRoot（现行为零变化）
+    transcriptRoot: transcriptRootOverride,
     // 镜像路由后端（P8-3）：镜像条目 id → 后端实例的多路 facade——services/工具族零改动
     backend: routedBackend,
     // 桌面控制路由器（P9-1）：按 boxId 分发 X11/宿主屏幕——coordinator 内置 X11 缺省面被覆盖
@@ -1402,6 +1458,52 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       }
       await fs.write(dataRootMarker, path)
       return { ok: true, restartRequired: true }
+    }, z.object({ path: z.string().trim().min(1).max(500).nullable() }))
+    // 会话记录目录独立设置（v0.1.63，用户需求）：写 transcript-root.txt 标记（重启生效）。
+    // null/空 = 清除标记回数据目录内；轻校验与探测同 setDataRoot。
+    // 切换自动迁移（v0.1.63 用户需求）：只搬 agents/<id>/transcript.jsonl——同目录的
+    // profile.json/memory.json 归 AgentStore/MemoryStore（数据目录管），绝不能动。
+    // 两阶段安全搬运：先全量复制（任一失败即抛——旧根无损、标记不写、未切换），
+    // 全部成功后才删源 + 写标记（删源失败仅留冗余副本，无害——任何时刻至少一侧全量）
+    .register('v1.system.setTranscriptRoot', async (payload) => {
+      const { path } = z
+        .object({ path: z.string().trim().min(1).max(500).nullable() })
+        .parse(payload)
+      const toDefault = path === null || path === ''
+      const targetRoot = toDefault ? dataRoot : path.replaceAll('\\', '/')
+      if (!toDefault) {
+        if (!/^[a-zA-Z]:[\\/]/.test(path) && !path.startsWith('/')) {
+          throw new KernelError('STATE_DATA_ROOT_INVALID', `须为绝对路径（如 D:\\OpenBotTranscript）：${path}`)
+        }
+        try {
+          await fs.write(`${targetRoot}/.openbot-root-probe`, '1')
+          await fs.remove(`${targetRoot}/.openbot-root-probe`)
+        } catch (err) {
+          throw new KernelError('STATE_DATA_ROOT_INVALID', `目录不可用：${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      // 旧根 = 现标记值（非空时）?? 数据目录——与装配端读取同一真相
+      let prevRoot = dataRoot
+      try {
+        const prev = (existsSync(transcriptRootMarker) ? readFileSync(transcriptRootMarker, 'utf8') : '').trim()
+        if (prev !== '') prevRoot = prev.replaceAll('\\', '/')
+      } catch {
+        /* 读不到标记——按数据目录内处理 */
+      }
+      const norm = (p: string): string => p.replaceAll('\\', '/').replace(/\/+$/, '')
+      let moved = 0
+      if (norm(prevRoot) !== norm(targetRoot)) {
+        try {
+          moved = migrateTranscripts(prevRoot, targetRoot)
+        } catch (err) {
+          throw new KernelError(
+            'STATE_TRANSCRIPT_MIGRATE_FAILED',
+            `会话记录迁移失败（未切换，原目录数据无损）：${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      }
+      await fs.write(transcriptRootMarker, toDefault ? '' : path)
+      return { ok: true, moved, restartRequired: true }
     }, z.object({ path: z.string().trim().min(1).max(500).nullable() }))
 
   await applyProvider()

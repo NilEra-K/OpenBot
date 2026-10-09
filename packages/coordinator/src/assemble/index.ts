@@ -30,6 +30,11 @@ export interface AssembleOptions {
   fs?: FsAdapter
   /** 数据根目录，默认 'data' */
   root?: string
+  /**
+   * 会话记录（transcript）独立根目录（v0.1.63）：缺省随 root（<root>/agents——现行为
+   * 零变化）；桌面装配经 transcript-root.txt 标记注入，CLI/测试不感知
+   */
+  transcriptRoot?: string
   /** 时钟；默认真实 Date.now()（生产）。确定性冒烟注入固定/步进时钟 */
   now?: () => number
   /** 沙箱后端；默认 mock（P3 换 wsl/docker） */
@@ -144,7 +149,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const bus = new EventBus({ now })
   const transport = new InProcessTransport({ bus })
   const agentStore = new AgentStore({ fs, root, now })
-  const transcript = new TranscriptStore({ fs, root, now })
+  const transcript = new TranscriptStore({ fs, root: options.transcriptRoot ?? root, now })
   const ledger = new IdempotencyLedger({ fs, root, now })
   const backend = options.backend ?? new MockBoxBackend({ now })
   const registry = new BoxRegistry().register(backend)

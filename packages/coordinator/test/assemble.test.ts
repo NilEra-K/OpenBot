@@ -5,6 +5,7 @@ import { MockBoxBackend } from '@openbot/boxes'
 import { RoutingBoxBackend } from '@openbot/boxes'
 import type { BoxBackend } from '@openbot/boxes'
 import { ManualApprovalGate } from '@openbot/runner'
+import { InMemoryFs } from '@openbot/state'
 import { assembleKernel, InProcessCarrier } from '../src/index.js'
 import type { AssembledKernel } from '../src/index.js'
 import type { KernelEvent } from '@openbot/core'
@@ -73,6 +74,31 @@ describe('assembleKernel 全链路（经 transport 客户端驱动，壳视角�
     // 事件 seq 单调
     const seqs = events.map((e) => e.seq)
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b))
+  })
+
+  it('transcriptRoot 独立根（v0.1.63）：会话记录落独立目录，数据根下不再有 agents/', async () => {
+    const fs = new InMemoryFs()
+    const kernel = assembleKernel({
+      fs,
+      root: 'data',
+      transcriptRoot: 't-dir',
+      now: () => 0,
+      bootPrefix: 'tr',
+      systemPrompt: '你是 OpenBot agent',
+    })
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({
+      agentId: 'a1',
+      llm: new MockChatProvider({ steps: [{ text: '好' }] }),
+    })
+    await client.call('v1.message.sendUser', { toAgentId: 'a1', text: '你好', nonce: 'tr-1' })
+    await waitIdle(kernel)
+    // 会话记录迁独立根（<transcriptRoot>/agents/<agentId>/transcript.jsonl——保持同构布局）；
+    // 数据根的 agent 目录只剩档案（agents/<id>/ 是 profile/memory/transcript 共用布局）
+    const files = Object.keys(fs.snapshot())
+    expect(files).toContain('t-dir/agents/a1/transcript.jsonl')
+    expect(files).toContain('data/agents/a1/profile.json')
+    expect(files).not.toContain('data/agents/a1/transcript.jsonl')
   })
 
   it('幂等重发：同 nonce 经 transport 重试零双发', async () => {

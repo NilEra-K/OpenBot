@@ -1104,7 +1104,8 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
     await page.locator('.settings-nav-item', { hasText: '数据' }).click() // 切换式导航
     await expect(page.locator('.set-sec', { hasText: '数据' })).toBeVisible()
     await expect(page.locator('.kv', { hasText: '数据目录' })).toContainText('data')
-    await expect(page.locator('.kv', { hasText: 'transcript' })).toContainText('agents')
+    // 会话记录（v0.1.63 中文化，原标签 transcript）：默认随数据目录——路径含 agents
+    await expect(page.locator('.kv', { hasText: '会话记录' })).toContainText('agents')
     await expect(page.getByRole('button', { name: '打开数据文件夹' })).toBeVisible()
 
     // —— 配置两端点：默认 = E2E mock（首个自动成为默认）；坏端点 = 必然连接失败 ——

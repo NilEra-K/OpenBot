@@ -28,10 +28,12 @@ contextBridge.exposeInMainWorld('openbot', {
   app: {
     /** 应用版本（package.json version；About 页真值——不手写不过时） */
     version: () => ipcRenderer.invoke('openbot:app-version') as Promise<string>,
-    /** 数据路径（设置页数据区块）：userData / data / transcript 目录 */
-    paths: () => ipcRenderer.invoke('openbot:paths') as Promise<{ userData: string; data: string; transcript: string }>,
+    /** 数据路径（设置页数据区块）：userData / data / transcript 目录 + 会话记录标记原值（null = 随数据目录） */
+    paths: () => ipcRenderer.invoke('openbot:paths') as Promise<{ userData: string; data: string; transcript: string; transcriptRoot: string | null }>,
     /** 打开数据文件夹（白名单限定 userData 内；返回错误消息，空串 = 成功） */
     openPath: (path: string) => ipcRenderer.invoke('openbot:open-path', path) as Promise<string>,
+    /** 目录选择对话框（v0.1.63）：系统原生选目录；取消返回 null——只回传字符串，无 fs 访问面 */
+    pickDirectory: (title: string) => ipcRenderer.invoke('openbot:pick-directory', title) as Promise<string | null>,
   },
   autoLaunch: {
     /** 系统自启动现状（注册表 Run 键即真相——用户在系统侧改动如实反映） */
