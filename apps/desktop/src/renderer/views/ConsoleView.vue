@@ -15,6 +15,7 @@ import { useToastStore } from '../stores/toast'
 import { renderMarkdown } from '../lib/markdown'
 import { mentionify } from '../lib/mention'
 import RosterPanel from '../components/RosterPanel.vue'
+import BotBallAvatar from '../components/BotBallAvatar.vue'
 import CtxPanel from '../components/CtxPanel.vue'
 import BoxScreen from '../components/BoxScreen.vue'
 import MentionMenu from '../components/MentionMenu.vue'
@@ -1094,7 +1095,10 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
     <div class="streamcol">
       <div class="stream-head">
         <div v-if="activeGroup" class="avatar" style="background: var(--accent)">群</div>
-        <div v-else class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
+        <!-- v0.1.65：agent 头像 → BotBall 小球（身份色染身；群头像保留原样） -->
+        <div v-else class="avatar">
+          <BotBallAvatar :color="kernel.colorOf(ui.activeAgentId)" :state="activeRun !== null ? 'working' : 'idle'" />
+        </div>
         <div class="sh-text">
           <div class="sh-name">{{ sessionTitle }}</div>
           <div class="sh-status">
@@ -1174,7 +1178,6 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
               <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
               <div v-else-if="unit.kind === 'sys'" class="sysnote">{{ kernel.messages[unit.msgIndex]!.text }}</div>
               <div v-else-if="unit.kind === 'user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
-                <div class="avatar neutral">你</div>
                 <div class="m-body">
                   <div class="m-meta">
                     <span class="m-name">你</span>
@@ -1186,9 +1189,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                 </div>
               </div>
               <div v-else class="m">
-                <div class="avatar" :style="{ background: kernel.colorOf(kernel.messages[unit.msgIndex]!.from) }">
-                  {{ initialOf(kernel.messages[unit.msgIndex]!.from) }}
-                </div>
+                <!-- v0.1.66：消息流头像移除（用户裁定）——归属靠署名色（m-name 保留） -->
                 <div class="m-body">
                   <div class="m-meta">
                     <span class="m-name" :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex]!.from) }">
@@ -1215,7 +1216,6 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
 
             <!-- user 消息（右对齐气泡；「会话掌控」hover 编辑 + 引用胶囊） -->
             <div v-else-if="unit.kind === 'msg-user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
-              <div class="avatar neutral">你</div>
               <div class="m-body">
                 <div class="m-meta">
                   <span class="m-name">你</span>
@@ -1237,7 +1237,6 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <!-- 远端 mirror 消息（P7）：房间成员发言——署名远端名 + 远端标识；
                  渲染走同一 renderMarkdown（DOMPurify 链——远端内容必净化的协议约束） -->
             <div v-else-if="unit.kind === 'msg-remote'" class="m">
-              <div class="avatar neutral">{{ (kernel.messages[unit.msgIndex!]!.speakerName ?? '远').slice(0, 1) }}</div>
               <div class="m-body">
                 <div class="m-meta">
                   <span class="m-name">{{ kernel.messages[unit.msgIndex!]!.speakerName ?? '远端成员' }}</span>
@@ -1262,7 +1261,6 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <!-- 正文 live 预览（v0.1.43 双通道）：正在生成的正文以 agent 气泡形态流式呈现——
                  终答消息到达由 store 去重让位；无终答的 run 它就是本轮正文的最后事实 -->
             <div v-else-if="unit.kind === 'live-msg'" class="m" :data-livemsg="unit.block.key">
-              <div class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
               <div class="m-body">
                 <div class="m-meta">
                   <span class="m-name" :style="{ color: kernel.colorOf(ui.activeAgentId) }">{{ nameOf(ui.activeAgentId) }}</span>
@@ -1276,7 +1274,6 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
 
             <!-- agent 聚合单元（含进行中/纯块组）：m-name 之下——思考块（可折叠）与 task 卡，最终文本（或三个点占位）收尾 -->
             <div v-else class="m">
-              <div class="avatar" :style="{ background: kernel.colorOf(ui.activeAgentId) }">{{ initialOf(ui.activeAgentId) }}</div>
               <div class="m-body">
                 <div class="m-meta">
                   <span class="m-name" :style="{ color: kernel.colorOf(ui.activeAgentId) }">

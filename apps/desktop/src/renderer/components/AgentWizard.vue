@@ -10,6 +10,8 @@ import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
 import { GatewayCommandError } from '../lib/gateway'
+import BotBallAvatar from './BotBallAvatar.vue'
+import ColorPicker from './ColorPicker.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -17,6 +19,26 @@ const toast = useToastStore()
 
 /** 身份色 swatches（原型 WIZ_COLORS 同款六色） */
 const COLORS = ['#d95926', '#aab137', '#199e70', '#3987e5', '#8F6FD3', '#4FA8A0'] as const
+/** 自选色位迷你色相盘（v0.1.66 修正八，用户裁定图例效果）：平滑彩虹盘（白心）——
+ *  72 段细楔形（5°/段，26px 下肉眼无缝）+ 楔形同色描边盖抗锯齿缝 + 白心径向渐变叠层；
+ *  纯 SVG 零 CSS 裁剪依赖，与 ColorPicker 大盘同视觉语言 */
+const DISC_SEGS = 72
+const DISC_R = 13
+const hueWedge = (i: number): { d: string; fill: string } => {
+  const a0 = ((i / DISC_SEGS) * 360 - 90) * (Math.PI / 180)
+  const a1 = (((i + 1.4) / DISC_SEGS) * 360 - 90) * (Math.PI / 180) // +1.4° 重叠盖缝
+  const x1 = 13 + DISC_R * Math.cos(a0)
+  const y1 = 13 + DISC_R * Math.sin(a0)
+  const x2 = 13 + DISC_R * Math.cos(a1)
+  const y2 = 13 + DISC_R * Math.sin(a1)
+  return {
+    d: `M13 13 L${x1.toFixed(2)} ${y1.toFixed(2)} A${DISC_R} ${DISC_R} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`,
+    fill: `hsl(${(i / DISC_SEGS) * 360} 100% 50%)`,
+  }
+}
+const DISC_WEDGES = Array.from({ length: DISC_SEGS }, (_, i) => hueWedge(i))
+/** 自建取色器开合（v0.1.66，用户裁定替代原生色盘）：渐变环按钮切换 */
+const pickerOpen = ref(false)
 /** 角色分段：叙事四选一映射内核二值（管家=steward 走任命事务——在职时如实报错；其余=worker） */
 const ROLES = [
   { label: '管家', role: 'steward' },
@@ -147,8 +169,12 @@ const onKeydown = (e: KeyboardEvent): void => {
         <button class="wiz-close" type="button" aria-label="关闭" @click="close()">✕</button>
       </div>
 
-      <!-- 步 1：身份（名字 / 角色分段 / 身份色） -->
+      <!-- 步 1：身份（名字 / 角色分段 / 身份色）——顶部大球实时预览（v0.1.66）：
+           轮播表情 tour + 选色即时染身（含色盘自选色） -->
       <div v-if="step === 0" class="wiz-body">
+        <div class="wiz-ball" aria-hidden="true">
+          <BotBallAvatar :color="color" :tour="true" />
+        </div>
         <div class="wiz-field">
           <label class="wiz-label" for="wizName">名字</label>
           <input
@@ -188,7 +214,35 @@ const onKeydown = (e: KeyboardEvent): void => {
               :aria-label="`身份色 ${c}`"
               @click="color = c"
             ></button>
+            <!-- 自选色位（v0.1.66）：迷你色相盘按钮（与展开的 ColorPicker 同款视觉）——
+                 开合自建取色器；基础色选中时为彩虹盘、自选色后为该色纯色圆 -->
+            <button
+              type="button"
+              class="wiz-swatch wiz-swatch-custom"
+              :class="{ 'is-sel': !COLORS.includes(color) || pickerOpen }"
+              aria-label="自定义身份色（取色器）"
+              title="自定义颜色"
+              @click="pickerOpen = !pickerOpen"
+            >
+              <!-- 22×22（=26 盒 − 2×2px 边框的内容区）：SVG 与按钮同心——26px 会溢出 4px 呈叠圆
+                   （v0.1.66 修正九，3 倍特写探针实锤） -->
+              <svg v-if="COLORS.includes(color)" width="22" height="22" viewBox="0 0 26 26" aria-hidden="true">
+                <defs>
+                  <radialGradient id="wiz-disc-white">
+                    <stop offset="0%" stop-color="#fff" />
+                    <stop offset="68%" stop-color="rgba(255, 255, 255, 0)" />
+                  </radialGradient>
+                </defs>
+                <path v-for="(w, i) in DISC_WEDGES" :key="i" :d="w.d" :fill="w.fill" />
+                <circle cx="13" cy="13" :r="DISC_R" fill="url(#wiz-disc-white)" />
+              </svg>
+              <svg v-else width="22" height="22" viewBox="0 0 26 26" aria-hidden="true">
+                <circle cx="13" cy="13" r="13" :fill="color" />
+              </svg>
+            </button>
           </div>
+          <!-- 自建取色器（v0.1.66）：色相盘 + 明度条，实时回写 color——球平滑变色 -->
+          <ColorPicker v-if="pickerOpen" v-model="color" :size="150" />
         </div>
         <p class="wiz-note">身份色同时用于消息署名与图谱节点（创建后可在档案中修改）。</p>
       </div>
@@ -379,6 +433,20 @@ const onKeydown = (e: KeyboardEvent): void => {
 .wiz-swatches {
   display: flex;
   gap: 9px;
+}
+
+/* 步 1 大球（v0.1.66）：预览位居中，尺寸显著大于头像场景 */
+.wiz-ball {
+  width: 88px;
+  height: 88px;
+  margin: 0 auto 4px;
+}
+
+/* 自选色位（v0.1.66 修正六）：原生色盘退役（用户裁定改自建取色器 ColorPicker）——
+   label/input 裁剪方案两轮目验在用户环境失效呈方形，btn + SVG 环纯按钮零裁剪依赖 */
+.wiz-swatch-custom {
+  position: relative;
+  border-radius: 50%;
 }
 
 .wiz-swatch {

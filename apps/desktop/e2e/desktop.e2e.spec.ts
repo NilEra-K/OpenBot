@@ -748,10 +748,12 @@ test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → 
     await expect(card).toHaveCount(0)
     await expect(page.locator('.sh-name')).toHaveText('欧米伽')
 
-    // 名册出现新成员；头像底色 = 档案色（#3987e5 → rgb 序列化）
+    // 名册出现新成员；小球身体渐变 = 档案色（v0.1.65 avatar 换 grok-ball：色进 SVG 渐变 stop，
+    // 不再是 .avatar 内联底色；lite 引擎渐变 stop fill 直用传入 hex）
     const item = page.locator('.roster-item', { hasText: '欧米伽' })
     await expect(item).toBeVisible()
-    await expect(item.locator('.avatar')).toHaveAttribute('style', expect.stringContaining('rgb(57, 135, 229)'))
+    const avatarSvg = await item.locator('.avatar svg').evaluate((el) => el.outerHTML)
+    expect(avatarSvg).toContain('#3987e5')
 
     // @提及菜单收录新成员（中文前缀过滤命中）
     const input = page.locator('.composer-box input')

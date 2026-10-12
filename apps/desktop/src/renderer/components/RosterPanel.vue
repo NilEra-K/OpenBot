@@ -7,6 +7,7 @@
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import type { GroupEntry, RosterEntry } from '../stores/kernel'
+import BotBallAvatar from './BotBallAvatar.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -17,9 +18,10 @@ const initialOf = (id: string, name?: string): string => (name ?? id).trim().cha
 const memberNames = (g: GroupEntry): string =>
   g.members.map((id) => kernel.roster.find((a) => a.agentId === id)?.name ?? id).join(' + ')
 
-/** agent 是否有 running run（lane 排他保证同一 agent 至多一个活跃 turn） */
+/** agent 是否有进行中 run（lane 排他保证同一 agent 至多一个活跃 turn）；
+ *  queued + running 与 ConsoleView activeRun 同口径（v0.1.66——排队期 roster/stream-head 两球表情分叉修复） */
 const isWorking = (agentId: string): boolean =>
-  kernel.runs.some((r) => r.agentId === agentId && r.state === 'running')
+  kernel.runs.some((r) => r.agentId === agentId && (r.state === 'running' || r.state === 'queued'))
 
 /** 群内任一成员轮转中（群条目 sub——过程归成员，群本身无 run） */
 const groupWorking = (g: GroupEntry): boolean =>
@@ -51,8 +53,10 @@ const roomLabelOf = (roomId: string): string =>
       :class="{ active: ui.activeGroupId === null && ui.activeAgentId === agent.agentId }"
       @click="ui.openAgent(agent.agentId)"
     >
-      <span class="avatar" :style="{ background: kernel.colorOf(agent.agentId) }">
-        {{ initialOf(agent.agentId, agent.name) }}
+      <!-- v0.1.65：首字母色块 → BotBall 小球（身份色染身；表情映射见 lib/bot-ball/emotions.openbot.ts；
+           stat-dot 状态角标保留） -->
+      <span class="avatar">
+        <BotBallAvatar :color="kernel.colorOf(agent.agentId)" :state="isWorking(agent.agentId) ? 'working' : 'idle'" />
         <span class="stat-dot" :class="isWorking(agent.agentId) ? 'working' : 'idle'"></span>
       </span>
       <span class="ri-text">

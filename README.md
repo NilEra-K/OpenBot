@@ -73,3 +73,7 @@ npmmirror 双镜像（electron 二进制 + builder 工具链，env 已设时不�
 八个自研包 + 三个壳；依赖规则与三条铁律见 ARCHITECTURE.md §2。
 
 许可证：Apache-2.0（clean-room 自研，声明见 docs/cleanroom.md）。
+
+## 致谢
+
+- **[GrokBall](https://github.com/tycoding/grok-ball)**（MIT, © 2026 tycoding）——Agent 头像小球引擎（眼睛跟随、呼吸、32 表情）参考并源自该仓库。表情状态映射与后续扩展在 `emotions.openbot.ts` 自持维护。
