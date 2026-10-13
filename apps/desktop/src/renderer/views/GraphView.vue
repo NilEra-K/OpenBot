@@ -339,7 +339,7 @@ const goTo = (id: string): void => {
         <div class="side-sec">图例</div>
         <div class="graph-sum mono">{{ edgeGeoms.length }} 对关系 · {{ kernel.edges.reduce((s, e) => s + e.count, 0) }} 条消息</div>
         <div class="legend-row"><span class="lg-line user"></span>你 ↔ Agent · 消息边</div>
-        <div class="legend-row"><span class="lg-line a2a"></span>Agent ↔ Agent · 委派边（A2A）</div>
+        <div class="legend-row"><span class="lg-line a2a"></span>Agent ↔ Agent · 委派边（Agent 间协作）</div>
         <div class="legend-row"><span class="lg-line remote"></span>你 ↔ 远端成员 · 虚线蓝 relay</div>
         <div class="legend-row"><span class="lg-diamond"></span>菱形 = 群聊 · 群内发言计入灰边</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>状态点 = 工作中（脉冲）</div>
@@ -359,7 +359,7 @@ const goTo = (id: string): void => {
       <!-- 边详情 -->
       <template v-else-if="focusedEdge">
         <div class="graph-head">
-          <button class="back-btn" title="返回图例" aria-label="返回图例" @click="clearFocus">←</button>
+          <button class="back-btn" title="返回图例" aria-label="返回图例" @click="clearFocus"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6L8.5 12l6 6"/></svg></button>
           <span class="graph-title">关系详情</span>
         </div>
         <div class="detail-title">
@@ -370,21 +370,21 @@ const goTo = (id: string): void => {
         <div class="kv"><span class="k">累计消息</span><span class="v mono">×{{ focusedEdge.count }}</span></div>
         <div class="kv">
           <span class="k">边类型</span>
-          <span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ Agent）' : focusedEdge.kind === 'group' ? '群聊边（↔ 群）' : '委派边（A2A）' }}</span>
+          <span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ Agent）' : focusedEdge.kind === 'group' ? '群聊边（↔ 群）' : '委派边（Agent 间协作）' }}</span>
         </div>
         <p class="ctx-note">
           {{ focusedEdge.kind === 'user'
             ? '本地边：你对 Agent 的指挥与回复共同计入。'
             : focusedEdge.kind === 'group'
               ? '本地边：群内发言共同计入（发起者的用户消息与成员回复，sysnote 不计）。'
-              : '本地边：Agent 间的 A2A 派发与回执共同计入（双侧 transcript 镜像）。' }}
+              : '本地边：Agent 间的协作派发与回执共同计入（双侧会话记录镜像）。' }}
         </p>
       </template>
 
       <!-- 节点详情 -->
       <template v-else>
         <div class="graph-head">
-          <button class="back-btn" title="返回图例" aria-label="返回图例" @click="clearFocus">←</button>
+          <button class="back-btn" title="返回图例" aria-label="返回图例" @click="clearFocus"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6L8.5 12l6 6"/></svg></button>
           <span class="graph-title">节点详情</span>
         </div>
         <div class="detail-title">

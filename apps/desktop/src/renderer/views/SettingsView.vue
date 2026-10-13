@@ -98,7 +98,7 @@ onMounted(() => {
 })
 
 // ---- 设置分类导航（切换式，2026-09-13 UI 优化，对照用户图例）：左侧组标+图标条目，右侧仅渲染当前分节（v-show 保表单态） ----
-type SettingsSectionId = 'llm' | 'runtime' | 'automation' | 'policy' | 'data' | 'general' | 'appearance' | 'about'
+type SettingsSectionId = 'llm' | 'runtime' | 'automation' | 'policy' | 'data' | 'general' | 'appearance' | 'debug' | 'about'
 const activeSection = ref<SettingsSectionId>('llm')
 const ICON = (paths: string): string =>
   // width/height 内联属性（v0.1.55b 用户裁定 14px）——scoped CSS 对 v-html 插入内容不生效（无 data-v），尺寸须内联
@@ -129,6 +129,7 @@ const SETTINGS_GROUPS: Array<{ label: string; items: Array<{ id: SettingsSection
     items: [
       { id: 'general', label: '通用', icon: ICON('<path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h7"/>') },
       { id: 'appearance', label: '外观', icon: ICON('<path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2v-1c0-1.7 1.3-3 3-3h2a4 4 0 0 0 4-4c0-5.5-4.9-10-11-10z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16.5" cy="10.5" r="1"/>') },
+      { id: 'debug', label: '调试信息', icon: ICON('<path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>') },
       { id: 'about', label: '关于', icon: ICON('<circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M12 12v4"/>') },
     ],
   },
@@ -1509,7 +1510,7 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">自动化</div>
         <HelpTip
-          text="定时规则到点后，以你的身份给指定 Agent 发一条委托消息——排队、审批、执行与手动发消息完全一致（零旁路）。cron 为五段「分 时 日 月 周」（本机时区）；应用未运行期间错过的不补跑；规则上限 16 条。"
+          text="定时规则到点后，以你的身份给指定 Agent 发一条委托消息——排队、审批、执行与手动发消息完全一致（零旁路）。时间表达式为五段「分 时 日 月 周」（本机时区）；应用未运行期间错过的不补跑；规则上限 16 条。"
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openAutomation(null)">＋ 新建</button>
       </div>
@@ -1544,7 +1545,7 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">权限策略</div>
         <HelpTip
-          text="当前为手工审批闸门（Manual）：Agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。"
+          text="当前为手工审批闸门：Agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，挂起期间计入执行时限。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。"
         />
       </div>
       <div class="settings-card">
@@ -1742,6 +1743,19 @@ const wslHelpNeeded = computed(() => {
         </div>
       </div>
 
+      <!-- 调试信息（2026-10-13 用户需求）：诊断事实的收纳节——seq 自状态栏退役后迁此；
+           语义说明随值呈现，普通人可懂、排障者够用 -->
+      <div v-show="activeSection === 'debug'" class="settings-section">
+      <div class="set-sec">调试信息</div>
+      <div class="settings-card">
+      <div class="kv">
+        <span class="k">事件流序号<HelpTip text="内核推送事件的最后编号（seq）：断线重连后从下一序号续传，事件不丢失、不重复。仅作诊断用途。" /></span>
+        <span class="v mono">{{ kernel.lastSeq }}</span>
+      </div>
+      <div class="kv"><span class="k">连接状态</span><span class="v">{{ kernel.connected ? '内核已连接' : '内核未连接' }}</span></div>
+      </div>
+
+      </div>
       <div v-show="activeSection === 'about'" class="settings-section">
       <!-- 关于 -->
       <div class="set-sec">关于</div>

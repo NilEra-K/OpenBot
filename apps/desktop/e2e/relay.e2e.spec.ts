@@ -130,7 +130,7 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined()
     // 只读态：composer 禁用 + placeholder 注明 mirror
     await expect(page.locator('.composer-box input')).toBeDisabled()
-    await expect(page.locator('.composer-box input')).toHaveAttribute('placeholder', /远端 mirror 会话（远端好友）· 只读/)
+    await expect(page.locator('.composer-box input')).toHaveAttribute('placeholder', /远端镜像会话（远端好友）· 只读/)
 
     // 5) 远端 turn：对端 request → 桌面受理（用户 lane + mock 终答）→ result 回程。
     // toMemberId 从对端视角的 member-joined 事件取（桌面真实 memberId）

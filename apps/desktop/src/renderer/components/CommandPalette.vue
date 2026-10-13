@@ -7,7 +7,7 @@
  * 抢键边界（plan-p4 设计要点）：操作台 PTY 聚焦时 Ctrl K 直送 Box 不弹面板——
  * 判定在 App 全局监听（activeElement 在 .boxops 内即跳过），本组件不感知。
  */
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import type { ViewName } from '../stores/ui'
@@ -172,6 +172,12 @@ const hi = (): void => {
   listEl.value?.querySelector<HTMLElement>('.pal-item.is-sel')?.scrollIntoView({ block: 'nearest' })
 }
 
+/** 点击面板内非交互区后焦点归还输入框（2026-10-13 用户报障：失焦后无法继续输入）——
+ *  命令项点击会先 run 关面板再冒泡至此（面板已关，focus 空转无害） */
+const refocus = (): void => {
+  inputEl.value?.focus()
+}
+
 const onKeydown = (e: KeyboardEvent): void => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault()
@@ -186,11 +192,29 @@ const onKeydown = (e: KeyboardEvent): void => {
     ui.closePalette()
   }
 }
+
+/** Esc 关闭的 document 级兜底（2026-10-13 用户报障）：焦点漂出输入框（点击面板其他区域）
+ *  后 input 级 @keydown 不再触发——面板在场期间 document 监听保证 Esc 恒可关闭；
+ *  stopPropagation 同款边界：面板在场时 Esc 唯一语义就是关面板。input 聚焦时其
+ *  stopPropagation 先行，此处不会重复触发（close 幂等，双保险无害） */
+const onGlobalEsc = (e: KeyboardEvent): void => {
+  if (e.key !== 'Escape') return
+  e.stopPropagation()
+  ui.closePalette()
+}
+watch(
+  () => ui.paletteOpen,
+  (open) => {
+    if (open) document.addEventListener('keydown', onGlobalEsc)
+    else document.removeEventListener('keydown', onGlobalEsc)
+  },
+)
+onUnmounted(() => document.removeEventListener('keydown', onGlobalEsc))
 </script>
 
 <template>
   <div v-if="ui.paletteOpen" class="pal-overlay" @mousedown.self="ui.closePalette()">
-    <div class="pal-card" role="dialog" aria-label="命令面板">
+    <div class="pal-card" role="dialog" aria-label="命令面板" @click="refocus">
       <div class="pal-row">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.2-4.2" /></svg>
         <input
@@ -214,9 +238,10 @@ const onKeydown = (e: KeyboardEvent): void => {
         </template>
         <div v-if="filtered.length === 0" class="pal-empty">没有匹配的命令</div>
       </div>
+      <!-- 键位提示键帽化（2026-10-13 用户需求）：与 omnibox kbd 同语言——组合键拆双键帽 -->
       <div class="pal-foot">
-        <span>↑↓ 选择</span><span>Enter 执行</span><span>Esc 关闭</span>
-        <span class="right">Ctrl K 随时唤起</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 执行</span><span><kbd>Esc</kbd> 关闭</span>
+        <span class="right"><kbd>Ctrl</kbd><span class="kbd-plus">+</span><kbd>K</kbd> 随时唤起</span>
       </div>
     </div>
   </div>
@@ -351,6 +376,27 @@ const onKeydown = (e: KeyboardEvent): void => {
   padding: 9px 14px;
   border-top: 1px solid var(--line);
   font-size: 11px;
+  color: var(--ink3);
+}
+
+.pal-foot kbd {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 0 4px;
+  color: var(--ink3);
+  margin-right: 2px;
+}
+
+/* 组合键：+ 与两侧键帽零间隔（2026-10-13 用户目验反馈）——前置键帽的右缝让位 */
+.pal-foot kbd:has(+ .kbd-plus) {
+  margin-right: 0;
+}
+
+.pal-foot .kbd-plus {
+  margin: 0;
+  font-size: 10px;
   color: var(--ink3);
 }
 

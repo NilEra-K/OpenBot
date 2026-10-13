@@ -653,12 +653,14 @@ const measureRail = (): void => {
 const markSpacing = computed(() => Math.min(10, Math.max(5, trackHeight.value / Math.max(railTurns.value.length, 1))))
 const markOffset = computed(() => (trackHeight.value - markSpacing.value * Math.max(railTurns.value.length - 1, 0)) / 2)
 const markCenterY = (i: number): number => markOffset.value + i * markSpacing.value
-/** 波浪缩放（高斯邻域）：只作用于**长度**（width × scale），粗细恒定 3px（2026-09-06 用户反馈） */
+/** 波浪缩放（高斯邻域）：只作用于**长度**（width × scale），粗细恒定 3px（2026-09-06 用户反馈）；
+ *  峰值系数 1.0（2026-10-13 用户反馈：2.2 倍时右端 ~36px 距 stream 内容左缘 38px 仅 1.8px
+ *  视觉粘连——2.0 倍右端 ~33px 恒留 ~5px 间隙，波浪形态保留） */
 const markScale = (i: number): number => {
   if (railTurns.value.length === 0 || railHoverPx.value === null) return 1
   const d = railHoverPx.value - markCenterY(i)
   const sigma = Math.max(16, markSpacing.value / 1.2)
-  return 1 + 1.2 * Math.exp(-(d * d) / (2 * sigma * sigma))
+  return 1 + 1.0 * Math.exp(-(d * d) / (2 * sigma * sigma))
 }
 
 /** hover 命中的轮（最近标记）+ tooltip 位置 */
@@ -1106,7 +1108,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <span v-if="activeGroup && groupBusy" class="sh-warn">轮转中…</span>
             <span v-if="!activeGroup && activeAgent?.role === 'steward'" class="chip chip-accent">管家</span>
             <span v-if="!kernel.providerConfigured" class="sh-warn">provider 未配置——回复将失败，去「设置」配置</span>
-            <span v-else-if="kernel.connected">已连接 · seq {{ kernel.lastSeq }}</span>
+            <span v-else-if="kernel.connected">已连接</span>
           </div>
         </div>
         <!-- 操作区（P4 Step 6/7）：ctx 开关 + 该会话的档案（Settings）；通知/会话信息无动作源——裁剪不放假 -->
@@ -1128,7 +1130,8 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             :title="ui.ctxCollapsed ? '展开上下文面板' : '收起上下文面板'"
             @click="toggleCtxSmooth"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="ui.ctxCollapsed ? PANELEXP : PANELCOL"></svg>
+            <!-- 图标=状态指示（2026-10-13 用户目验裁定互换）：收起态显收拢形、展开态显展开形 -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="ui.ctxCollapsed ? PANELCOL : PANELEXP"></svg>
           </button>
         </div>
       </div>
@@ -1351,7 +1354,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           <div v-for="approval in kernel.pendingApprovals" :key="approval.nonce" class="gate">
             <div class="gate-head">⚠ 出 Box 操作待批准：{{ approval.tool }}</div>
             <div class="gate-body">
-              Agent <b>{{ approval.agentId }}</b>（run {{ approval.runId }}）请求执行
+              Agent <b>{{ approval.agentId }}</b> 请求执行
               <b class="mono">{{ approval.tool }}</b>
               <span v-if="approval.reason">——{{ approval.reason }}</span>
             </div>
@@ -1433,7 +1436,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <input
               ref="draftEl"
               v-model="ui.draft"
-              :placeholder="remotePeer !== null ? `远端 mirror 会话（${remotePeer.displayName}）· 只读——对话经 relay 镜像到达` : `对 ${activeAgent?.name ?? ui.activeAgentId} 说…（Enter 发送）`"
+              :placeholder="remotePeer !== null ? `远端镜像会话（${remotePeer.displayName}）· 只读——对话经中继转发到达` : `对 ${activeAgent?.name ?? ui.activeAgentId} 说…（Enter 发送）`"
               :disabled="!kernel.connected || remotePeer !== null"
               autocomplete="off"
               @input="onComposerInput"

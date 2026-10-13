@@ -108,7 +108,7 @@ const roomLabelOf = (roomId: string): string =>
           :key="`${room.roomId}:${m.memberId}`"
           class="roster-item"
           :class="{ active: ui.activeAgentId === `remote:${room.roomId}:${m.memberId}` }"
-          :aria-label="`远端成员 ${m.displayName} 的 mirror 会话`"
+          :aria-label="`远端成员 ${m.displayName} 的镜像会话`"
           @click="ui.openAgent(`remote:${room.roomId}:${m.memberId}`)"
         >
           <span class="avatar avatar-group">

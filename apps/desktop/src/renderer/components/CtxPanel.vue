@@ -213,8 +213,7 @@ const lastAt = computed(() => {
         <button class="ctx-back" type="button" title="返回执行画面" aria-label="返回执行画面" @click="ui.ctxSettings = false">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6L8.5 12l6 6"/></svg>
         </button>
-        <span class="ctx-top-title">Settings</span>
-        <span class="ctx-top-sub">{{ displayName }}</span>
+        <span class="ctx-top-title">会话档案</span>
       </div>
 
       <!-- 群档案（P5 Step 4）：成员行 + 轮转边界如实 kv——原型编造数值（3 轮/10 条/每员 2 条）不照搬 -->
@@ -264,9 +263,9 @@ const lastAt = computed(() => {
 
         <div class="ctx-sec">档案</div>
         <div class="kv"><span class="k">角色</span><span class="v">远端成员（跨用户房间 · mirror）</span></div>
-        <div class="kv"><span class="k">会话性质</span><span class="v">只读镜像——对话经 relay 到达本地</span></div>
+        <div class="kv"><span class="k">会话性质</span><span class="v">只读镜像——对话经中继到达本地</span></div>
         <div class="kv"><span class="k">Box 归属</span><span class="v mono">—（远端成员无本端 Box）</span></div>
-        <div class="kv"><span class="k">执行通道</span><span class="v">远端 turn 请求经审批闸门进入本端执行</span></div>
+        <div class="kv"><span class="k">执行通道</span><span class="v">远端对话请求经审批闸门进入本端执行</span></div>
       </template>
 
       <!-- agent 档案（P4 Step 7 既有） -->
@@ -305,7 +304,7 @@ const lastAt = computed(() => {
           <span class="er-name">{{ nameOf(c.peer) }}</span>
           <span class="cnt">×{{ c.count }}</span>
         </button>
-        <div v-if="collabs.length === 0" class="mem-empty">暂无协作记录——A2A 往来后在此呈现</div>
+        <div v-if="collabs.length === 0" class="mem-empty">暂无协作记录——Agent 间协作往来后在此呈现</div>
 
         <div class="ctx-sec">记忆</div>
         <!-- 记忆（backlog ①）：agent 自存的跨会话笔记（真数据；写路径只在 agent 的

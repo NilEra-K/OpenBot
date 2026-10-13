@@ -70,7 +70,7 @@ const formValid = computed(
 /** 保存：编辑替换 / 新增追加 → settings 全量写入（重启生效——装配期决策） */
 const save = async (): Promise<void> => {
   if (!formValid.value) {
-    formError.value = 'Host 地址、房间码、Invite 码为必填'
+    formError.value = '中继地址、房间码、邀请码为必填'
     return
   }
   saving.value = true
@@ -113,7 +113,7 @@ const remove = async (index: number): Promise<void> => {
 
 /** 复制邀请信息（房间码 + invite 码——凭据经用户手分享，不经内核外发） */
 const copyInvite = async (r: RelayRoomStatus): Promise<void> => {
-  const text = `OpenBot 房间邀请\n房间码：${r.roomId}\nInvite 码：${r.inviteCode}\nHost：${r.url}`
+  const text = `OpenBot 房间邀请\n房间码：${r.roomId}\n邀请码：${r.inviteCode}\n中继地址：${r.url}`
   try {
     await navigator.clipboard.writeText(text)
     toast.push('邀请信息已复制——发给好友在其 OpenBot「跨用户房间」配置接入', 'success')
@@ -138,7 +138,7 @@ onMounted(() => {
   <section class="view view-scroll">
     <div class="view-head rooms-head">
       <div class="view-title">跨用户房间</div>
-      <div class="view-sub">好友跨公网进房间协作——本端对话镜像给房间，远端 turn 请求经审批闸门受控进入。</div>
+      <div class="view-sub">好友跨公网进房间协作——本端对话镜像给房间，远端对话请求经审批闸门受控进入。</div>
     </div>
 
     <div class="rooms">
@@ -148,11 +148,11 @@ onMounted(() => {
           <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" v-html="ROOMS_ICON"></svg>
         </div>
         <div class="empty-title">未接入房间</div>
-        <p class="empty-desc">接入后：本端对话镜像给房间成员，远端的 turn 请求经审批后在本端执行。</p>
+        <p class="empty-desc">接入后：本端对话镜像给房间成员，远端的对话请求经审批后在本端执行。</p>
         <button class="btn btn-primary empty-cta" @click="modalOpen = true; openForm('new')">添加房间</button>
         <div class="empty-steps">
-          <div class="step"><span class="step-no">1</span>好友运行 relay host 并创建房间</div>
-          <div class="step"><span class="step-no">2</span>把房间码与 invite 码分享给你</div>
+          <div class="step"><span class="step-no">1</span>好友运行中继服务并创建房间</div>
+          <div class="step"><span class="step-no">2</span>把房间码与邀请码分享给你</div>
           <div class="step"><span class="step-no">3</span>在「添加房间」填入并重启应用</div>
         </div>
       </div>
@@ -170,7 +170,7 @@ onMounted(() => {
         </div>
         <div class="room-sub">
           本端「{{ r.displayName || 'OpenBot 用户' }}」 · {{ membersOf(r.roomId).length }} 名远端成员 ·
-          远端成员以 mirror 身份参与
+          远端成员以镜像身份参与
         </div>
 
         <!-- 成员链（原型 member-row/mchip）：本端主人 + 远端成员（在场/离场如实） -->
@@ -184,10 +184,10 @@ onMounted(() => {
 
         <!-- relay 事实 kv（演示值纪律：预算余量是发起端视角本端不可见，如实不画 kv 与 meter） -->
         <div class="relay-grid">
-          <div class="relay-kv"><span class="k">relay 状态</span><span class="v" :class="r.connected ? 'v-ok' : ''">{{ stateChip(r).text }}</span></div>
+          <div class="relay-kv"><span class="k">中继状态</span><span class="v" :class="r.connected ? 'v-ok' : ''">{{ stateChip(r).text }}</span></div>
           <div class="relay-kv"><span class="k">远端成员</span><span class="v">{{ membersOf(r.roomId).length }} 名</span></div>
           <div class="relay-kv"><span class="k">本端呈现名</span><span class="v">{{ r.displayName || '—' }}</span></div>
-          <div class="relay-kv"><span class="k">协议预算</span><span class="v">10 分钟窗口 · 30 turn</span></div>
+          <div class="relay-kv"><span class="k">协议预算</span><span class="v">10 分钟窗口 · 30 回合</span></div>
         </div>
 
         <div class="room-actions">
@@ -201,7 +201,7 @@ onMounted(() => {
       <button v-if="kernel.relays.length > 0" class="rooms-add" type="button" @click="modalOpen = true; openForm('new')">＋ 添加房间</button>
 
       <!-- 自托管叙事注脚（恒在——本地优先纪律的呈现面） -->
-      <p class="rooms-note">relay 是自托管软件，官方不运营服务——优先跑在 Tailscale / 自组网内；公网暴露请自配 TLS 反代。</p>
+      <p class="rooms-note">中继服务为自托管软件，官方不运营服务——优先跑在 Tailscale / 自组网内；公网暴露请自配 TLS 反代。</p>
     </div>
 
     <!-- 配置模态：列表（增删改）⇄ 表单（单份） -->
@@ -230,7 +230,7 @@ onMounted(() => {
         <!-- 表单态：单份配置（新增/编辑共用） -->
         <div v-else class="wiz-body relay-form">
           <label class="relay-field">
-            <span class="field-label">Host 地址（ws://…）</span>
+            <span class="field-label">中继地址（ws://…）</span>
             <input v-model="form.url" class="field-input mono" placeholder="ws://100.x.y.z:8080" autocomplete="off" spellcheck="false" />
           </label>
           <label class="relay-field">
@@ -238,7 +238,7 @@ onMounted(() => {
             <input v-model="form.roomId" class="field-input mono" autocomplete="off" spellcheck="false" />
           </label>
           <label class="relay-field">
-            <span class="field-label">Invite 码（凭据——不外传）</span>
+            <span class="field-label">邀请码（凭据——不外传）</span>
             <input v-model="form.inviteCode" class="field-input mono" type="password" autocomplete="off" spellcheck="false" />
           </label>
           <label class="relay-field">

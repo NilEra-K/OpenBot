@@ -206,15 +206,6 @@
   letter-spacing: 0.03em;
 }
 
-.ctx-top-sub {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--ink3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .ctx-head {
   display: flex;
   gap: 10px;

@@ -850,7 +850,9 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--bg1);
-  overflow: hidden;
+  /* overflow:hidden 退役（2026-10-13 用户报障）：卡内 HelpTip 浮层越卡底边被裁（调试节
+     首行即触发）——卡内行背景全透明（.settings-card .setrow 覆盖为 none、hover 只变边框），
+     圆角裁剪本无受众；与 wiz-card 同款裁定 */
   margin: 0 0 14px;
 }
 

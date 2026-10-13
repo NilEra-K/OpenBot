@@ -171,7 +171,7 @@ onUnmounted(() => kernel.shutdown())
       <button class="omnibox" type="button" title="命令面板（Ctrl K）" @click="ui.openPalette()">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.2-4.2" /></svg>
         <span class="omnibox-text">搜索 Agent、任务、Box、命令</span>
-        <kbd>Ctrl K</kbd>
+        <kbd>Ctrl</kbd><span class="kbd-plus">+</span><kbd>K</kbd>
       </button>
       <div class="titlebar-right">
         <!-- 主题快捷切换：实效夜间显示太阳（点击转日间），日间显示月亮（auto 下点击即转显式偏好） -->
@@ -241,7 +241,7 @@ onUnmounted(() => kernel.shutdown())
     <footer class="statusbar">
       <span class="sb-item">
         <span class="sb-dot" :class="kernel.connected ? 'ok' : 'danger'"></span>
-        {{ kernel.connected ? `内核已连接 · seq ${kernel.lastSeq}` : '内核未连接' }}
+        {{ kernel.connected ? '内核已连接' : '内核未连接' }}
       </span>
       <span class="sb-item">LLM {{ llmLabel }}</span>
       <span v-if="sandboxLabel" class="sb-item">沙箱 {{ sandboxLabel }} · {{ kernel.boxes.length }} Box</span>
@@ -498,6 +498,12 @@ body {
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   padding: 0 5px;
+  color: var(--ink3);
+}
+
+.omnibox .kbd-plus {
+  margin: 0; /* 组合键连接符（2026-10-13 用户目验反馈：+ 与键帽零间隔） */
+  font-size: 10px;
   color: var(--ink3);
 }
 

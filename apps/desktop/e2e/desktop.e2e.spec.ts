@@ -317,7 +317,7 @@ test('壳层收尾（P4 Step 1）：状态栏真数据 + 面包屑 + 你头像 +
     await expect(page.locator('.tb-crumb')).toHaveText('Box')
 
     // 状态栏：连接事实 + mock 沙箱事实 + 叙事行（真数据投影——不造数字）
-    await expect(page.locator('.statusbar')).toContainText('内核已连接 · seq')
+    await expect(page.locator('.statusbar')).toContainText('内核已连接')
     await expect(page.locator('.statusbar')).toContainText('沙箱 模拟 ·')
     await expect(page.locator('.statusbar')).toContainText('本地执行 · 0 云依赖')
 
@@ -867,11 +867,10 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
     await page.locator('.composer-box input').press('Enter')
     await expect(page.locator('.m-text', { hasText: '已收到' })).toBeVisible({ timeout: 30_000 })
 
-    // —— 进入档案模式：ctx-top（Settings + 会话名）+ 档案 kv 四行（全真值） ——
+    // —— 进入档案模式：ctx-top（会话档案）+ 档案 kv 四行（全真值） ——
     await page.locator('.sh-icon[title="会话档案"]').click()
     const ctx = page.locator('.ctx')
-    await expect(ctx.locator('.ctx-top-title')).toHaveText('Settings')
-    await expect(ctx.locator('.ctx-top-sub')).toHaveText('管家')
+    await expect(ctx.locator('.ctx-top-title')).toHaveText('会话档案')
     await expect(ctx.locator('.ctx-name')).toHaveText('管家')
     await expect(ctx.locator('.kv', { hasText: '角色' })).toContainText('管家（steward）')
     await expect(ctx.locator('.kv', { hasText: '模型' })).toContainText('默认模型（E2E mock · mock-model') // v2 供应商 1:N：粒度到模型
