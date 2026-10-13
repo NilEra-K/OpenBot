@@ -170,7 +170,7 @@ onUnmounted(() => kernel.shutdown())
       <!-- omnibox：命令面板入口（Ctrl K 同快捷键） -->
       <button class="omnibox" type="button" title="命令面板（Ctrl K）" @click="ui.openPalette()">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.2-4.2" /></svg>
-        <span class="omnibox-text">搜索 agent、任务、Box、命令</span>
+        <span class="omnibox-text">搜索 Agent、任务、Box、命令</span>
         <kbd>Ctrl K</kbd>
       </button>
       <div class="titlebar-right">

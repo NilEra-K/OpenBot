@@ -127,7 +127,7 @@ const onKeydown = (e: KeyboardEvent): void => {
               <span class="gw-name">{{ a.name ?? a.agentId }}</span>
               <span class="gw-role">{{ a.role === 'steward' ? '管家' : 'worker' }}</span>
             </button>
-            <div v-if="kernel.roster.length === 0" class="wiz-note">名册为空——先新建 agent 再建群</div>
+            <div v-if="kernel.roster.length === 0" class="wiz-note">名册为空——先新建 Agent 再建群</div>
           </div>
         </div>
 

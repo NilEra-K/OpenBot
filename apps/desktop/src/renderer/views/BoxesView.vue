@@ -165,7 +165,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
     <div class="view-head">
       <div class="view-title">Box · 执行载体</div>
       <div class="view-sub">
-        agent 的执行载体一览：本地容器、远程主机、宿主屏幕——按各自绑定呈现，未绑定的 agent 用默认沙箱（本地容器不可用时为模拟环境）。按钮按载体能力声明渲染，不支持的操作永不出现。
+        Agent 的执行载体一览：本地容器、远程主机、宿主屏幕——按各自绑定呈现，未绑定的 Agent 用默认沙箱（本地容器不可用时为模拟环境）。按钮按载体能力声明渲染，不支持的操作永不出现。
       </div>
       <div v-if="kernel.caps" class="view-toolbar mono">
         <span>默认沙箱 caps：</span>
@@ -204,7 +204,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
               <div class="box-sub">image={{ box.image }} · {{ box.state }}</div>
             </div>
             <span class="chip" :class="stateChip(box.state).cls">{{ stateChip(box.state).label }}</span>
-            <span v-if="ownerChips[box.boxId]" class="chip" title="归属 agent 正在此 Box 工作">
+            <span v-if="ownerChips[box.boxId]" class="chip" title="归属 Agent 正在此 Box 工作">
               <span class="stat-dot" :style="{ background: kernel.colorOf(ownerChips[box.boxId]!.agentId) }"></span>
               {{ ownerChips[box.boxId]!.label }}
             </span>
@@ -304,7 +304,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
         </div>
       </div>
 
-      <p v-if="kernel.boxes.length === 0" class="placeholder">暂无 Box——注册 agent 时按其绑定的载体创建；未绑定则用默认沙箱（本地容器不可用时为模拟环境）</p>
+      <p v-if="kernel.boxes.length === 0" class="placeholder">暂无 Box——注册 Agent 时按其绑定的载体创建；未绑定则用默认沙箱（本地容器不可用时为模拟环境）</p>
 
       <div class="box-claim">
         <svg
@@ -317,7 +317,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
           stroke-linejoin="round"
           aria-hidden="true"
         ><path d="M12 3l7 3v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z"></path></svg>
-        <span>Box 是 agent 的执行载体（本地容器 / 远程主机 / 宿主屏幕）。容器与远程主机内 agent 自由执行，触碰宿主文件或出网经审批闸逐条批准（对话流内 gate 卡）；宿主屏幕载体零隔离——agent 的每次屏幕注入均逐条过闸。</span>
+        <span>Box 是 Agent 的执行载体（本地容器 / 远程主机 / 宿主屏幕）。容器与远程主机内 Agent 自由执行，触碰宿主文件或出网经审批闸逐条批准（对话流内 gate 卡）；宿主屏幕载体零隔离——Agent 的每次屏幕注入均逐条过闸。</span>
       </div>
     </div>
   </section>

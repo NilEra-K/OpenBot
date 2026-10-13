@@ -651,7 +651,7 @@ test('重启恢复（P5 后修复）：自建 agent 调度器重建（建群可�
     env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
   }
 
-  // —— 第一段会话：配 provider → 新建 agent（持久化名册）→ 与管家对话一轮（建边）——
+  // —— 第一段会话：配 provider → 新建 Agent（持久化名册）→ 与管家对话一轮（建边）——
   const app1 = await _electron.launch(launchOpts)
   const page1 = await app1.firstWindow()
   page1.on('pageerror', (e) => console.log('[pageerror]', e.message))
@@ -668,12 +668,12 @@ test('重启恢复（P5 后修复）：自建 agent 调度器重建（建群可�
     await page1.getByRole('button', { name: '保存', exact: true }).click()
 
     await page1.getByRole('button', { name: '控制台', exact: true }).click()
-    await page1.getByRole('button', { name: '＋ 新建 agent' }).click()
+    await page1.getByRole('button', { name: '＋ 新建 Agent' }).click()
     const card = page1.locator('.wiz-card')
     await page1.locator('#wizName').fill('恢复员')
     await card.getByRole('button', { name: '下一步' }).click()
     await card.getByRole('button', { name: '下一步' }).click()
-    await card.getByRole('button', { name: '创建 agent' }).click()
+    await card.getByRole('button', { name: '创建 Agent' }).click()
     await expect(page1.locator('.toast', { hasText: '恢复员」已创建' })).toBeVisible({ timeout: 15_000 })
 
     // 与管家对话一轮：用户出信 + 管家终答 → user↔管家两条有向边（图谱底账素材）
@@ -713,7 +713,7 @@ test('重启恢复（P5 后修复）：自建 agent 调度器重建（建群可�
   }
 })
 
-test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → @提及收录 → 注册即建 Box', async () => {
+test('新建 Agent 向导（P4 Step 5）：三步创建 → 名册档案色 → @提及收录 → 注册即建 Box', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-wizard-'))
   const app = await _electron.launch({
     args: ['.'],
@@ -726,7 +726,7 @@ test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → 
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
 
     // —— 名册入口 → 向导（三步）——
-    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
     const card = page.locator('.wiz-card')
     await expect(card).toBeVisible()
     await page.locator('#wizName').fill('欧米伽')
@@ -741,7 +741,7 @@ test('新建 agent 向导（P4 Step 5）：三步创建 → 名册档案色 → 
     // 步 3：复核行（名字/角色/身份色/继承说明）
     await expect(card.locator('.wiz-body')).toContainText('欧米伽')
     await expect(card.locator('.wiz-body')).toContainText('研究员')
-    await card.getByRole('button', { name: '创建 agent' }).click()
+    await card.getByRole('button', { name: '创建 Agent' }).click()
 
     // —— 创建收敛：toast + 向导关闭 + 跳新会话（sh-name 切换）——
     await expect(page.locator('.toast', { hasText: '欧米伽」已创建' })).toBeVisible({ timeout: 15_000 })
@@ -1135,14 +1135,14 @@ test('断网回退端点 + 数据区块（P4 Step 11）：主力失败自动降�
 
     // —— 向导创建绑定坏端点的 Agent：上游失败自动回退到默认模型（mock） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
     const bindCard = page.locator('.wiz-card')
     await expect(bindCard).toBeVisible()
     await bindCard.locator('#wizName').fill('回退员')
     await bindCard.getByRole('button', { name: '下一步' }).click()
     await bindCard.locator('.wiz-kv', { hasText: '模型' }).locator('select').selectOption('坏端点::x') // v2 复合键：供应商::模型（存量对位——原锚镜像下拉是 v0.1.28 旧形态）
     await bindCard.getByRole('button', { name: '下一步' }).click()
-    await bindCard.getByRole('button', { name: '创建 agent' }).click()
+    await bindCard.getByRole('button', { name: '创建 Agent' }).click()
     await expect(page.locator('.toast', { hasText: '回退员」已创建' })).toBeVisible({ timeout: 15_000 })
 
     // —— 发消息：绑定的坏端点连接拒绝 → 自动回退到默认模型（mock）回复 ——
@@ -1421,13 +1421,13 @@ test('per-agent 模型覆盖（backlog ③）：向导选覆盖端点 → 该 ag
 
     // 向导建 agent：第二步选覆盖 B
     await page.getByRole('button', { name: '控制台', exact: true }).click()
-    await page.getByRole('button', { name: '新建 agent' }).click()
+    await page.getByRole('button', { name: '新建 Agent' }).click()
     await page.locator('#wizName').fill('专属模型员')
     await page.getByRole('button', { name: '下一步' }).click()
     await page.locator('.wiz-kv', { hasText: '模型' }).locator('select').selectOption('覆盖B::mock-model') // v2 复合键：供应商::模型（限定模型下拉——P8-4 起向导有镜像下拉）
     await expect(page.locator('.wiz-note', { hasText: '钉住所选端点' })).toBeVisible()
     await page.getByRole('button', { name: '下一步' }).click()
-    await page.getByRole('button', { name: '创建 agent' }).click()
+    await page.getByRole('button', { name: '创建 Agent' }).click()
     await expect(page.locator('.roster-item', { hasText: '专属模型员' })).toBeVisible({ timeout: 15_000 })
 
     // 对新 agent 发消息 → B 端点收到（A 不收该 agent 的请求）
@@ -1686,14 +1686,14 @@ test('宿主屏幕载体（P9-1）：注册 + 内置注入协议呈现 + 真实�
 
     // —— 绑定 agent（真实路径：创建即 attach——backend.list 才有 box，boxes 页才有行） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
     const wizCard = page.locator('.wiz-card')
     await expect(wizCard).toBeVisible()
     await page.locator('#wizName').fill('维屏')
     await wizCard.getByRole('button', { name: '下一步' }).click()
     await wizCard.locator('.wiz-kv', { hasText: '沙箱镜像' }).locator('select').selectOption('img-1')
     await wizCard.getByRole('button', { name: '下一步' }).click()
-    await wizCard.getByRole('button', { name: '创建 agent' }).click()
+    await wizCard.getByRole('button', { name: '创建 Agent' }).click()
     await expect(page.locator('.toast', { hasText: '维屏」已创建' })).toBeVisible({ timeout: 15_000 })
 
     // —— boxes 视图渲染（v0.1.36 回归补盲：宿主屏幕 box 一度因联合外 state 值炸整页——
@@ -1945,7 +1945,7 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
 
     // —— 向导绑定镜像（步 2 下拉选 GUI 容器 → 复核显示 → 创建成功） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
     const card = page.locator('.wiz-card')
     await expect(card).toBeVisible()
     await page.locator('#wizName').fill('维机')
@@ -1955,7 +1955,7 @@ test('Agent 绑定镜像（P8-4）：向导绑定 → ctx 档案呈现 → 重�
     await expect(card.locator('.wiz-body')).toContainText('注册即真实连接')
     await card.getByRole('button', { name: '下一步' }).click()
     await expect(card.locator('.wiz-body')).toContainText('镜像：GUI 容器')
-    await card.getByRole('button', { name: '创建 agent' }).click()
+    await card.getByRole('button', { name: '创建 Agent' }).click()
     await expect(page.locator('.toast', { hasText: '维机」已创建' })).toBeVisible({ timeout: 15_000 })
 
     // —— ctx 档案镜像 kv：条目名（载体 镜像名） ——

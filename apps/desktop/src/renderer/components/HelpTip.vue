@@ -4,12 +4,15 @@
  * 纯 CSS 浮层。实测修两处（2026-09-01 用户报障）：点击图标后 :focus 常驻致提示不消失——
  * 只留 :focus-visible（键盘 Tab 才触发，鼠标点击不算）；向上展开会伸进 titlebar 被遮——
  * 改为向下展开（节标题下方恒有内容空间）。
+ * up prop（2026-10-13 用户报障）：模态卡场景（新建 Agent 向导）方向反向——wiz-card 的
+ * overflow:hidden 裁掉向下伸出卡底的浮层，而上方空间充足；传 up 向上展开。
+ * 缺省向下，设置页零变化。
  */
-defineProps<{ text: string }>()
+withDefaults(defineProps<{ text: string; up?: boolean }>(), { up: false })
 </script>
 
 <template>
-  <span class="help-tip" tabindex="0" :aria-label="`说明：${text}`" role="note">
+  <span class="help-tip" :class="{ up }" tabindex="0" :aria-label="`说明：${text}`" role="note">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
       <circle cx="12" cy="12" r="9.2" />
       <path d="M12 10.6v6" />
@@ -68,5 +71,26 @@ defineProps<{ text: string }>()
   opacity: 1;
   visibility: visible;
   transform: translateX(-50%) translateY(0);
+}
+
+/* 向上展开（up，模态卡场景）：锚点翻转 + 入场位移反向——显式写全展开规则，
+   不依赖与上方通用规则的级联顺序（同特异性时后者胜的隐式耦合不留给后人）。
+   水平同步改左对齐（2026-10-13 目验实锤）：居中锚定时近 300px 浮层以 13px 图标为中点
+   左伸越出 wiz-card 左缘，被 overflow:hidden 裁字——left:0 向右展开全程不出卡
+   （图标居卡内 ~180px，300px 右缘 ~480px < 520 卡宽）；入场位移仅保留垂直分量 */
+.help-tip.up .help-tip-body {
+  top: auto;
+  bottom: 100%;
+  left: 0;
+  margin-top: 0;
+  margin-bottom: 4px;
+  transform: translateY(6px);
+}
+
+.help-tip.up:hover .help-tip-body,
+.help-tip.up:focus-visible .help-tip-body {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 </style>

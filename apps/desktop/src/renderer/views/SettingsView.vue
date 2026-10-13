@@ -391,7 +391,7 @@ const saveImage = async (): Promise<void> => {
       (before.host ?? '') !== (payload.host ?? '') &&
       (before.carrier === 'android' || before.carrier === 'windows' || before.carrier === 'ssh')
     ) {
-      toast.push('连接地址已变更——已绑定该镜像的 agent 须重启应用后生效（新建 agent 即时用新地址）', 'info')
+      toast.push('连接地址已变更——已绑定该镜像的 Agent 须重启应用后生效（新建 Agent 即时用新地址）', 'info')
     }
     imageFormOpen.value = false
   } catch (err) {
@@ -839,7 +839,7 @@ const saveTranscriptRoot = async (path: string | null = transcriptRootDraft.valu
   transcriptRootError.value = null
   try {
     const r = await kernel.setTranscriptRoot(path)
-    const movedNote = r.moved > 0 ? `已自动迁移 ${r.moved} 个 agent 的会话记录，` : ''
+    const movedNote = r.moved > 0 ? `已自动迁移 ${r.moved} 个 Agent 的会话记录，` : ''
     toast.push(`${movedNote}${path === null ? '会话记录已回到数据目录内' : '会话记录目录已更新'}——重启应用后生效`, 'success')
     transcriptRootOpen.value = false
   } catch (err) {
@@ -1509,7 +1509,7 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">自动化</div>
         <HelpTip
-          text="定时规则到点后，以你的身份给指定 agent 发一条委托消息——排队、审批、执行与手动发消息完全一致（零旁路）。cron 为五段「分 时 日 月 周」（本机时区）；应用未运行期间错过的不补跑；规则上限 16 条。"
+          text="定时规则到点后，以你的身份给指定 Agent 发一条委托消息——排队、审批、执行与手动发消息完全一致（零旁路）。cron 为五段「分 时 日 月 周」（本机时区）；应用未运行期间错过的不补跑；规则上限 16 条。"
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" @click="openAutomation(null)">＋ 新建</button>
       </div>
@@ -1534,7 +1534,7 @@ const wslHelpNeeded = computed(() => {
         <button class="btn btn-ghost btn-sm" @click="openAutomation(a)">编辑</button>
         <button class="btn btn-ghost btn-sm btn-danger" @click="removeAutomationRow(a)">删除</button>
       </div>
-      <p v-if="kernel.automations.length === 0" class="settings-empty">还没有自动化规则——到点让 agent 干活（如每天 9 点汇总）。</p>
+      <p v-if="kernel.automations.length === 0" class="settings-empty">还没有自动化规则——到点让 Agent 干活（如每天 9 点汇总）。</p>
       </div>
 
 
@@ -1544,14 +1544,14 @@ const wslHelpNeeded = computed(() => {
       <div class="set-sec-row">
         <div class="set-sec">权限策略</div>
         <HelpTip
-          text="当前为手工审批闸门（Manual）：agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。"
+          text="当前为手工审批闸门（Manual）：Agent 在 Box 内自由执行；触碰宿主机文件或出网时在对话流内逐条请求批准，挂起期间 run 计入 deadline。进程崩溃重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。"
         />
       </div>
       <div class="settings-card">
         <div class="appearance-row">
           <div class="appearance-main">
             <div class="appearance-name">审批闸门</div>
-            <div class="appearance-desc">agent 在 Box 内自由执行；触碰宿主机文件或出网时逐条请求批准，挂起期间 run 计入 deadline；应用重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。</div>
+            <div class="appearance-desc">Agent 在 Box 内自由执行；触碰宿主机文件或出网时逐条请求批准，挂起期间 run 计入 deadline；应用重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。</div>
           </div>
           <span class="chip" :class="kernel.approvalMode === 'manual' ? 'chip-accent' : ''">{{ kernel.approvalMode === 'manual' ? '手工审批' : '自动批准' }}</span>
         </div>
@@ -1604,7 +1604,7 @@ const wslHelpNeeded = computed(() => {
                 <input id="drPath" v-model="dataRootDraft" class="field-input mono" placeholder="D:\\OpenBotData" autocomplete="off" spellcheck="false" />
                 <button class="btn btn-ghost" type="button" @click="browseDirectory('data')">浏览…</button>
               </div>
-              <p class="wiz-note">重启应用后生效。保存时自动把全部数据（设置、agent 档案、记忆、会话记录等）迁移到新目录——已独立的会话记录目录不受影响；「恢复默认」同样自动迁回。迁移失败时不会切换，原目录数据无损。</p>
+              <p class="wiz-note">重启应用后生效。保存时自动把全部数据（设置、Agent 档案、记忆、会话记录等）迁移到新目录——已独立的会话记录目录不受影响；「恢复默认」同样自动迁回。迁移失败时不会切换，原目录数据无损。</p>
             </div>
             <p v-if="dataRootError" class="form-error">{{ dataRootError }}</p>
           </div>
@@ -1631,7 +1631,7 @@ const wslHelpNeeded = computed(() => {
                 <input id="trPath" v-model="transcriptRootDraft" class="field-input mono" placeholder="D:\\OpenBotTranscript" autocomplete="off" spellcheck="false" />
                 <button class="btn btn-ghost" type="button" @click="browseDirectory('transcript')">浏览…</button>
               </div>
-              <p class="wiz-note">重启应用后生效。保存时自动把现有会话记录（各 agent 的 transcript.jsonl）迁移到新目录；agent 档案与记忆仍留在数据目录，不受影响。「恢复默认」同样自动迁回数据目录内。</p>
+              <p class="wiz-note">重启应用后生效。保存时自动把现有会话记录（各 Agent 的 transcript.jsonl）迁移到新目录；Agent 档案与记忆仍留在数据目录，不受影响。「恢复默认」同样自动迁回数据目录内。</p>
             </div>
             <p v-if="transcriptRootError" class="form-error">{{ transcriptRootError }}</p>
           </div>
@@ -1718,7 +1718,7 @@ const wslHelpNeeded = computed(() => {
             </label>
             <p v-if="cronPreview !== null" class="cron-preview mono">下次触发：{{ cronPreview }}</p>
             <label class="relay-field">
-              <span class="field-label">目标 agent</span>
+              <span class="field-label">目标 Agent</span>
               <select v-model="aForm.agentId" class="field-input">
                 <option v-for="a in kernel.roster" :key="a.agentId" :value="a.agentId">{{ a.name ?? a.agentId }}（{{ a.role }}）</option>
               </select>

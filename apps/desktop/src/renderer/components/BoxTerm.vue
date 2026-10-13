@@ -36,7 +36,7 @@ const recentExecText = (): string => {
     if (err !== '') parts.push(`\x1b[31m${err}\x1b[0m\r\n`)
     if (block.state === 'abort') parts.push(`\x1b[31m✗ 已中止：${block.abortReason ?? ''}\x1b[0m\r\n`)
   }
-  parts.push('\x1b[90m── 以上为该 Box 近期执行（agent）· 下方为新终端会话 ──\x1b[0m\r\n\r\n')
+  parts.push('\x1b[90m── 以上为该 Box 近期执行（Agent）· 下方为新终端会话 ──\x1b[0m\r\n\r\n')
   return parts.join('')
 }
 

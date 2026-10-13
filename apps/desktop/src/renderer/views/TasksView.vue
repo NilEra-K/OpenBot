@@ -10,9 +10,9 @@ import type { RunCard } from '../stores/kernel'
 const kernel = useKernelStore()
 
 const LANES: Array<{ lane: RunCard['lane']; label: string; note: string }> = [
-  { lane: 'user', label: '用户 lane', note: '你的消息，永远插到最前' },
-  { lane: 'agent', label: 'agent lane', note: 'agent 间 A2A 与轮转' },
-  { lane: 'background', label: '后台 lane', note: '定时任务 · 派生 subagent' },
+  { lane: 'user', label: '用户通道', note: '你的消息，永远插到最前' },
+  { lane: 'agent', label: 'Agent 通道', note: 'Agent 间 A2A 与轮转' },
+  { lane: 'background', label: '后台通道', note: '定时任务 · 派生 subagent' },
 ]
 
 const byLane = (lane: RunCard['lane']): RunCard[] =>
@@ -90,7 +90,7 @@ const successRate = computed(() => {
   <section class="view view-scroll">
     <div class="view-head">
       <div class="view-title">排程监控</div>
-      <div class="view-sub">每个 agent 一个排他队列：同一时刻只有一个活跃 turn；用户消息永远最先。watchdog 将卡死的 run 逃逸为 zombie，发送永不悬挂。</div>
+      <div class="view-sub">每个 Agent 一个排他队列：同一时刻只有一个活跃 turn；用户消息永远最先。watchdog 将卡死的 run 逃逸为 zombie，发送永不悬挂。</div>
       <div class="view-toolbar mono">
         <span>今日 <b>{{ todayRuns.length }}</b> runs</span>
         <span aria-hidden="true">·</span>

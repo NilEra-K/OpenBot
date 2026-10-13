@@ -75,7 +75,7 @@ const snapshot = async (): Promise<void> => {
     <div class="bo-hint">
       <span class="stat-dot working"></span>
       <template v-if="mode === 'gui'">
-        GUI 接管——点击/键入直送 Box 桌面（30fps 实况流，接管期间 agent 动作挂起）；完成后点「交还 agent」恢复；关闭本大屏即停流
+        GUI 接管——点击/键入直送 Box 桌面（30fps 实况流，接管期间 Agent 动作挂起）；完成后点「交还 Agent」恢复；关闭本大屏即停流
       </template>
       <template v-else-if="canInteract">
         终端远程控制——键盘直送 Box 内 bash（vim/top 可用，Ctrl+C 同真终端）；尺寸按开启时窗口取定，会话中不变（需改尺寸可 shell 内 stty 或重开操作台）

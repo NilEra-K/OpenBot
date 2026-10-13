@@ -70,8 +70,8 @@ const roomLabelOf = (roomId: string): string =>
       <span v-if="agent.role === 'steward'" class="chip chip-accent">管家</span>
     </button>
     <!-- 新建 agent 入口（P4 Step 5；原型 .roster-new 同款）——向导经命令面注册 -->
-    <button class="roster-new" type="button" @click="ui.openWizard()">＋ 新建 agent</button>
-    <div v-if="kernel.roster.length === 0" class="roster-empty">名册为空——等待 agent 注册</div>
+    <button class="roster-new" type="button" @click="ui.openWizard()">＋ 新建 Agent</button>
+    <div v-if="kernel.roster.length === 0" class="roster-empty">名册为空——等待 Agent 注册</div>
 
     <!-- 群组分节（P5 Step 4，原型 sec('群组')）：群档案事实驱动——无群时只有建群入口 -->
     <div class="roster-sec">群组</div>

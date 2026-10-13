@@ -70,7 +70,7 @@ const commands = computed<PalCommand[]>(() => {
   for (const a of kernel.roster) {
     const name = a.name ?? a.agentId
     cmds.push({
-      group: '跳转 agent',
+      group: '跳转 Agent',
       icon: 'chat',
       label: `打开会话：${name}`,
       sub: a.role === 'steward' ? '管家' : 'worker',
@@ -103,9 +103,9 @@ const commands = computed<PalCommand[]>(() => {
   cmds.push({
     group: '动作',
     icon: 'send',
-    label: '新建 agent（向导）',
+    label: '新建 Agent（向导）',
     sub: '注册即建专属 Box',
-    kw: '新建 agent 成员 创建 register',
+    kw: '新建 Agent 成员 创建 register',
     run: () => ui.openWizard(),
   })
   cmds.push({
@@ -197,7 +197,7 @@ const onKeydown = (e: KeyboardEvent): void => {
           ref="inputEl"
           v-model="query"
           class="pal-input"
-          placeholder="派单、跳转 agent、接管 Box、执行动作…"
+          placeholder="派单、跳转 Agent、接管 Box、执行动作…"
           autocomplete="off"
           @keydown="onKeydown"
         />

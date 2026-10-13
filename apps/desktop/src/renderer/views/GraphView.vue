@@ -338,8 +338,8 @@ const goTo = (id: string): void => {
         </p>
         <div class="side-sec">图例</div>
         <div class="graph-sum mono">{{ edgeGeoms.length }} 对关系 · {{ kernel.edges.reduce((s, e) => s + e.count, 0) }} 条消息</div>
-        <div class="legend-row"><span class="lg-line user"></span>你 ↔ agent · 消息边</div>
-        <div class="legend-row"><span class="lg-line a2a"></span>agent ↔ agent · 委派边（A2A）</div>
+        <div class="legend-row"><span class="lg-line user"></span>你 ↔ Agent · 消息边</div>
+        <div class="legend-row"><span class="lg-line a2a"></span>Agent ↔ Agent · 委派边（A2A）</div>
         <div class="legend-row"><span class="lg-line remote"></span>你 ↔ 远端成员 · 虚线蓝 relay</div>
         <div class="legend-row"><span class="lg-diamond"></span>菱形 = 群聊 · 群内发言计入灰边</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>状态点 = 工作中（脉冲）</div>
@@ -370,14 +370,14 @@ const goTo = (id: string): void => {
         <div class="kv"><span class="k">累计消息</span><span class="v mono">×{{ focusedEdge.count }}</span></div>
         <div class="kv">
           <span class="k">边类型</span>
-          <span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ agent）' : focusedEdge.kind === 'group' ? '群聊边（↔ 群）' : '委派边（A2A）' }}</span>
+          <span class="v">{{ focusedEdge.kind === 'user' ? '消息边（你 ↔ Agent）' : focusedEdge.kind === 'group' ? '群聊边（↔ 群）' : '委派边（A2A）' }}</span>
         </div>
         <p class="ctx-note">
           {{ focusedEdge.kind === 'user'
-            ? '本地边：你对 agent 的指挥与回复共同计入。'
+            ? '本地边：你对 Agent 的指挥与回复共同计入。'
             : focusedEdge.kind === 'group'
               ? '本地边：群内发言共同计入（发起者的用户消息与成员回复，sysnote 不计）。'
-              : '本地边：agent 间的 A2A 派发与回执共同计入（双侧 transcript 镜像）。' }}
+              : '本地边：Agent 间的 A2A 派发与回执共同计入（双侧 transcript 镜像）。' }}
         </p>
       </template>
 

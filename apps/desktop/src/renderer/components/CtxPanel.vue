@@ -316,7 +316,7 @@ const lastAt = computed(() => {
             <span class="mem-text">{{ m.text }}</span>
           </div>
         </template>
-        <div v-else class="mem-empty">尚无记忆——agent 在对话中调用 save_memory 后在此呈现</div>
+        <div v-else class="mem-empty">尚无记忆——Agent 在对话中调用 save_memory 后在此呈现</div>
 
         <div class="ctx-sec">自动化</div>
         <!-- 自动化（backlog ②）：该 agent 的定时规则（真数据——写路径在设置页） -->
@@ -326,7 +326,7 @@ const lastAt = computed(() => {
             <span class="mem-text">{{ a.name }} <span class="mono">{{ a.cron }}</span></span>
           </div>
         </template>
-        <div v-else class="mem-empty">该 agent 尚无自动化规则——设置页可创建</div>
+        <div v-else class="mem-empty">该 Agent 尚无自动化规则——设置页可创建</div>
       </template>
     </template>
 
@@ -394,7 +394,7 @@ const lastAt = computed(() => {
       <div v-else class="cs-term">
         <BoxScreen v-if="screenBlocks.length > 0" :blocks="screenBlocks" />
         <div v-else-if="boxAsleep" class="ctx-idle">Box 休眠中——rootfs 在磁盘，随时可唤醒（派活自动拉起）</div>
-        <div v-else class="ctx-idle">等待任务派发——agent 在 Box 内执行命令时，这里实时显示屏幕输出</div>
+        <div v-else class="ctx-idle">等待任务派发——Agent 在 Box 内执行命令时，这里实时显示屏幕输出</div>
       </div>
       <!-- 屏幕底部提示条（原型 .cs-hint）：caps 分流文案——不放假承诺 -->
       <div v-if="screenBoxId" class="cs-hint">

@@ -12,6 +12,7 @@ import { useToastStore } from '../stores/toast'
 import { GatewayCommandError } from '../lib/gateway'
 import BotBallAvatar from './BotBallAvatar.vue'
 import ColorPicker from './ColorPicker.vue'
+import HelpTip from './HelpTip.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
@@ -49,6 +50,22 @@ const ROLES = [
 const STEPS = ['身份', '模型与沙箱', '复核']
 
 const step = ref(0)
+/** 滑动过渡方向（2026-10-13）：前进 slide-left（新面板自右入）/ 后退 slide-right——
+ *  大球在过渡容器之外恒静止（用户约束：ball-avatar 不参与水平过渡） */
+const slideName = ref<'slide-left' | 'slide-right'>('slide-left')
+/** 高度平滑过渡（2026-10-13 用户裁定「内容贴近 foot」两全）：恒定 310 基准退役——
+ *  leave 前锁定当前像素高（防离场塌陷）→ enter 时过渡到新面板高 → 完成释放回自然高；
+ *  高度变化与滑入并行（160ms 同拍），无空白无跳变；取色器展开等非切换撑高不受钩子介入 */
+const stageEl = ref<HTMLElement | null>(null)
+const onStageBeforeLeave = (): void => {
+  if (stageEl.value) stageEl.value.style.height = `${stageEl.value.offsetHeight}px`
+}
+const onStageEnter = (el: Element): void => {
+  if (stageEl.value) stageEl.value.style.height = `${(el as HTMLElement).offsetHeight}px`
+}
+const onStageAfterEnter = (): void => {
+  if (stageEl.value) stageEl.value.style.height = ''
+}
 const name = ref('')
 const roleIdx = ref(1) // 默认研究员（管家在职时选管家会被拒绝——默认避开高频失败路径）
 const color = ref<string>(COLORS[3])
@@ -68,6 +85,12 @@ const primaryModel = computed(() =>
     ? '未配置'
     : `${kernel.defaultProvider}${kernel.defaultModel ? ' · ' + kernel.defaultModel : ''}`,
 )
+/** 模型行 ⓘ 浮层（用户需求 2026-10-13：长说明收进 icon——label 精简，主力真值如实进浮层） */
+const modelTip = computed(() =>
+  primaryModel.value === '未配置'
+    ? '主力模型未配置——或为该 Agent 指定模型：钉住所选端点后，默认模型切换不影响它（改动重启生效）。'
+    : `当前主力：${primaryModel.value}——或为该 Agent 指定模型：钉住所选端点后，默认模型切换不影响它（改动重启生效）。`,
+)
 
 /** 模型覆盖选项（v2 供应商 1:N 模型）：拉平为「供应商::模型」复合值——agent 覆盖粒度到模型级 */
 const modelOptions = computed(() =>
@@ -84,6 +107,7 @@ watch(
   (open) => {
     if (!open) return
     step.value = 0
+    slideName.value = 'slide-left'
     name.value = ''
     roleIdx.value = 1
     color.value = COLORS[3]
@@ -100,6 +124,7 @@ const close = (): void => {
 
 const prev = (): void => {
   if (step.value > 0) {
+    slideName.value = 'slide-right' // 后退右滑（与前进左滑互逆）
     step.value -= 1
     error.value = ''
   }
@@ -112,10 +137,12 @@ const next = async (): Promise<void> => {
       void nextTick(() => nameEl.value?.focus())
       return
     }
+    slideName.value = 'slide-left' // 前进左滑
     step.value = 1
     return
   }
   if (step.value === 1) {
+    slideName.value = 'slide-left' // 前进左滑
     step.value = 2
     return
   }
@@ -130,7 +157,7 @@ const next = async (): Promise<void> => {
       ...(modelOverride.value !== '' ? { modelProvider: modelOverride.value } : {}),
       ...(imageBinding.value !== '' ? { imageId: imageBinding.value } : {}),
     })
-    toast.push(`agent「${name.value.trim()}」已创建`, 'success')
+    toast.push(`Agent「${name.value.trim()}」已创建`, 'success')
     ui.closeWizard()
     ui.activeAgentId = agentId
     ui.switchView('console')
@@ -160,21 +187,27 @@ const onKeydown = (e: KeyboardEvent): void => {
 
 <template>
   <div v-if="ui.wizardOpen" class="wiz-overlay" @mousedown.self="close()">
-    <div class="wiz-card" role="dialog" aria-label="新建 agent" @keydown="onKeydown">
+    <div class="wiz-card" role="dialog" aria-label="新建 Agent" @keydown="onKeydown">
       <div class="wiz-head">
-        <span class="wiz-title">新建 agent</span>
+        <span class="wiz-title">新建 Agent</span>
         <span class="wiz-dots" aria-hidden="true">
           <span v-for="(s, i) in STEPS" :key="s" :class="{ on: i <= step }"></span>
         </span>
         <button class="wiz-close" type="button" aria-label="关闭" @click="close()">✕</button>
       </div>
 
-      <!-- 步 1：身份（名字 / 角色分段 / 身份色）——顶部大球实时预览（v0.1.66）：
-           轮播表情 tour + 选色即时染身（含色盘自选色） -->
+      <!-- 大球三步常驻（v0.1.66 步 1 引入，用户需求扩展为全程可见）：置于步骤分支之外——
+           切步不重建实例，轮播引擎不重启无闪烁；选色即时染身跨步持续呈现 -->
+      <div class="wiz-ball" aria-hidden="true">
+        <BotBallAvatar :color="color" :tour="true" />
+      </div>
+
+      <!-- 步骤舞台（2026-10-13 滑动过渡）：面板在其中水平滑动（前进左滑/后退右滑）——
+           大球在 stage 之外恒静止（用户约束：ball-avatar 不参与水平过渡） -->
+      <div ref="stageEl" class="wiz-stage">
+        <Transition :name="slideName" mode="out-in" @before-leave="onStageBeforeLeave" @enter="onStageEnter" @after-enter="onStageAfterEnter">
+      <!-- 步 1：身份（名字 / 角色分段 / 身份色） -->
       <div v-if="step === 0" class="wiz-body">
-        <div class="wiz-ball" aria-hidden="true">
-          <BotBallAvatar :color="color" :tour="true" />
-        </div>
         <div class="wiz-field">
           <label class="wiz-label" for="wizName">名字</label>
           <input
@@ -252,24 +285,30 @@ const onKeydown = (e: KeyboardEvent): void => {
         <div class="wiz-kv wiz-kv-col">
           <span class="k">模型</span>
           <label class="wiz-field">
-            <span class="wiz-field-label">默认模型（自动）{{ primaryModel !== '未配置' ? `（${primaryModel}）` : '' }}——或为该 agent 指定模型：</span>
+            <span class="wiz-field-label">
+              默认模型（自动）
+              <HelpTip :text="modelTip" up />
+            </span>
             <select v-model="modelOverride" class="wiz-select">
               <option value="">默认模型（自动）</option>
               <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
           </label>
-          <p v-if="modelOverride !== ''" class="wiz-note">覆盖后该 agent 钉住所选端点——默认模型切换不影响它（改动重启生效）。</p>
+          <p v-if="modelOverride !== ''" class="wiz-note">覆盖后该 Agent 钉住所选端点——默认模型切换不影响它（改动重启生效）。</p>
         </div>
         <div class="wiz-kv wiz-kv-col">
           <span class="k">沙箱镜像</span>
           <label class="wiz-field">
-            <span class="wiz-field-label">缺省用默认沙箱（装配选定的本机后端，重活不进云）——或绑定已注册的镜像：</span>
+            <span class="wiz-field-label">
+              默认沙箱
+              <HelpTip text="缺省用默认沙箱（装配选定的本机后端，重活不进云）——或绑定已注册的镜像：注册即真实连接（机器不可达会如实失败）。" up />
+            </span>
             <select v-model="imageBinding" class="wiz-select">
               <option value="">默认沙箱</option>
               <option v-for="img in kernel.images" :key="img.id" :value="img.id">{{ img.name }}（{{ img.carrier === 'ssh' ? 'SSH ' + img.host : img.carrier === 'host-screen' ? '宿主屏幕' : img.carrier === 'windows' ? 'Windows ' + img.host : img.carrier === 'android' ? 'Android ' + img.host : img.image }}）</option>
             </select>
           </label>
-          <p v-if="imageBinding !== ''" class="wiz-note">绑定后该 agent 的专属 Box 落在所选镜像上——注册即真实连接（机器不可达会如实失败）；改绑重启生效。</p>
+          <p v-if="imageBinding !== ''" class="wiz-note">绑定后该 Agent 的专属 Box 落在所选镜像上——注册即真实连接（机器不可达会如实失败）；改绑重启生效。</p>
         </div>
       </div>
 
@@ -285,6 +324,8 @@ const onKeydown = (e: KeyboardEvent): void => {
         <div class="wiz-kv"><span class="k">沙箱镜像</span><span class="v">{{ imageBinding === '' ? '默认沙箱（注册即建专属 Box）' : '镜像：' + (kernel.images.find((i) => i.id === imageBinding)?.name ?? imageBinding) }}</span></div>
         <p class="wiz-note">创建后立即出现在成员名册、@提及与派单目标里；社交图谱会在下一条消息后连边。</p>
       </div>
+        </Transition>
+      </div>
 
       <div v-if="error" class="wiz-error" role="alert">{{ error }}</div>
 
@@ -293,7 +334,7 @@ const onKeydown = (e: KeyboardEvent): void => {
         <span class="wiz-spacer"></span>
         <button v-if="step > 0" class="wiz-btn ghost" type="button" @click="prev()">上一步</button>
         <button class="wiz-btn primary" type="button" :disabled="creating" @click="next()">
-          {{ step === 2 ? (creating ? '创建中…' : '创建 agent') : '下一步' }}
+          {{ step === 2 ? (creating ? '创建中…' : '创建 Agent') : '下一步' }}
         </button>
       </div>
     </div>
@@ -374,6 +415,46 @@ const onKeydown = (e: KeyboardEvent): void => {
   gap: 14px;
 }
 
+/* 步骤舞台（2026-10-13 滑动过渡）：高度随内容自适应 + 切换时平滑过渡（钩子见 script——
+   恒定 310 基准经用户目验裁定退役：底部空白让位「内容贴近 foot」）；overflow 裁剪滑动
+   面板不越卡片；大球在 stage 外恒静止（用户约束：ball-avatar 不参与水平过渡） */
+.wiz-stage {
+  position: relative;
+  overflow: hidden;
+  transition: height 160ms var(--ease);
+}
+
+/* 滑动过渡（方向感：前进左滑 / 后退右滑）：out-in 串行（旧滑出毕、新再滑入）——
+   任意时刻至多一个面板（E2E toContainText 的 strict 单匹配不被过渡窗口打破）；
+   160ms/段（总 320ms）+ 淡入淡出；stage 恒高兜底空档。类名对应
+   <Transition name="slide-left|slide-right" mode="out-in"> */
+.slide-left-enter-active,
+.slide-left-leave-active,
+.slide-right-enter-active,
+.slide-right-leave-active {
+  transition: transform 160ms var(--ease), opacity 160ms var(--ease);
+}
+
+.slide-left-enter-from {
+  transform: translateX(28px);
+  opacity: 0;
+}
+
+.slide-left-leave-to {
+  transform: translateX(-28px);
+  opacity: 0;
+}
+
+.slide-right-enter-from {
+  transform: translateX(-28px);
+  opacity: 0;
+}
+
+.slide-right-leave-to {
+  transform: translateX(28px);
+  opacity: 0;
+}
+
 .wiz-field {
   display: flex;
   flex-direction: column;
@@ -435,11 +516,12 @@ const onKeydown = (e: KeyboardEvent): void => {
   gap: 9px;
 }
 
-/* 步 1 大球（v0.1.66）：预览位居中，尺寸显著大于头像场景 */
+/* 大球三步常驻（v0.1.66 步 1 引入后提出分支外）：间距自给——上 16px 对齐原 wiz-body
+   padding-top，下 2px + 步骤区 padding-top 16px ≈ 原 4px + gap 14px，视觉零跳变 */
 .wiz-ball {
   width: 88px;
   height: 88px;
-  margin: 0 auto 4px;
+  margin: 16px auto 2px;
 }
 
 /* 自选色位（v0.1.66 修正六）：原生色盘退役（用户裁定改自建取色器 ColorPicker）——
@@ -488,6 +570,12 @@ const onKeydown = (e: KeyboardEvent): void => {
   flex-direction: column;
   gap: 2px;
   color: var(--ink);
+}
+
+/* 尾线去除（用户报障 2026-10-13）：最后一条 kv 之后已无 kv 需分割——
+   步 2「沙箱镜像」行与步 3 复核末行（其后仅说明段落）的分线多余 */
+.wiz-kv:last-of-type {
+  border-bottom: none;
 }
 
 .wiz-sub {

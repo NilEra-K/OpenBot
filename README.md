@@ -18,7 +18,7 @@
    签名证书的如实预期，签名记档后续版本）。
 2. **配模型**：设置 → 「＋ 添加模型」——填 OpenAI 兼容端点（DeepSeek/Kimi/本地 Ollama 均可）
    或 Anthropic 协议 → 保存 → 设为主力。
-3. **开始对话**：控制台对管家发消息；「＋ 新建 agent」添加工人；重活自动进本机沙箱（Box）执行。
+3. **开始对话**：控制台对管家发消息；「＋ 新建 Agent」添加工人；重活自动进本机沙箱（Box）执行。
 4. **沙箱后端**（设置页按本机探测自动呈现可选项）：Windows 默认 WSL2（需放置 rootfs，见
    [docs/platforms.md](docs/platforms.md)）；也可 Docker Desktop / podman machine。
 5. **关窗不退出**：关闭窗口驻留托盘（托盘菜单退出）；设置 → 通用可开「开机自启动」。

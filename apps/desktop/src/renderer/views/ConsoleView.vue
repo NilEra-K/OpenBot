@@ -1208,7 +1208,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           </template>
 
           <p v-else-if="streamUnits.length === 0" class="placeholder">
-            {{ kernel.stewardId ? '开始对话——你的消息永远最先处理' : '管家空缺：等待首个 agent 被任命' }}
+            {{ kernel.stewardId ? '开始对话——你的消息永远最先处理' : '管家空缺：等待首个 Agent 被任命' }}
           </p>
 
           <template v-for="unit in streamUnits" :key="unit.key">
@@ -1351,7 +1351,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
           <div v-for="approval in kernel.pendingApprovals" :key="approval.nonce" class="gate">
             <div class="gate-head">⚠ 出 Box 操作待批准：{{ approval.tool }}</div>
             <div class="gate-body">
-              agent <b>{{ approval.agentId }}</b>（run {{ approval.runId }}）请求执行
+              Agent <b>{{ approval.agentId }}</b>（run {{ approval.runId }}）请求执行
               <b class="mono">{{ approval.tool }}</b>
               <span v-if="approval.reason">——{{ approval.reason }}</span>
             </div>

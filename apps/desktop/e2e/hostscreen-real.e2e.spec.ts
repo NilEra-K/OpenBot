@@ -40,7 +40,7 @@ test('宿主屏幕真机全链：注册 → 绑定 → GUI 实况真帧 → 接�
 
     // —— 向导绑定（注册即连接——宿主屏幕 attach 零副作用，创建必成功） ——
     await page.getByRole('button', { name: '控制台', exact: true }).click()
-    await page.getByRole('button', { name: '＋ 新建 agent' }).click()
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
     const card = page.locator('.wiz-card')
     await expect(card).toBeVisible()
     await page.locator('#wizName').fill('维屏')
@@ -48,7 +48,7 @@ test('宿主屏幕真机全链：注册 → 绑定 → GUI 实况真帧 → 接�
     await card.locator('.wiz-kv', { hasText: '沙箱镜像' }).locator('select').selectOption('img-1')
     await card.getByRole('button', { name: '下一步' }).click()
     await expect(card.locator('.wiz-body')).toContainText('镜像：本机屏幕')
-    await card.getByRole('button', { name: '创建 agent' }).click()
+    await card.getByRole('button', { name: '创建 Agent' }).click()
     await expect(page.locator('.toast', { hasText: '维屏」已创建' })).toBeVisible({ timeout: 15_000 })
 
     // —— GUI 视图（生产门：宿主屏幕条目在场即注册 computer 工具族——无需 OPENBOT_COMPUTER） ——

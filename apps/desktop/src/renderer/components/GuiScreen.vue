@@ -530,14 +530,14 @@ onBeforeUnmount(() => {
     <div class="gui-bar">
       <span class="gui-state" :class="{ 'is-takeover': takeover }">
         <template v-if="interactive">
-          {{ takeover ? (streamActive ? (guiCodec === 'h264' ? '你已接管——实况 60fps' : '你已接管——实况 30fps') : '你已接管——agent 动作挂起') : '旁观中（agent 视角）——点击画面接管（接管后移动/键入直送）' }}
+          {{ takeover ? (streamActive ? (guiCodec === 'h264' ? '你已接管——实况 60fps' : '你已接管——实况 30fps') : '你已接管——Agent 动作挂起') : '旁观中（Agent 视角）——点击画面接管（接管后移动/键入直送）' }}
         </template>
         <template v-else>
-          {{ takeover ? '接管中——在操作台大屏操作' : '旁观中（agent 视角）——点击打开操作台大屏' }}
+          {{ takeover ? '接管中——在操作台大屏操作' : '旁观中（Agent 视角）——点击打开操作台大屏' }}
         </template>
       </span>
-      <button v-if="interactive && takeover" class="btn btn-secondary btn-sm" @click="release">交还 agent</button>
-      <span class="gui-tip">{{ interactive ? '移动/点击/键入即接管；登录等人工操作完成后点「交还 agent」继续' : '点击画面打开操作台大屏，接管在大屏进行' }}</span>
+      <button v-if="interactive && takeover" class="btn btn-secondary btn-sm" @click="release">交还 Agent</button>
+      <span class="gui-tip">{{ interactive ? '移动/点击/键入即接管；登录等人工操作完成后点「交还 Agent」继续' : '点击画面打开操作台大屏，接管在大屏进行' }}</span>
     </div>
   </div>
 </template>
