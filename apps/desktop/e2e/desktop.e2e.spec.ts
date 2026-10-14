@@ -2122,6 +2122,13 @@ test('思考双通道（v0.1.43）：reasoning 流进思考卡、正文流为 li
     await expect(page.locator('.m-text', { hasText: '正文回答：双通道验证通过。' })).toBeVisible({ timeout: 15_000 })
     // 终答到达后正文预览让位（无双份正文——live 预览块被去重删除）
     await expect(page.locator('[data-livemsg]')).toHaveCount(0, { timeout: 5_000 })
+    // —— /clear 清空回归（2026-10-13 用户报障：思考块残屏）——过程事实（思考卡/exec 卡）
+    // 随边界与消息一并移除，屏幕只剩占位文案（transcript 留证不受影响） ——
+    await page.locator('.composer-box input').fill('/clear')
+    await page.locator('.composer-box input').press('Enter')
+    await expect(page.locator('.think')).toHaveCount(0, { timeout: 5_000 })
+    await expect(page.locator('.stream-inner .m')).toHaveCount(0)
+    await expect(page.locator('.stream-inner .placeholder')).toBeVisible()
   } finally {
     await app.close()
     await mock.close()

@@ -6,6 +6,9 @@
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+  overflow: hidden; /* 横向保险丝（2026-10-13 探针实锤）：ctx 盒渲染宽下限 = 自身 padding 和
+     （32px），收起动画末段/收起终态 track < 32px 时盒子越出本栏右缘，main（overflow:auto）
+     为此出水平滚动条——三栏全自适应宽度，越出右缘的渲染无合法受众，clip 在 console 层截住 */
   /* ctx 边栏显隐动画（2026-09-06 用户反馈「弹出效果生硬」）：grid 列宽过渡——面板平滑
      滑出/滑入（Chromium 107+ 支持 grid-template-columns 过渡）；列数恒三列（收起=0px） */
   transition: grid-template-columns 200ms var(--ease);
@@ -131,6 +134,12 @@
   text-align: center;
   padding: 48px 20px;
   font-size: 13px;
+}
+
+/* 空态聊天图标（2026-10-13 用户需求）：参数对齐 rooms.css .empty-icon 同款视觉语言 */
+.placeholder-icon {
+  color: rgba(var(--info-rgb), 0.75);
+  margin-bottom: 14px;
 }
 
 /* ---- 消息气泡 ---- */
@@ -452,7 +461,8 @@
 }
 
 .think-chev.open {
-  transform: rotate(90deg);
+  /* 展开态朝上（2026-10-13 用户裁定：收起 ▾ 点击展开 → ▴；原 90° 是朝左） */
+  transform: rotate(180deg);
 }
 
 .think-body-wrap {

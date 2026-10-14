@@ -29,22 +29,71 @@ const ui = useUiStore()
 
 const streamEl = ref<HTMLElement | null>(null)
 const streamInnerEl = ref<HTMLElement | null>(null)
-/** ctx 显隐丝滑化（2026-09-06 用户反馈「不太丝滑」）：grid 列宽动画每帧触发会话流文本
- *  rewrap（长流 DOM 大——每帧布局是卡顿根）。切换时**锁定流内容宽度**（overflow 裁切），
- *  动画期间文本零 rewrap，结束后解锁一次铺满——布局成本从每帧降到一次 */
-const toggleCtxSmooth = (): void => {
-  const inner = streamInnerEl.value
-  if (inner !== null) {
-    inner.style.width = `${inner.clientWidth}px`
-    inner.style.overflow = 'hidden'
+/** ---- ctx 显隐动画（2026-10-13 自适应双分支，替代 2026-09-06「冻结 + 320ms 定时解锁」）----
+ *  旧策略是「生硬感」根：面板 200ms 滑完 → ~120ms 死区 → 320ms 处内容一帧铺满（三段式跳变）。
+ *  - 平滑分支（内容总高 ≤ 阈值）：不锁宽——inner 随 grid 列宽逐帧自然 rewrap，与面板滑动
+ *    同拍（拖拽窗口缩放同款手感；短内容每帧布局成本可忽略）；
+ *  - 冻结分支（> 阈值；长流每帧 rewrap 是 2026-09-06 实锤的卡顿根）：锁宽零 rewrap，
+ *    grid 过渡结束（transitionend）同帧解锁——跳变与动画收尾重合，死区消除。
+ *  两分支收尾统一补 measureRail()：宽度已变轮锚必须重测（此前只在挂载/消息变化/窗口 resize
+ *  重测，收起/展开后 rail 点击跳转会偏）。 */
+const CTX_ANIM_MAX_CONTENT = 8000 // 冻结阈值（内容总高 px，约十来屏）——目验后可调
+const consoleEl = ref<HTMLElement | null>(null)
+let ctxAnimTimer = 0
+let ctxAnimCleanup: (() => void) | null = null
+
+/** 清当前动画残留（兜底定时器 + 冻结锁）；幂等——快速连点入场先调，再从屏上当前宽续接 */
+const ctxAnimReset = (): void => {
+  if (ctxAnimTimer !== 0) {
+    window.clearTimeout(ctxAnimTimer)
+    ctxAnimTimer = 0
   }
-  ui.toggleCtx()
-  window.setTimeout(() => {
-    if (inner !== null) {
+  ctxAnimCleanup?.()
+  ctxAnimCleanup = null
+}
+
+/** 动画收尾（grid transitionend 与兜底定时器共用）：清残留 + 轮锚重测 */
+const ctxAnimSettle = (): void => {
+  ctxAnimReset()
+  measureRail()
+}
+
+/** grid 列宽过渡结束（挂 .console）：只认本体 grid-template-columns——子孙元素的
+ *  transitionend 会冒泡上来（按钮背景等），target 过滤防误触 */
+const onCtxGridEnd = (e: TransitionEvent): void => {
+  if (e.target !== e.currentTarget || e.propertyName !== 'grid-template-columns') return
+  ctxAnimSettle()
+}
+
+/** 开关/档案直达共用的动画准备：清残留 → 按内容体量分流（冻结分支锁宽；平滑分支零干预） */
+const ctxAnimBegin = (): void => {
+  const inner = streamInnerEl.value
+  const wNow = inner?.clientWidth ?? 0 // 先取快照再清残留：冻结中途连点 = 屏上实际宽，续接不跳变
+  ctxAnimReset()
+  if (inner !== null && inner.offsetHeight > CTX_ANIM_MAX_CONTENT) {
+    inner.style.width = `${wNow}px`
+    inner.style.overflow = 'hidden'
+    ctxAnimCleanup = () => {
       inner.style.width = ''
       inner.style.overflow = ''
     }
-  }, 320)
+  }
+}
+
+const toggleCtxSmooth = (): void => {
+  ctxAnimBegin()
+  ui.toggleCtx()
+  // 兜底：transitionend 偶发不触发（列宽无实际变化时不过渡）——260ms 保底收尾
+  ctxAnimTimer = window.setTimeout(ctxAnimSettle, 260)
+}
+
+/** 档案直达同款动画（收起态点击 = 展开动画 + 进档案；展开态无 grid 动画不干预） */
+const openCtxSettings = (): void => {
+  if (ui.ctxCollapsed) {
+    ctxAnimBegin()
+    ctxAnimTimer = window.setTimeout(ctxAnimSettle, 260)
+  }
+  ui.toggleCtxSettings()
 }
 const draftEl = ref<HTMLInputElement | null>(null)
 
@@ -776,10 +825,14 @@ onMounted(() => {
   // 映射条首算（历史/boot 场景由 messages/streams watch 接续；窗口 resize 重测轨道盒子）
   void nextTick(measureRail)
   window.addEventListener('resize', measureRail)
+  // ctx 显隐动画收尾监听（grid 过渡结束同帧解锁冻结锁 + 轮锚重测；见 toggleCtxSmooth 处注释）
+  consoleEl.value?.addEventListener('transitionend', onCtxGridEnd)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', measureRail)
   document.removeEventListener('click', closeMenus)
+  consoleEl.value?.removeEventListener('transitionend', onCtxGridEnd)
+  ctxAnimReset()
 })
 
 // 会话历史懒加载：切换会话或连接就绪时拉一次 transcript（内核重启后的持久真相；已覆盖时幂等跳过）。
@@ -1091,7 +1144,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
 </script>
 
 <template>
-  <section class="console" :class="{ 'no-ctx': ui.ctxCollapsed }">
+  <section ref="consoleEl" class="console" :class="{ 'no-ctx': ui.ctxCollapsed }">
     <RosterPanel />
 
     <div class="streamcol">
@@ -1119,7 +1172,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             :class="{ 'is-on': ui.ctxSettings }"
             :aria-pressed="ui.ctxSettings"
             :title="ui.ctxSettings ? '返回执行画面' : '会话档案'"
-            @click="ui.toggleCtxSettings()"
+            @click="openCtxSettings"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" v-html="SLIDERS"></svg>
           </button>
@@ -1210,9 +1263,14 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             </div>
           </template>
 
-          <p v-else-if="streamUnits.length === 0" class="placeholder">
-            {{ kernel.stewardId ? '开始对话——你的消息永远最先处理' : '管家空缺：等待首个 Agent 被任命' }}
-          </p>
+          <!-- 空态：icon + 文案（2026-10-13 用户需求，视觉语言参考跨用户房间空态）——
+               管家在场是 Agent 的一句问候；空缺分支如实报缺（图标两分支同显——空会话语义一致） -->
+          <div v-else-if="streamUnits.length === 0" class="placeholder">
+            <div class="placeholder-icon" aria-hidden="true">
+              <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            </div>
+            <div>{{ kernel.stewardId ? '我能帮您做些什么？' : '管家空缺：等待首个 Agent 被任命' }}</div>
+          </div>
 
           <template v-for="unit in streamUnits" :key="unit.key">
             <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>

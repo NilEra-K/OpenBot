@@ -955,6 +955,15 @@ export const useKernelStore = defineStore('kernel', {
           // 界面直接清空（v0.1.50 用户裁定：不折叠）——边界之前的消息从呈现层移除
           // （transcript append-only 留证；boot 恢复同款过滤，见 loadHistory）
           this.messages = this.messages.filter((m) => m.at >= event.at)
+          // 过程事实同窗口语义（2026-10-13 用户报障 /clear 后思考块残屏）：思考块/正文预览
+          // （streams）与 exec 卡（execs）随边界一并移除——此前只清 messages 残屏；boot 路径
+          // 本就按边界跳过全部记录（loadHistory），此处补齐实时路径。resume 重放不受影响
+          // （loadHistory 按去重规则重新投影，状态等价）
+          const clearedAgent = event.payload.agentId
+          this.streams = this.streams.filter((s) => s.agentId !== clearedAgent || s.at >= event.at)
+          this.execs = this.execs.filter(
+            (e) => e.runId?.split('-run-')[0] !== clearedAgent || e.at >= event.at,
+          )
           return
         }
         case 'v1.session.resumed': {

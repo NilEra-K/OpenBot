@@ -27,7 +27,7 @@ const APP_ROOT = join(HERE, '..', '..') // apps/desktop
 const REPO_ROOT = join(APP_ROOT, '..', '..') // 仓库根
 const PROTOTYPE = join(REPO_ROOT, 'prototype.html') // Step 7 起替换为 renderer 产物
 const PRELOAD = join(APP_ROOT, 'dist', 'preload', 'index.cjs') // sandbox 下 preload 必须是 CJS（.cts 编译产物）
-const ICON = join(APP_ROOT, 'resources', 'icon.png')
+const ICON = join(APP_ROOT, 'resources', 'icons', 'icon.png') // 图标集中维护（resources/icons/——src/ 为源套图，ico 由 scripts/make-ico.mjs 生成）
 console.log('[openbot] 路径就绪：APP_ROOT =', APP_ROOT, '；PRELOAD 存在性待装配时验证')
 
 let win: BrowserWindow | null = null
@@ -51,6 +51,7 @@ function createWindow(): void {
     backgroundColor: '#17181c',
     autoHideMenuBar: true,
     title: 'OpenBot',
+    icon: ICON, // 开发态任务栏/窗口图标（2026-10-14 接线；打包产物走 exe 资源——electron-builder icon）
     frame: false, // 去掉原生标题栏——原型的 titlebar 即唯一 chrome（窗口控制经 preload 桥回真实操作）
     webPreferences: { sandbox: true, contextIsolation: true, preload: PRELOAD },
   })
