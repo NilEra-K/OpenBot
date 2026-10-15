@@ -17,8 +17,10 @@ const CX = 450
 const CY = 262
 const ORBIT = 192
 
-/** 群图标（prototype ICONS.chat 同源 path） */
-const CHAT_ICON = '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
+/** 群图标（2026-10-15 用户裁定：气泡 → 双人）：净室自绘双人线性 path——纯 d 值
+ *  （前人整圆头 + U 形肩弧右端收短避让，后人略小整圆头 + 短肩弧；中心 ~12,12 与节点对齐） */
+const GROUP_ICON_D =
+  'M9.3 4.6a3 3 0 1 0 0 6 3 3 0 0 0 0-6M3.2 19.5c0-3.3 2.7-5.4 6.1-5.4 1.7 0 3.2.6 4.3 1.6M16.9 6a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M16.4 14.3c2.7.3 4.5 2.1 4.5 4.9'
 
 interface NodeGeom {
   id: string
@@ -293,8 +295,8 @@ const goTo = (id: string): void => {
                 filter="url(#gshadow)"
               ></rect>
             </g>
-            <g class="gicon" :transform="`translate(${n.x - 7} ${n.y - 7}) scale(0.583)`">
-              <path :d="CHAT_ICON"></path>
+            <g class="gicon" :transform="`translate(${n.x - 9.6} ${n.y - 9.6}) scale(0.8)`">
+              <path :d="GROUP_ICON_D"></path>
             </g>
           </template>
           <template v-else>

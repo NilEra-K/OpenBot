@@ -189,9 +189,9 @@ const nameOf = (agentId: string): string => kernel.roster.find((a) => a.agentId 
 const TERMINAL_ICON =
   '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>'
 
-/** 群头像图标（prototype ICONS.chat 同源 SVG path） */
-const CHAT_ICON =
-  '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
+/** 群头像图标（2026-10-15 用户裁定：气泡 → 双人，与 GraphView/RosterPanel 同源 SVG path） */
+const GROUP_ICON =
+  '<path d="M9.3 4.6a3 3 0 1 0 0 6 3 3 0 0 0 0-6M3.2 19.5c0-3.3 2.7-5.4 6.1-5.4 1.7 0 3.2.6 4.3 1.6M16.9 6a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M16.4 14.3c2.7.3 4.5 2.1 4.5 4.9"/>'
 
 /** 远端成员图标（prototype ICONS.rooms 同源——地球，与 rail/名册同款） */
 const REMOTE_ICON =
@@ -220,7 +220,7 @@ const lastAt = computed(() => {
       <template v-if="activeGroup">
         <div class="ctx-head">
           <div class="avatar avatar-group">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="CHAT_ICON"></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="GROUP_ICON"></svg>
           </div>
           <div class="ctx-head-text">
             <div class="ctx-name">{{ activeGroup.name }}</div>

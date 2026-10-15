@@ -32,8 +32,9 @@ const subOf = (agent: RosterEntry): string => {
   return isWorking(agent.agentId) ? `工作中 · ${base}` : base
 }
 
-/** 群图标（prototype ICONS.chat 同源 path；视图 0 0 24 24） */
-const CHAT_ICON = '<path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>'
+/** 群图标（2026-10-15 用户裁定：气泡 → 双人，与 GraphView GROUP_ICON_D 同源 path；视图 0 0 24 24） */
+const GROUP_ICON =
+  '<path d="M9.3 4.6a3 3 0 1 0 0 6 3 3 0 0 0 0-6M3.2 19.5c0-3.3 2.7-5.4 6.1-5.4 1.7 0 3.2.6 4.3 1.6M16.9 6a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M16.4 14.3c2.7.3 4.5 2.1 4.5 4.9"/>'
 /** 远端成员图标（P7）：地球两笔弧线——跨公网房间的语义（stroke 风格与图标体系一致） */
 const REMOTE_ICON = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 2.8 15.4 0 18M12 3c-2.8 2.6-2.8 15.4 0 18"/>'
 
@@ -83,7 +84,7 @@ const roomLabelOf = (roomId: string): string =>
       @click="ui.openGroup(g.groupId)"
     >
       <span class="avatar avatar-group">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="CHAT_ICON"></svg>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="GROUP_ICON"></svg>
         <span class="stat-dot" :class="groupWorking(g) ? 'working' : 'idle'"></span>
       </span>
       <span class="ri-text">

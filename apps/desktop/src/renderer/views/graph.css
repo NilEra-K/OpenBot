@@ -115,11 +115,12 @@
   stroke: var(--ink3);
 }
 
-/* 菱形内 chat 图标（原型 .gicon）：线性 stroke 与壳图标体系一致 */
+/* 菱形内 chat 图标（原型 .gicon）：线性 stroke 与壳图标体系一致——2026-10-15 提对比（ink2→ink）
+   + 图标放大 0.583→0.8（用户报障：缩放后 ~10px 过小几乎不可辨识） */
 .gicon {
   fill: none;
-  stroke: var(--ink2);
-  stroke-width: 1.7;
+  stroke: var(--ink);
+  stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
@@ -290,7 +291,7 @@
   flex: none;
 }
 
-/* 图例菱形（P5 Step 4）：与画布 ggroup 同视觉（rotate 45 方块） */
+/* 图例菱形（P5 Step 4）：与画布 ggroup 同视觉（rotate 45 方块）——2026-10-15 内嵌图标版被裁定回退（太丑没必要），图标只留画布节点 */
 .lg-diamond {
   width: 9px;
   height: 9px;
