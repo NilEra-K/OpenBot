@@ -14,10 +14,6 @@ const ui = useUiStore()
 
 const initialOf = (id: string, name?: string): string => (name ?? id).trim().charAt(0) || '?'
 
-/** 群成员显示名列表（档案 name 缺席回退 id——与 agent 同规则） */
-const memberNames = (g: GroupEntry): string =>
-  g.members.map((id) => kernel.roster.find((a) => a.agentId === id)?.name ?? id).join(' + ')
-
 /** agent 是否有进行中 run（lane 排他保证同一 agent 至多一个活跃 turn）；
  *  queued + running 与 ConsoleView activeRun 同口径（v0.1.66——排队期 roster/stream-head 两球表情分叉修复） */
 const isWorking = (agentId: string): boolean =>
@@ -89,7 +85,7 @@ const roomLabelOf = (roomId: string): string =>
       </span>
       <span class="ri-text">
         <span class="ri-name">{{ g.name }}</span>
-        <span class="ri-sub">{{ memberNames(g) }}</span>
+        <span class="ri-sub">{{ g.members.length + 1 }} 人</span><!-- 人数含用户自身（members 只存 agentId） -->
       </span>
       <!-- 未读徽标：群成员发言/群 sysnote 按群计数（进入群会话清零） -->
       <span v-if="(ui.unread[g.groupId] ?? 0) > 0" class="ri-badge" :aria-label="`${ui.unread[g.groupId]} 条未读`">
