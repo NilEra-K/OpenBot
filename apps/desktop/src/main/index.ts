@@ -107,7 +107,7 @@ function loadRenderer(target: BrowserWindow): void {
 
 function createTray(): void {
   tray = new Tray(nativeImage.createFromPath(ICON))
-  tray.setToolTip('OpenBot —— 本地多 agent 控制台')
+  tray.setToolTip('OpenBot')
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: '显示 OpenBot', click: () => { win?.show(); win?.focus() } },

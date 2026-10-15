@@ -1084,7 +1084,7 @@ main { flex: 1; min-width: 0; min-height: 0; position: relative; background: var
         <div class="view-scroll">
           <div class="view-head">
             <div class="view-title">排程监控</div>
-            <div class="view-sub">每个 agent 一个排他队列：同一时刻只有一个活跃 turn；用户消息永远最先。watchdog 在 120 秒后将卡死的 run 逃逸为 zombie，调用方立即返回、发送永不悬挂。</div>
+            <div class="view-sub">每个 agent 一个排他队列：同一时刻只有一个活跃 turn；用户消息永远最先。卡死的执行会转入后台，发送永不悬挂。</div>
             <div class="view-toolbar mono" style="font-size:12px;color:var(--ink2)">
               <span>今日 <b style="color:var(--ink)">23</b> runs</span><span aria-hidden="true">·</span>
               <span>平均 <b style="color:var(--ink)">2m41s</b></span><span aria-hidden="true">·</span>
@@ -1540,7 +1540,7 @@ const ANNOS = [
   { n: 2, view: 'console', x: 300, y: 250, title: 'A2A 消息在流中可见', body: 'agent 之间的派单与回复不再是黑盒。社交感是产品主轴：你能看到阿尔法怎么调度贝塔和卡帕，点击中继行可跳到对方的会话。' },
   { n: 3, view: 'console', x: 300, y: 430, title: '重活进 Box 执行', body: '原版 CloudAgentBridge（云电脑）的位置，由本机 Box 任务卡替代：步骤轨迹、stdout、产物 diff 内嵌在对话流里，随时展开。' },
   { n: 4, view: 'console', x: 300, y: 620, title: '权限闸门', body: 'Box 内自由执行；影响宿主机的操作（清理磁盘、出网、出 Box 文件）在流内请求批准。批准是一次点击，不必去设置里翻。' },
-  { n: 5, view: 'tasks', x: 700, y: 150, title: '排程监控', body: '已实现的调度内核直接可视化：排他队列、三 lane 优先级（user > agent > background）、watchdog 逃逸（zombie 进 grace 窗口，发送永不悬挂）。' },
+  { n: 5, view: 'tasks', x: 700, y: 150, title: '排程监控', body: '已实现的调度内核直接可视化：排他队列、三 lane 优先级（user > agent > background）、卡死的执行会转入后台（发送永不悬挂）。' },
   { n: 6, view: 'boxes', x: 720, y: 170, title: '本机云电脑', body: 'Box 群取代云电脑：快照回滚、资源限额、磁盘压力治理、网络策略。云依赖归零，只剩 LLM API，断网切本地 Ollama。' },
   { n: 7, view: 'boxes', x: 720, y: 640, title: '沙箱即边界', body: '「Box 内自由、出 Box 有闸门」是安全模型的核心。WSL2 / Docker / Windows Sandbox 三后端可换，Packages 层不变。' },
   { n: 8, view: 'graph', x: 640, y: 170, title: '社交图谱', body: 'addConversationPartner 的可视化：谁在和谁说话、说了多少。群组、你、远端成员同图，线宽即消息量。' },

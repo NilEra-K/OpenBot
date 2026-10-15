@@ -89,7 +89,7 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     // 1) 桌面入房：对端收到 member-joined；桌面名册出现远端节
     await peerWait((m) => m.kind === 'room-event' && m.event === 'member-joined' && m.displayName === '本端用户')
     await expect(page.locator('.roster-item', { hasText: '远端好友' })).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('.roster-item', { hasText: '远端好友' })).toContainText('远端 mirror')
+    await expect(page.locator('.roster-item', { hasText: '远端好友' })).toContainText('远端镜像')
 
     // 2) 配 provider → console 发消息（管家会话）
     await page.getByRole('button', { name: '设置', exact: true }).click()
@@ -171,7 +171,7 @@ test('跨用户房间（P7 mirror 一期）：mirror 双向 + 净化 + 远端 tu
     await expect(page.locator('.roomcard .room-name')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('.roomcard')).toContainText('已连接')
     await expect(page.locator('.mchip', { hasText: '你' })).toContainText('主人')
-    await expect(page.locator('.mchip', { hasText: '远端好友' })).toContainText('远端 · mirror')
+    await expect(page.locator('.mchip', { hasText: '远端好友' })).toContainText('远端 · 镜像')
     await expect(page.locator('.relay-kv', { hasText: '远端成员' })).toContainText('1 名')
     await expect(page.locator('.rooms-note')).toContainText('自托管')
     // 房间设置模态（P7 多房间轮：列表 ⇄ 表单两态——卡上按钮直开该房编辑表单；Esc 逐级返回）

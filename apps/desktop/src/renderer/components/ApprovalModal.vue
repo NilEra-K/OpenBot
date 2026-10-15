@@ -64,7 +64,7 @@ watch(
         <p class="am-tool mono">{{ current.tool }}</p>
         <p v-if="current.reason" class="am-reason">{{ current.reason }}</p>
         <p class="am-note">
-          批准后本次放行；拒绝则本次拒绝（run 按重试策略处理）。决定只对本次生效，不写入持久策略。
+          批准后本次放行；拒绝则本次拒绝（执行按重试策略处理）。决定只对本次生效，不写入持久策略。
         </p>
       </div>
       <p v-if="error" class="am-error">{{ error }}</p>

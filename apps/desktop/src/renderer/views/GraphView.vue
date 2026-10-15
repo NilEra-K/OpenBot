@@ -340,7 +340,7 @@ const goTo = (id: string): void => {
         <div class="graph-sum mono">{{ edgeGeoms.length }} 对关系 · {{ kernel.edges.reduce((s, e) => s + e.count, 0) }} 条消息</div>
         <div class="legend-row"><span class="lg-line user"></span>你 ↔ Agent · 消息边</div>
         <div class="legend-row"><span class="lg-line a2a"></span>Agent ↔ Agent · 委派边（Agent 间协作）</div>
-        <div class="legend-row"><span class="lg-line remote"></span>你 ↔ 远端成员 · 虚线蓝 relay</div>
+        <div class="legend-row"><span class="lg-line remote"></span>你 ↔ 远端成员 · 中继边（蓝色虚线）</div>
         <div class="legend-row"><span class="lg-diamond"></span>菱形 = 群聊 · 群内发言计入灰边</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--accent)"></span>状态点 = 工作中（脉冲）</div>
         <div class="legend-row"><span class="lg-dot" style="background: var(--ink3)"></span>状态点 = 空闲</div>
@@ -399,7 +399,7 @@ const goTo = (id: string): void => {
           <div class="kv"><span class="k">消息量</span><span class="v mono">×{{ nodeMsg[focus.key] ?? 0 }}</span></div>
         </template>
         <template v-else-if="isRemoteId(focus.key)">
-          <div class="kv"><span class="k">类型</span><span class="v">远端成员 · mirror（跨用户房间）</span></div>
+          <div class="kv"><span class="k">类型</span><span class="v">远端成员 · 镜像（跨用户房间）</span></div>
           <div class="kv"><span class="k">状态</span><span class="v">{{ remoteOnline(focus.key) ? '在场' : '离场（会话历史可看）' }}</span></div>
           <div class="kv"><span class="k">消息量</span><span class="v mono">×{{ nodeMsg[focus.key] ?? 0 }}</span></div>
         </template>

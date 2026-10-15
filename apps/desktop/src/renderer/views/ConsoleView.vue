@@ -1160,7 +1160,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
             <span v-if="activeGroup" class="chip chip-accent">群聊 · {{ activeGroup.members.length }} 成员 · 有界轮转</span>
             <span v-if="activeGroup && groupBusy" class="sh-warn">轮转中…</span>
             <span v-if="!activeGroup && activeAgent?.role === 'steward'" class="chip chip-accent">管家</span>
-            <span v-if="!kernel.providerConfigured" class="sh-warn">provider 未配置——回复将失败，去「设置」配置</span>
+            <span v-if="!kernel.providerConfigured" class="sh-warn">模型端点未配置——回复将失败，去「设置」配置</span>
             <span v-else-if="kernel.connected">已连接</span>
           </div>
         </div>
@@ -1222,7 +1222,9 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
         </div>
       </div>
 
-      <div ref="streamEl" class="stream" @scroll.passive="onStreamScroll">
+      <!-- stream-empty（2026-10-15 用户需求）：流区无内容时整层 flex 居中（含 bootError/群空态同款）；
+           stream-inner 结构与样式不动（轮锚测量依赖、消息流 margin 折叠不受 flex 化影响） -->
+      <div ref="streamEl" class="stream" :class="{ 'stream-empty': streamUnits.length === 0 }" @scroll.passive="onStreamScroll">
         <div ref="streamInnerEl" class="stream-inner">
           <p v-if="kernel.bootError" class="placeholder">内核未连接：{{ kernel.bootError }}</p>
 
@@ -1267,7 +1269,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                管家在场是 Agent 的一句问候；空缺分支如实报缺（图标两分支同显——空会话语义一致） -->
           <div v-else-if="streamUnits.length === 0" class="placeholder">
             <div class="placeholder-icon" aria-hidden="true">
-              <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+              <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><circle cx="8.5" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="12" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15.5" cy="10" r="1.2" fill="currentColor" stroke="none"></circle></svg>
             </div>
             <div>{{ kernel.stewardId ? '我能帮您做些什么？' : '管家空缺：等待首个 Agent 被任命' }}</div>
           </div>
@@ -1345,7 +1347,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                     v-if="unit.kind === 'pending' && activeRun"
                     class="m-stop"
                     :disabled="cancellingRunId === activeRun.runId"
-                    title="中止当前 run"
+                    title="中止当前执行"
                     @click="cancelActive"
                   >
                     {{ cancellingRunId === activeRun.runId ? '正在中止…' : '中止' }}
@@ -1592,7 +1594,7 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
                   v-else
                   class="cb-send cb-stop"
                   :disabled="cancellingRunId === activeRun.runId"
-                  :title="cancellingRunId === activeRun.runId ? '正在中止…' : '中止当前 run'"
+                  :title="cancellingRunId === activeRun.runId ? '正在中止…' : '中止当前执行'"
                   @click="cancelActive"
                 >
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>

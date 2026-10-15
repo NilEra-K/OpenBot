@@ -168,7 +168,7 @@ const toggleSleep = async (boxId: string, sleeping: boolean): Promise<void> => {
         Agent 的执行载体一览：本地容器、远程主机、宿主屏幕——按各自绑定呈现，未绑定的 Agent 用默认沙箱（本地容器不可用时为模拟环境）。按钮按载体能力声明渲染，不支持的操作永不出现。
       </div>
       <div v-if="kernel.caps" class="view-toolbar mono">
-        <span>默认沙箱 caps：</span>
+        <span>默认沙箱能力：</span>
         <span>快照 <b>{{ kernel.caps.snapshot ? '✓' : '✗' }}</b></span>
         <span>常驻 <b>{{ kernel.caps.persistent ? '✓' : '✗' }}</b></span>
         <span>无头 <b>{{ kernel.caps.headless ? '✓' : '✗' }}</b></span>

@@ -1552,7 +1552,7 @@ const wslHelpNeeded = computed(() => {
         <div class="appearance-row">
           <div class="appearance-main">
             <div class="appearance-name">审批闸门</div>
-            <div class="appearance-desc">Agent 在 Box 内自由执行；触碰宿主机文件或出网时逐条请求批准，挂起期间 run 计入 deadline；应用重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。</div>
+            <div class="appearance-desc">Agent 在 Box 内自由执行；触碰宿主机文件或出网时逐条请求批准，挂起期间计入执行时限；应用重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。</div>
           </div>
           <span class="chip" :class="kernel.approvalMode === 'manual' ? 'chip-accent' : ''">{{ kernel.approvalMode === 'manual' ? '手工审批' : '自动批准' }}</span>
         </div>

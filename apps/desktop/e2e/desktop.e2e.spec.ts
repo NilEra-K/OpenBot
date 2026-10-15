@@ -875,7 +875,7 @@ test('ctx Settings 档案模式（P4 Step 7）：档案 kv + 协作对象跳会�
     await expect(ctx.locator('.kv', { hasText: '角色' })).toContainText('管家（steward）')
     await expect(ctx.locator('.kv', { hasText: '模型' })).toContainText('默认模型（E2E mock · mock-model') // v2 供应商 1:N：粒度到模型
     await expect(ctx.locator('.kv', { hasText: 'Box 归属' })).toContainText(/box-\d+/)
-    await expect(ctx.locator('.kv', { hasText: '权限现状' })).toContainText('出 Box 需批准（Manual 闸门）')
+    await expect(ctx.locator('.kv', { hasText: '权限现状' })).toContainText('出 Box 需批准（手工审批）')
 
     // 协作对象（a2a 边投影）：worker1 行 + 计数；点击跳会话（档案模式随之重置回屏幕）
     const edge = ctx.locator('.edge-row', { hasText: 'worker1' })

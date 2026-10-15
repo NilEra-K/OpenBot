@@ -90,7 +90,7 @@ const successRate = computed(() => {
   <section class="view view-scroll">
     <div class="view-head">
       <div class="view-title">排程监控</div>
-      <div class="view-sub">每个 Agent 一个排他队列：同一时刻只有一个活跃回合；用户消息永远最先。看门狗会把卡死的执行转入后台，发送永不悬挂。</div>
+      <div class="view-sub">每个 Agent 一个排他队列：同一时刻只有一个活跃回合；用户消息永远最先。卡死的执行会转入后台，发送永不悬挂。</div>
       <div class="view-toolbar mono">
         <span>今日 <b>{{ todayRuns.length }}</b> runs</span>
         <span aria-hidden="true">·</span>

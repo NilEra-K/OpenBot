@@ -177,7 +177,7 @@ onMounted(() => {
         <div class="member-row">
           <span class="mchip"><span class="mdot mdot-self"></span>你<span class="mrole">主人</span></span>
           <span v-for="m in membersOf(r.roomId)" :key="m.memberId" class="mchip" :class="{ 'is-off': !m.connected }">
-            <span class="mdot mdot-remote"></span>{{ m.displayName }}<span class="mrole">{{ m.connected ? '远端 · mirror' : '离场' }}</span>
+            <span class="mdot mdot-remote"></span>{{ m.displayName }}<span class="mrole">{{ m.connected ? '远端 · 镜像' : '离场' }}</span>
           </span>
         </div>
         <p v-if="membersOf(r.roomId).length === 0" class="member-empty">尚无远端成员——点「复制邀请信息」分享给好友</p>

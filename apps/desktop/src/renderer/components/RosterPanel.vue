@@ -45,7 +45,7 @@ const roomLabelOf = (roomId: string): string =>
 <template>
   <aside class="roster" aria-label="成员名册">
     <div class="roster-head">成员</div>
-    <div class="roster-sec">本地 AGENTS</div>
+    <div class="roster-sec">本地 Agent</div>
     <button
       v-for="agent in kernel.roster"
       :key="agent.agentId"
@@ -117,7 +117,7 @@ const roomLabelOf = (roomId: string): string =>
           </span>
           <span class="ri-text">
             <span class="ri-name">{{ m.displayName }}</span>
-            <span class="ri-sub">远端 mirror</span>
+            <span class="ri-sub">远端镜像</span>
           </span>
         </button>
       </template>

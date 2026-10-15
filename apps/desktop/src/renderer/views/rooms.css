@@ -22,7 +22,7 @@
 }
 
 .empty-icon {
-  color: rgba(var(--info-rgb), 0.75);
+  color: var(--ink2);
   margin-bottom: 14px;
 }
 

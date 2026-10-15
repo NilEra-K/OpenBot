@@ -257,12 +257,12 @@ const lastAt = computed(() => {
           </div>
           <div class="ctx-head-text">
             <div class="ctx-name">{{ remotePeer.displayName }}</div>
-            <div class="ctx-sub">{{ remotePeer.connected ? '在场 · mirror' : '离场' }}</div>
+            <div class="ctx-sub">{{ remotePeer.connected ? '在场 · 镜像' : '离场' }}</div>
           </div>
         </div>
 
         <div class="ctx-sec">档案</div>
-        <div class="kv"><span class="k">角色</span><span class="v">远端成员（跨用户房间 · mirror）</span></div>
+        <div class="kv"><span class="k">角色</span><span class="v">远端成员（跨用户房间 · 镜像）</span></div>
         <div class="kv"><span class="k">会话性质</span><span class="v">只读镜像——对话经中继到达本地</span></div>
         <div class="kv"><span class="k">Box 归属</span><span class="v mono">—（远端成员无本端 Box）</span></div>
         <div class="kv"><span class="k">执行通道</span><span class="v">远端对话请求经审批闸门进入本端执行</span></div>
@@ -289,7 +289,7 @@ const lastAt = computed(() => {
         </div>
         <div class="kv"><span class="k">镜像</span><span class="v">{{ activeImageDisplay }}</span></div>
         <div class="kv"><span class="k">Box 归属</span><span class="v mono">{{ screenBoxId ?? '—' }}</span></div>
-        <div class="kv"><span class="k">权限现状</span><span class="v">{{ kernel.approvalMode === 'manual' ? 'Box 内自由 · 出 Box 需批准（Manual 闸门）' : '自动批准' }}</span></div>
+        <div class="kv"><span class="k">权限现状</span><span class="v">{{ kernel.approvalMode === 'manual' ? 'Box 内自由 · 出 Box 需批准（手工审批）' : '自动批准' }}</span></div>
 
         <div class="ctx-sec">协作对象</div>
         <button
