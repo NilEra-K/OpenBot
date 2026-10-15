@@ -167,13 +167,13 @@ const roomLabelOf = (roomId: string): string =>
   width: 100%;
   height: 38px;
   padding: 0 8px;
-  border: 1px solid transparent;
+  border: 1px solid transparent; /* 占位防尺寸跳动（active 边框已撤——2026-10-15 用户裁定日间灰边难看） */
   border-radius: 8px;
   background: transparent;
   color: var(--ink);
   cursor: pointer;
   text-align: left;
-  transition: background 140ms var(--ease), border-color 140ms var(--ease);
+  transition: background 140ms var(--ease);
 }
 
 .roster-item:hover {
@@ -182,7 +182,6 @@ const roomLabelOf = (roomId: string): string =>
 
 .roster-item.active {
   background: var(--bg3);
-  border-color: var(--line-strong);
 }
 
 .avatar {

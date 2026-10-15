@@ -593,7 +593,8 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     await wiz.getByRole('button', { name: /^建群/ }).click()
 
     await expect(page.locator('.sh-name')).toHaveText('评审组', { timeout: 10_000 })
-    await expect(page.locator('.sysnote').first()).toContainText('群「评审组」建立')
+    // 群空态（2026-10-15 用户需求）：建群注记不即刻呈现——空态与 Agent 同款（icon + 问候语）
+    await expect(page.locator('.stream .placeholder')).toContainText('我们能帮您做些什么')
     await expect(page.locator('.sh-status .chip')).toContainText('群聊 · 2 成员')
 
     // —— 第1条消息（第1轮，成员响应慢 2.6s）→ 400ms 后插话第2条：supersede ——
@@ -609,6 +610,8 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     await expect(page.locator('.m-text.md', { hasText: '新轮第一位发言' })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.m.user', { hasText: '第二轮议题打断' })).toBeVisible()
     await expect(page.locator('.m.user', { hasText: '第一轮议题' })).toBeVisible()
+    // 建群注记开聊后随流留痕（空态语义的另一面：有实质对话即呈现）
+    await expect(page.locator('.sysnote', { hasText: '群「评审组」建立' })).toBeVisible()
 
     // —— 第3条消息（第3轮）：全员 [pass] → 收敛 sysnote ——
     await input.fill('第三轮全员沉默')
@@ -619,10 +622,12 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     await page.waitForTimeout(2600)
     await expect(page.locator('.stream')).not.toContainText('旧轮发言不该出现')
 
-    // —— 群上下文清空（2026-10-15 /clear 群语义修复）：清空注记 + 界面清空 + 成员历史真清空 ——
+    // —— 群上下文清空（2026-10-15 /clear 群语义修复）：界面清空 + 成员历史真清空 ——
     await input.fill('/clear')
     await input.press('Enter')
-    await expect(page.locator('.sysnote', { hasText: '上下文已清空' })).toBeVisible({ timeout: 10_000 })
+    // 清空注记落底账不呈现——空态复现（2026-10-15 群空态语义：无实质对话即空态）
+    await expect(page.locator('.stream .placeholder', { hasText: '我们能帮您做些什么' })).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('.sysnote', { hasText: '上下文已清空' })).toHaveCount(0)
     // 清空点之前的群呈现移除（旧轮消息/注记消失——transcript append-only 留证）
     await expect(page.locator('.stream')).not.toContainText('第二轮议题打断')
     await expect(page.locator('.stream')).not.toContainText('全员 pass')
@@ -645,8 +650,12 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     await expect(page.locator('.roster-sec', { hasText: '群组' })).toBeVisible()
     await expect(page.locator('.roster-item.active', { hasText: '评审组' })).toBeVisible()
 
-    // —— ctx 群状态屏（群无 Box 如实）+ 群档案（成员行 + 轮转边界 kv） ——
-    await expect(page.locator('.ctx-screen.is-static')).toContainText('群聊无 Box')
+    // —— ctx 群成员屏（2026-10-15 语义修正：每个 Agent 一块可控制屏幕——原「群聊无 Box」静态屏退役）+ 群档案 ——
+    await expect(page.locator('.cg-screen')).toHaveCount(2) // 管家 + worker1
+    await expect(page.locator('.cg-screen', { hasText: '管家' })).toBeVisible()
+    await expect(page.locator('.cg-screen', { hasText: 'worker1' })).toBeVisible()
+    // 提示条与私聊屏同款（2026-10-15 用户裁定对齐：cs-hint 在场——GUI 按钮受能力门不呈现在此验证不了）
+    await expect(page.locator('.cg-screen .cs-hint').first()).toContainText('点击进入 Box 操作台')
     await page.getByTitle('会话档案').click()
     await expect(page.locator('.ctx-name')).toHaveText('评审组')
     await expect(page.locator('.ctx-sec', { hasText: '成员' })).toBeVisible()

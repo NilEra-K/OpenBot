@@ -65,6 +65,13 @@
   flex: none;
 }
 
+/* 群头像（2026-10-15）：中性底 + 双人图标——与名册/档案 avatar-group 同款（聚合对象不取身份色） */
+.stream-head .avatar-group {
+  background: var(--bg3);
+  color: var(--ink2);
+  border: 1px solid var(--line-strong);
+}
+
 .sh-text {
   min-width: 0;
 }

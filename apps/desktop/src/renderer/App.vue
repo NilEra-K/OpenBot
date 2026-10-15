@@ -359,11 +359,6 @@ onUnmounted(() => kernel.shutdown())
   background: var(--bg2);
 }
 
-/* 名册条目浅色边界（与栏底同明度导致边界模糊） */
-:root[data-theme='light'] .roster-item {
-  border-color: rgba(0, 0, 0, 0.07);
-}
-
 * {
   box-sizing: border-box;
   margin: 0;

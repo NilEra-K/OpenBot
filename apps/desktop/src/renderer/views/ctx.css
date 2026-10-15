@@ -346,6 +346,17 @@
   cursor: pointer; /* 仍可进入操作台（PTY 会自然唤醒——休眠不是禁用） */
 }
 
+/* ---- 群成员屏（2026-10-15 用户裁定语义修正）：群会话右侧 = 每个 Agent 所能控制的屏幕 ---- */
+
+.ctx-group {
+  margin-top: 16px; /* 首屏顶距——与单屏同源 */
+}
+
+/* 成员屏间距：相邻屏 10px；复用 .ctx-screen 显示器整套（4:3 拟真 / hover / 点击） */
+.cg-screen + .cg-screen {
+  margin-top: 10px;
+}
+
 /* ---- 记忆条目行（backlog ①）：kind 徽标 + 文本，与 edge-row 同族形态 ---- */
 
 .mem-row {

@@ -8,11 +8,13 @@
  * 底部「cs-hint 提示条」：接管的去向提示（caps 分流文案——interactive 才承诺键盘接管）。
  * 档案模式（P4 Step 7，原型 ctxMode='settings'）：该会话的 Settings——档案 kv / 协作对象（edges 事实，
  * 点击跳会话）/ 记忆与自动化如实空缺态（数据源属后续版本，不放假条目）。
- * 群会话（P5 Step 4）：屏幕=群状态屏（轮转态 + 最近 sysnote——群无 Box 如实呈现）；
+ * 群会话（P5 Step 4；2026-10-15 用户裁定语义修正）：屏幕=群成员屏阵列——每个 Agent 所能
+ * 控制的 Box 屏幕（exec 实况与私聊屏同源投影，点击进该成员操作台）；
  * 档案=群档案（成员行跳会话 + 轮转边界如实 kv——原型的「3 轮/10 条/每员 2 条」是编造数值不照搬）。
  * 图形界面画面（GUI 像素流）属后续版本（plan-p3 补记）。
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import type { LiveStreamBlock } from '../stores/kernel'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import BoxScreen from './BoxScreen.vue'
@@ -62,24 +64,6 @@ const groupMembers = computed(() => {
     const a = kernel.roster.find((x) => x.agentId === id)
     return { agentId: id, name: a?.name ?? id, role: a?.role === 'steward' ? '管家' : 'worker' }
   })
-})
-
-/** 群轮转中（runs 投影——成员任一 running；群本身无 run，过程归成员） */
-const groupBusy = computed(() => {
-  const g = activeGroup.value
-  if (!g) return false
-  return kernel.runs.some((r) => g.members.includes(r.agentId) && (r.state === 'queued' || r.state === 'running'))
-})
-
-/** 最近一条群 sysnote（状态屏注记行——建群/插话/收敛；无则空） */
-const lastSysnote = computed(() => {
-  const gid = ui.activeGroupId
-  if (gid === null) return ''
-  for (let i = kernel.messages.length - 1; i >= 0; i--) {
-    const m = kernel.messages[i]
-    if (m && m.groupId === gid && m.kind === 'group-sys') return m.text
-  }
-  return ''
 })
 
 /** 群记录上限（packages/messaging/src/group MAX_GROUP_RECORDS 的呈现面镜像——同源事实） */
@@ -146,6 +130,11 @@ watch(
 watch(screenBoxId, () => {
   if (screenBoxId.value !== null) fetchComputerState()
 })
+// 群模式同拉（2026-10-15 群成员屏 GUI 按钮）：screenBoxId 是私聊维度——群聊时
+// activeAgentId 不随群切换，能力门会漏探；群在场即拉（幂等）
+watch(activeGroup, (g) => {
+  if (g !== null) fetchComputerState()
+})
 
 // ---- 记忆（backlog ①）：ctx 档案打开时现拉（易态呈现——写入经 agent 工具，无事件推送；
 //      拉取失败如实空，不放假条目） ----
@@ -203,10 +192,54 @@ const lastAt = computed(() => {
   const last = screenBlocks.value.at(-1)
   return last ? fmtTime(last.at) : ''
 })
+
+// ---- 群成员屏（2026-10-15 用户裁定语义修正）：群会话右侧 = 每个 Agent 所能控制的屏幕 ----
+
+interface GroupScreen {
+  agentId: string
+  name: string
+  boxId: string | null
+  blocks: LiveStreamBlock[]
+  live: boolean
+  asleep: boolean
+  lastAt: string
+}
+
+/** 每成员一块屏：exec 实况块（每人最近 6 条，与私聊屏同参数）+ box/休眠/执行态投影——
+ *  与私聊屏同源数据（kernel.streams/roster/boxes），零内核改动 */
+const groupScreens = computed<GroupScreen[]>(() => {
+  const g = activeGroup.value
+  if (!g) return []
+  return g.members.map((id) => {
+    const blocks = kernel.streams.filter((s) => s.agentId === id && s.stream === 'exec').slice(-6)
+    const a = kernel.roster.find((x) => x.agentId === id)
+    const boxId = a?.boxId ?? null
+    return {
+      agentId: id,
+      name: a?.name ?? id,
+      boxId,
+      blocks,
+      live: blocks.some((b) => b.state === 'live'),
+      asleep: boxId !== null && kernel.boxes.find((b) => b.boxId === boxId)?.state === 'sleeping',
+      lastAt: blocks.at(-1) !== undefined ? fmtTime(blocks.at(-1)!.at) : '',
+    }
+  })
+})
+
+// 群屏 GUI 模式（2026-10-15 用户裁定）：每屏独立开关（多屏可同时 GUI）——agentId 集合；
+// 切会话不重置（与私聊 guiMode 的残留行为一致）
+const groupGui = ref<ReadonlySet<string>>(new Set())
+
+const toggleGroupGui = (agentId: string): void => {
+  const next = new Set(groupGui.value)
+  if (next.has(agentId)) next.delete(agentId)
+  else next.add(agentId)
+  groupGui.value = next
+}
 </script>
 
 <template>
-  <aside class="ctx" :aria-label="ui.ctxSettings ? '会话档案' : activeGroup ? '群状态屏' : 'Box 实况屏幕'">
+  <aside class="ctx" :aria-label="ui.ctxSettings ? '会话档案' : activeGroup ? '群成员屏幕' : 'Box 实况屏幕'">
     <!-- 档案模式（P4 Step 7）：返回顶栏 + 群/agent 档案分流（P5 Step 4） -->
     <template v-if="ui.ctxSettings">
       <div class="ctx-top">
@@ -329,29 +362,53 @@ const lastAt = computed(() => {
       </template>
     </template>
 
-    <!-- 群状态屏（P5 Step 4）：群无 Box 如实呈现——轮转态（runs 投影）+ 最近注记，静态不可点 -->
-    <div
-      v-else-if="activeGroup"
-      class="ctx-screen is-static"
-      role="img"
-      :aria-label="`群 ${activeGroup.name} 状态屏（${groupBusy ? '轮转中' : '空闲'}）`"
-    >
-      <div class="cs-bar">
-        <!-- 状态点（与 agent 屏同款——文字徽标退役，语义进 title/aria） -->
-        <span
-          class="cs-live"
-          :class="{ asleep: !groupBusy }"
-          :title="groupBusy ? '轮转中' : '空闲'"
-          :aria-label="groupBusy ? '轮转中' : '空闲'"
-        >
-          <span class="stat-dot" :class="{ working: groupBusy }"></span>
-        </span>
-        <span class="mono">{{ activeGroup.name }}</span>
-        <span class="mono">{{ activeGroup.members.length }} 成员</span>
-      </div>
-      <div class="cs-term">
-        <div class="ctx-idle">群聊无 Box——成员在各自 Box 执行，过程与产出见成员会话
-{{ lastSysnote ? `最近注记：${lastSysnote}` : '注记（建群 / 收敛 / 插话）随群流出现' }}</div>
+    <!-- 群成员屏（2026-10-15 用户裁定语义修正）：群会话右侧 = 每个 Agent 所能控制的屏幕——
+         每成员一块显示器（exec 实况与私聊屏同源投影）；点击成员屏进该成员的 Box 操作台（与
+         私聊屏点击同语义）；GUI 切换与 cs-hint 同私聊屏（每屏独立 GUI 开关——多屏可同时 GUI）；
+         群栏撤除（2026-10-15 用户裁定：群名/成员数归 stream-head 与群档案，不在此重复）；
+         取代旧「群聊无 Box」静态屏 -->
+    <div v-else-if="activeGroup" class="ctx-group" :aria-label="`群 ${activeGroup.name} 成员屏幕`">
+      <div
+        v-for="s in groupScreens"
+        :key="s.agentId"
+        class="ctx-screen cg-screen"
+        :class="{ 'is-static': !s.boxId, 'is-asleep': s.asleep }"
+        :role="s.boxId ? 'button' : undefined"
+        :tabindex="s.boxId ? 0 : undefined"
+        :title="s.boxId ? `进入 ${s.name} 的 Box 操作台（${s.boxId}）` : undefined"
+        :aria-label="s.boxId ? `进入 ${s.name} 的 Box 操作台` : undefined"
+        @click="s.boxId !== null && ui.openBoxOps(s.boxId, 'term')"
+        @keydown.enter.prevent="s.boxId !== null && ui.openBoxOps(s.boxId, 'term')"
+      >
+        <div class="cs-bar">
+          <span
+            class="cs-live"
+            :class="{ asleep: !s.live }"
+            :title="s.live ? '执行中' : s.asleep ? '休眠中' : '空闲'"
+            :aria-label="s.live ? '执行中' : s.asleep ? '休眠中' : '空闲'"
+          >
+            <span class="stat-dot" :class="{ working: s.live }"></span>
+          </span>
+          <span class="mono">{{ s.name }}</span>
+          <span class="mono">{{ s.lastAt }}</span>
+          <button
+            v-if="computerEnabled && s.boxId"
+            class="gui-toggle"
+            type="button"
+            :aria-label="groupGui.has(s.agentId) ? '切回终端流' : '切到 GUI 桌面'"
+            @click.stop="toggleGroupGui(s.agentId)"
+          >{{ groupGui.has(s.agentId) ? '终端' : 'GUI' }}</button>
+        </div>
+        <GuiScreen v-if="groupGui.has(s.agentId) && s.boxId" :box-id="s.boxId" />
+        <div v-else class="cs-term">
+          <BoxScreen v-if="s.blocks.length > 0" :blocks="s.blocks" />
+          <div v-else-if="s.asleep" class="ctx-idle">Box 休眠中——rootfs 在磁盘，随时可唤醒</div>
+          <div v-else class="ctx-idle">等待任务派发——{{ s.name }} 在 Box 内执行命令时，这里实时显示屏幕输出</div>
+        </div>
+        <div v-if="s.boxId" class="cs-hint">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="TERMINAL_ICON"></svg>
+          <span>{{ kernel.caps?.interactive ? '点击进入 Box 操作台 · 键盘直接接管' : '点击进入 Box 操作台 · 查看实况' }}</span>
+        </div>
       </div>
     </div>
 

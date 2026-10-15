@@ -160,7 +160,11 @@ const groupUnits = computed<GroupUnit[]>(() => {
   return units
 })
 
-/** agent 首字母（头像用） */
+/** 群流空态判定（2026-10-15 用户需求）：无实质对话（user/agent 单元）——divider/sys 不算；
+ * 建群/清空注记留在底账，开聊后随流呈现留痕（空态与 Agent 同款：icon + 问候语） */
+const groupUnitsEmpty = computed(
+  () => !groupUnits.value.some((u) => u.kind === 'user' || u.kind === 'agent'),
+)
 const initialOf = (id: string): string => (kernel.roster.find((a) => a.agentId === id)?.name ?? id).trim().charAt(0) || '?'
 
 /** agent 显示名（群成员署名等——name 缺席回退 id） */
@@ -1148,6 +1152,9 @@ const PANELCOL = '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M1
 const PANELEXP = '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M14.5 5v14"/><path d="M8 10.5L10.5 12 8 13.5"/>'
 /** 档案入口图标（CommandPalette ICONS.sliders 同源） */
 const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>'
+/** 群头像图标（2026-10-15：与 RosterPanel/CtxPanel GROUP_ICON 同源 path；视图 0 0 24 24） */
+const GROUP_ICON =
+  '<path d="M9.3 4.6a3 3 0 1 0 0 6 3 3 0 0 0 0-6M3.2 19.5c0-3.3 2.7-5.4 6.1-5.4 1.7 0 3.2.6 4.3 1.6M16.9 6a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M16.4 14.3c2.7.3 4.5 2.1 4.5 4.9"/>'
 </script>
 
 <template>
@@ -1156,8 +1163,10 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
 
     <div class="streamcol">
       <div class="stream-head">
-        <div v-if="activeGroup" class="avatar" style="background: var(--accent)">群</div>
-        <!-- v0.1.65：agent 头像 → BotBall 小球（身份色染身；群头像保留原样） -->
+        <div v-if="activeGroup" class="avatar avatar-group">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="GROUP_ICON"></svg>
+        </div>
+        <!-- v0.1.65：agent 头像 → BotBall 小球（身份色染身）；2026-10-15：群头像「群」字 → 双人图标（名册/档案同款中性底） -->
         <div v-else class="avatar">
           <BotBallAvatar :color="kernel.colorOf(ui.activeAgentId)" :state="activeRun !== null ? 'working' : 'idle'" />
         </div>
@@ -1230,46 +1239,62 @@ const SLIDERS = '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" 
       </div>
 
       <!-- stream-empty（2026-10-15 用户需求）：流区无内容时整层 flex 居中（含 bootError/群空态同款）；
-           stream-inner 结构与样式不动（轮锚测量依赖、消息流 margin 折叠不受 flex 化影响） -->
-      <div ref="streamEl" class="stream" :class="{ 'stream-empty': streamUnits.length === 0 }" @scroll.passive="onStreamScroll">
+           stream-inner 结构与样式不动（轮锚测量依赖、消息流 margin 折叠不受 flex 化影响）；
+           群聊判定看实质对话（groupUnitsEmpty）——群消息不走 streamUnits 过滤链 -->
+      <div
+        ref="streamEl"
+        class="stream"
+        :class="{ 'stream-empty': activeGroup ? groupUnitsEmpty : streamUnits.length === 0 }"
+        @scroll.passive="onStreamScroll"
+      >
         <div ref="streamInnerEl" class="stream-inner">
           <p v-if="kernel.bootError" class="placeholder">内核未连接：{{ kernel.bootError }}</p>
 
           <!-- 群聊流（P5 Step 4）：群消息没有 think/exec 卡（过程归成员各自会话）——
                用户气泡 + 成员发言（身份色署名）+ sysnote 系统注记（建群/缺席/收敛） -->
           <template v-else-if="activeGroup">
-            <p v-if="groupUnits.length === 0" class="placeholder">群聊开启——发消息触发成员轮转（有界：上限内依序响应，全员 pass 收敛）</p>
-            <template v-for="unit in groupUnits" :key="unit.key">
-              <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
-              <div v-else-if="unit.kind === 'sys'" class="sysnote">{{ kernel.messages[unit.msgIndex]!.text }}</div>
-              <div v-else-if="unit.kind === 'user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
-                <div class="m-body">
-                  <div class="m-meta">
-                    <span class="m-name">你</span>
-                    <span class="m-time">{{ fmtTime(unit.at) }}</span>
-                    <span v-if="kernel.messages[unit.msgIndex]!.pending" class="m-state">发送中…</span>
-                    <button v-else-if="kernel.messages[unit.msgIndex]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
-                  </div>
-                  <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
-                </div>
+            <!-- 空态（2026-10-15 用户需求）：与 Agent 空态同款（icon + 问候语，图标同源内联）——
+                 无实质对话（user/agent）时 sysnote/divider 不呈现（建群/清空注记留底账，开聊后随流留痕）；
+                 取代旧纯文本空态（其 length===0 判定因建群必落建群 sysnote 恒不可达） -->
+            <div v-if="groupUnitsEmpty" class="placeholder">
+              <div class="placeholder-icon" aria-hidden="true">
+                <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><circle cx="8.5" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="12" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15.5" cy="10" r="1.2" fill="currentColor" stroke="none"></circle></svg>
               </div>
-              <div v-else class="m">
-                <!-- v0.1.66：消息流头像移除（用户裁定）——归属靠署名色（m-name 保留） -->
-                <div class="m-body">
-                  <div class="m-meta">
-                    <span class="m-name" :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex]!.from) }">
-                      {{ nameOf(kernel.messages[unit.msgIndex]!.from) }}
-                    </span>
-                    <span class="m-time">{{ fmtTime(unit.at) }}</span>
+              <div>我们能帮您做些什么？</div>
+            </div>
+            <template v-else>
+              <template v-for="unit in groupUnits" :key="unit.key">
+                <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
+                <div v-else-if="unit.kind === 'sys'" class="sysnote">{{ kernel.messages[unit.msgIndex]!.text }}</div>
+                <div v-else-if="unit.kind === 'user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
+                  <div class="m-body">
+                    <div class="m-meta">
+                      <span class="m-name">你</span>
+                      <span class="m-time">{{ fmtTime(unit.at) }}</span>
+                      <span v-if="kernel.messages[unit.msgIndex]!.pending" class="m-state">发送中…</span>
+                      <button v-else-if="kernel.messages[unit.msgIndex]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
+                    </div>
+                    <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
                   </div>
-                  <div class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
                 </div>
+                <div v-else class="m">
+                  <!-- v0.1.66：消息流头像移除（用户裁定）——归属靠署名色（m-name 保留） -->
+                  <div class="m-body">
+                    <div class="m-meta">
+                      <span class="m-name" :style="{ color: kernel.colorOf(kernel.messages[unit.msgIndex]!.from) }">
+                        {{ nameOf(kernel.messages[unit.msgIndex]!.from) }}
+                      </span>
+                      <span class="m-time">{{ fmtTime(unit.at) }}</span>
+                    </div>
+                    <div class="m-text md" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
+                  </div>
+                </div>
+              </template>
+              <!-- 轮转占位（与私聊同款结构——.m-text.typing .dot 三点动画） -->
+              <div v-if="groupBusy" class="m-text typing" aria-label="成员轮转中">
+                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
               </div>
             </template>
-            <!-- 轮转占位（与私聊同款结构——.m-text.typing .dot 三点动画） -->
-            <div v-if="groupBusy" class="m-text typing" aria-label="成员轮转中">
-              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            </div>
           </template>
 
           <!-- 空态：icon + 文案（2026-10-13 用户需求，视觉语言参考跨用户房间空态）——
