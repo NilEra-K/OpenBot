@@ -504,18 +504,20 @@ describe('TurnRunner A2A 链路（chat → send_message → 对端 turn → box 
     await h.groups.sendUserMessage({ groupId: group.groupId, text: '各自说说', nonce: 'n1' })
     await waitIdle([s1, s2])
 
-    // 群流：建群 sys + user + a1 发言（a2 [pass] 不落群流）
+    // 群流：建群 sys + user + a1 发言 + a2 pass 注记（2026-10-15 pass 可见化——[pass] 本身不落群流）
     expect((await h.transcript.readAll(group.groupId)).map((r) => r.kind)).toEqual([
       'group-sys',
       'group-user',
       'group-agent',
+      'group-sys',
     ])
+    expect(((await h.transcript.readAll(group.groupId))[3]?.payload as { text: string }).text).toBe('a2 本轮 pass')
     const agentRecord = (await h.transcript.readAll(group.groupId))[2]?.payload as { from: string; text: string }
     expect(agentRecord).toMatchObject({ from: 'a1', text: 'a1 的群发言' })
     // 私聊流零污染：群里说的话不出现在 1:1 会话（过程 thinking 归 agent 不算领域消息）
     expect((await h.transcript.readAll('a1')).filter((r) => r.kind === 'agent')).toHaveLength(0)
-    // 事件族：group.message = sys + user + agent（[pass] 不发）
-    expect(h.events.filter((e) => e.type === 'v1.group.message')).toHaveLength(3)
+    // 事件族：group.message = sys + user + agent + a2 pass 注记（2026-10-15 pass 可见化——[pass] 本身不发）
+    expect(h.events.filter((e) => e.type === 'v1.group.message')).toHaveLength(4)
     // a2 的 turn 输入：群前缀 + a1 已发言上下文（轮转传递）+ [pass] 指令
     const p2 = h.llms.get('a2')!
     const last = p2.requests[0]?.messages.at(-1)?.content ?? ''

@@ -486,6 +486,14 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     )
     .register('v1.group.list', async () => groups.list())
     .register(
+      'v1.group.clear',
+      async (payload) => {
+        const { groupId } = groupClearSchema.parse(payload)
+        return groups.clearContext({ groupId })
+      },
+      groupClearSchema,
+    )
+    .register(
       'v1.group.send',
       async (payload) => {
         const { groupId, text, nonce } = groupSendSchema.parse(payload)
@@ -708,3 +716,6 @@ const groupCreateSchema = z.object({
   memberAgentIds: z.array(z.string().min(1)).min(1),
 })
 const groupSendSchema = z.object({ groupId: z.string().min(1), text: z.string().min(1), nonce: z.string().min(1) })
+
+/** 群上下文清空（2026-10-15 /clear 群语义）：清空点落群流 + 在途轮作废 */
+const groupClearSchema = z.object({ groupId: z.string().min(1) })

@@ -558,6 +558,8 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     { match: (l) => l.role === 'user' && l.content.includes('本轮已发言'), text: '[pass]' },
     // 第3轮全员 [pass]：无人发言 → 收敛 sysnote（首位 pass 后上下文仍空，同此步命中）
     { match: (l) => l.role === 'user' && l.content.includes('· 第3轮]') && !l.content.includes('本轮已发言'), text: '[pass]' },
+    // 第4轮（群上下文清空后）：首位成员即时发言——历史断言见用例尾（清空点前内容不进请求）
+    { match: (l) => l.role === 'user' && l.content.includes('· 第4轮]') && !l.content.includes('本轮已发言'), text: '清空后首答' },
   ])
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-group-'))
   const app = await _electron.launch({
@@ -616,6 +618,28 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     // 旧轮响应（延迟 2.6s）settle 后被代际丢弃——不落群流
     await page.waitForTimeout(2600)
     await expect(page.locator('.stream')).not.toContainText('旧轮发言不该出现')
+
+    // —— 群上下文清空（2026-10-15 /clear 群语义修复）：清空注记 + 界面清空 + 成员历史真清空 ——
+    await input.fill('/clear')
+    await input.press('Enter')
+    await expect(page.locator('.sysnote', { hasText: '上下文已清空' })).toBeVisible({ timeout: 10_000 })
+    // 清空点之前的群呈现移除（旧轮消息/注记消失——transcript append-only 留证）
+    await expect(page.locator('.stream')).not.toContainText('第二轮议题打断')
+    await expect(page.locator('.stream')).not.toContainText('全员 pass')
+    // 再发消息（第4轮）：成员请求历史不含清空点前内容（上下文真清空——mock 请求留痕对账）
+    await input.fill('第四轮新话题')
+    await input.press('Enter')
+    await expect(page.locator('.m-text.md', { hasText: '清空后首答' })).toBeVisible({ timeout: 15_000 })
+    const round4 = mock.requests.filter((r) =>
+      (r.messages as Array<{ role: string; content: string }>).some((m) => m.content.includes('· 第4轮]')),
+    )
+    expect(round4.length).toBeGreaterThan(0)
+    const round4History = round4
+      .map((r) => (r.messages as Array<{ content?: string }>).map((m) => m.content ?? '').join('\n'))
+      .join('\n')
+    expect(round4History).not.toContain('第一轮议题')
+    expect(round4History).not.toContain('新轮第一位发言')
+    expect(round4History).toContain('第四轮新话题')
 
     // —— 名册群组节：条目在场且 active（群会话中） ——
     await expect(page.locator('.roster-sec', { hasText: '群组' })).toBeVisible()

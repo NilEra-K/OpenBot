@@ -9,7 +9,7 @@ import { KernelError } from '@openbot/core'
 import type { ActiveRun, EventBus, RunExecutor } from '@openbot/core'
 import type { TranscriptStore } from '@openbot/state'
 import type { A2aRunPayload, GroupTurnPayload, UserChatRunPayload } from '@openbot/messaging'
-import { GROUP_PASS_TOKEN } from '@openbot/messaging'
+import { GROUP_CONTEXT_CLEAR_MARKER, GROUP_PASS_TOKEN } from '@openbot/messaging'
 import { LlmError } from '@openbot/llm'
 import type { ChatMessage, ChatProvider, ToolSpec } from '@openbot/llm'
 import type { RunStreamEvent } from '../stream/index.js'
@@ -117,7 +117,7 @@ export class TurnRunner {
       return this.#runTurn(run, {
         userMessage: {
           role: 'user',
-          content: `[群 ${payload.groupId} · 第${payload.round}轮]${mentioned} ${payload.text}\n${ctx}（群聊轮转：若无补充请只回复 ${'[pass]'}）`,
+          content: `[群 ${payload.groupId} · 第${payload.round}轮]${mentioned} ${payload.text}\n${ctx}（群聊轮转：仅当你确实无话可说时才回复 ${'[pass]'}；用户要求每位成员回应或点名你时必须直接回应，不要因他人已发言而 ${'[pass]'}）`,
         },
         originMessageId: payload.messageId,
         session: {
@@ -192,11 +192,22 @@ export class TurnRunner {
     // 截断、tombstone/revive；再叠 session 内窗口上限（最近 SESSION_WINDOW 条——会话再长
     // 也不无限累积，长对话 token 纪律）
     const sessionKey = input.session?.groupId ?? agentId
-    const view = sessionView(
-      (await this.#deps.transcript.readAll(sessionKey)).filter(
-        (record) => messageIdOf(record.payload) !== input.originMessageId,
-      ),
+    let records = (await this.#deps.transcript.readAll(sessionKey)).filter(
+      (record) => messageIdOf(record.payload) !== input.originMessageId,
     )
+    if (input.session) {
+      // 群上下文清空点（2026-10-15 /clear 群语义）：最后清空点之后的记录才进历史——成员
+      // 忘记清空前的轮次（transcript append-only 留证；对齐私聊 sessionView 会话边界语义）
+      let clearIdx = -1
+      for (let i = records.length - 1; i >= 0; i -= 1) {
+        if ((records[i]!.payload as { marker?: unknown }).marker === GROUP_CONTEXT_CLEAR_MARKER) {
+          clearIdx = i
+          break
+        }
+      }
+      if (clearIdx >= 0) records = records.slice(clearIdx + 1)
+    }
+    const view = sessionView(records)
     const effective = view.records.slice(-SESSION_WINDOW_MESSAGES)
     const history = toChatMessages(
       await this.#injectSessionRefs(agentId, effective),

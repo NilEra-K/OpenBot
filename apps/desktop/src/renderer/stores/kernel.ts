@@ -12,6 +12,10 @@ import type { GatewayClient, GatewayEndpoint } from '../lib/gateway'
 import type { StreamClient } from '../lib/stream'
 import type { KernelEvent } from '@openbot/transport'
 
+/** 群上下文清空点标记（2026-10-15 /clear 群语义）——与 @openbot/messaging
+ *  GROUP_CONTEXT_CLEAR_MARKER 同源字面量（renderer 不直依赖内核包；改内核侧须同步此处） */
+const GROUP_CONTEXT_CLEAR_MARKER = 'context-clear'
+
 /** preload 注入的全局（index.cts 暴露；E2E 可在页面加载前替换） */
 interface OpenbotGlobal {
   desktop: boolean
@@ -636,6 +640,11 @@ export const useKernelStore = defineStore('kernel', {
       const r = await this.call<{ sessionId: string }>('v1.session.clear', { agentId })
       return r.sessionId
     },
+    /** 群上下文清空（2026-10-15 /clear 群语义）：清空点落群流 + 在途轮作废（内核侧）；
+     *  呈现清空走 v1.group.cleared 事件（与私聊 v1.session.cleared 同款实时路径） */
+    async groupClear(groupId: string): Promise<void> {
+      await this.call('v1.group.clear', { groupId })
+    },
     async sessionResume(agentId: string, sessionId?: string): Promise<void> {
       await this.call('v1.session.resume', { agentId, ...(sessionId !== undefined ? { sessionId } : {}) })
     },
@@ -793,8 +802,19 @@ export const useKernelStore = defineStore('kernel', {
       }
       if (bootBoundaries.length > 0) this.sessionBoundaries[agentId] = bootBoundaries
       // 界面直接清空（v0.1.50 用户裁定）：有效窗口 = 最后边界之后——更早的消息不投影到呈现层
-      // （transcript append-only 留证；与实时 cleared 事件的 filter 同款语义）
-      const windowStartAt = bootBoundaries.length > 0 ? bootBoundaries[bootBoundaries.length - 1]!.at : Number.NEGATIVE_INFINITY
+      // （transcript append-only 留证；与实时 cleared 事件的 filter 同款语义）。
+      // 群键叠加清空点窗口（2026-10-15 /clear 群语义）：最后 group-sys 清空点之后才投影
+      // （agent 键无 marker 记录，扫描无害——两窗口取交集即 max）
+      let groupClearAt = Number.NEGATIVE_INFINITY
+      for (const record of records) {
+        if (record.kind === 'group-sys' && (record.payload as Record<string, unknown>)['marker'] === GROUP_CONTEXT_CLEAR_MARKER) {
+          groupClearAt = record.at
+        }
+      }
+      const windowStartAt = Math.max(
+        bootBoundaries.length > 0 ? bootBoundaries[bootBoundaries.length - 1]!.at : Number.NEGATIVE_INFINITY,
+        groupClearAt,
+      )
       for (const m of this.messages) {
         if (bootTombstoned.has(m.messageId)) m.tombstoned = true
         const revised = bootRevisions.get(m.messageId)
@@ -1019,6 +1039,13 @@ export const useKernelStore = defineStore('kernel', {
             at: event.at,
             groupId: p.groupId,
           })
+          return
+        }
+        case 'v1.group.cleared': {
+          // 群上下文清空（2026-10-15 /clear 群语义）：界面直接清空（对齐 v1.session.cleared
+          // 裁定：不折叠）——清空点之前的群呈现移除（transcript append-only 留证；boot 恢复
+          // 同款过滤见 loadHistory；过程事实归 agent 流不随群清）
+          this.messages = this.messages.filter((m) => m.groupId !== event.payload.groupId || m.at >= event.at)
           return
         }
         case 'v1.group.state':

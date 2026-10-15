@@ -382,8 +382,15 @@ const toggleTombstone = async (m: { messageId: string; from?: string; tombstoned
     toast.push(err instanceof Error ? err.message : String(err), 'error')
   }
 }
-/** 发送前拦截：/clear /resume 不进消息流——直接走命令面（菜单关闭时的兜底路径） */
+/** 发送前拦截：/clear /resume 不进消息流——直接走命令面（菜单关闭时的兜底路径）。
+ *  群会话分流（2026-10-15 用户报障 /clear 群语义错位）：群上下文=群流记录，清空走群命令
+ *  （清空点切窗口，成员忘记之前轮次）——此前误清 activeAgentId 的私聊会话，群上下文原封未动 */
 const doSlashClear = async (): Promise<void> => {
+  if (ui.activeGroupId !== null) {
+    await kernel.groupClear(ui.activeGroupId)
+    toast.push('群上下文已清空——成员不再记得之前的群聊（transcript 留证）', 'success')
+    return
+  }
   const sid = await kernel.sessionClear(ui.activeAgentId)
   toast.push(`已开启新会话 ${sid}（上下文与界面已清空，transcript 留证）`, 'success')
 }

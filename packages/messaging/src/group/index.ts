@@ -31,6 +31,11 @@ export const MAX_GROUP_RECORDS = 200
 /** [pass] 约定：群成员轮转中无话可说的标准回复（turn prompt 告知） */
 export const GROUP_PASS_TOKEN = '[pass]'
 
+/** 群上下文清空点（2026-10-15 /clear 群语义）：group-sys payload.marker——runner 历史注入与
+ *  renderer 呈现恢复按最后清空点切窗口（transcript append-only 留证，上下文真清空）。
+ *  renderer 侧有同源字面量（stores/kernel.ts——不直依赖内核包，改此处须同步） */
+export const GROUP_CONTEXT_CLEAR_MARKER = 'context-clear'
+
 /** 群成员 turn 负载（runner 解释执行；群上下文随轮转推进动态构造） */
 export interface GroupTurnPayload {
   messageId: string
@@ -168,6 +173,35 @@ export class GroupService {
     return { messageId, runIds }
   }
 
+  /** 群上下文清空（2026-10-15 用户报障 /clear 群语义错位）：群流追加清空点 sys（append-only
+   *  留证不动历史）+ 在途轮作废（同 supersede 语义）；成员历史注入按最后清空点过滤（runner 侧） */
+  async clearContext(input: { groupId: string }): Promise<{ messageId: string }> {
+    const group = this.#groups.get(input.groupId)
+    if (!group) throw new KernelError(GroupErrorCodes.GROUP_NOT_FOUND, `群不存在：${input.groupId}`)
+    const messageId = this.#deps.nextMessageId()
+    await this.#deps.transcript.append(input.groupId, 'group-sys', {
+      messageId,
+      from: 'system',
+      text: '上下文已清空（/clear）——成员不再记得之前的群聊',
+      marker: GROUP_CONTEXT_CLEAR_MARKER,
+      at: this.#deps.now(),
+    })
+    this.#deps.bus.emit('v1.group.message', {
+      groupId: input.groupId,
+      messageId,
+      kind: 'sys',
+      from: 'system',
+      text: '上下文已清空（/clear）——成员不再记得之前的群聊',
+    })
+    this.#deps.bus.emit('v1.group.cleared', { groupId: input.groupId })
+    const rt = this.#runtimeOf(input.groupId)
+    rt.gen += 1 // 在途轮作废（旧轮终答按代际静默丢弃——同 sendUserMessage 的 supersede 语义）
+    rt.spoken = []
+    rt.passed = []
+    rt.running = false
+    return { messageId }
+  }
+
   /** 文本中被 @ 的群成员（一期命中面 = @agentId——显示名匹配需名册事实注入，记档后续） */
   #mentionedOf(text: string, group: GroupRecord): string[] {
     return group.members.filter((m) => text.includes(`@${m}`))
@@ -232,6 +266,9 @@ export class GroupService {
     if (outcome.state !== 'succeeded') {
       await this.#sys(groupId, `${memberId} 未响应（${outcome.code ?? outcome.state}）`)
     }
+    // pass 可见化（2026-10-15 用户报障「有些 Agent 像是没工作」）：单成员 pass 记轻量注记——
+    // 此前仅全员 pass 收敛才留痕，个别成员轮过但 pass 在 UI 上不可见
+    if (outcome.state === 'succeeded') await this.#sys(groupId, `${memberId} 本轮 pass`)
     rt.passed.push(memberId)
     this.#advance(group, rt)
   }

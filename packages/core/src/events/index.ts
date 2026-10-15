@@ -207,6 +207,11 @@ export interface GroupStatePayload {
   cause: 'created' | 'removed'
 }
 
+/** 群上下文清空（2026-10-15 /clear 群语义）：清空点已落群流——renderer 清群呈现的时机信号 */
+export interface GroupClearedPayload {
+  groupId: string
+}
+
 /** 事件类型 → payload 的唯一映射（v2 破坏性变更时另起 map） */
 export interface KernelEventMap {
   'v1.lifecycle.queued': LifecycleQueuedPayload
@@ -220,6 +225,7 @@ export interface KernelEventMap {
   'v1.message.a2a': MessageA2aPayload
   'v1.group.message': GroupMessagePayload
   'v1.group.state': GroupStatePayload
+  'v1.group.cleared': GroupClearedPayload
   'v1.box.state': BoxStatePayload
   'v1.box.exec': BoxExecPayload
   'v1.box.stats': BoxStatsPayload

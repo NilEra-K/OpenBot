@@ -190,6 +190,49 @@ describe('GroupService 有界轮转', () => {
     await h.flush()
   })
 
+  it('群上下文清空（/clear 群语义）：清空点落群流（marker）+ v1.group.cleared 事件 + 在途轮作废', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: 'group-1', text: '第一问', nonce: 'n1' })
+    // a1 挂起中执行清空——在途轮作废（代际 bump，同 supersede 语义）
+    const { messageId } = await h.service.clearContext({ groupId: 'group-1' })
+    expect(messageId).not.toBe('')
+    const records = await h.transcript.readAll('group-1')
+    const clearRec = records.find((r) => (r.payload as { marker?: string }).marker === 'context-clear')
+    expect(clearRec?.kind).toBe('group-sys')
+    expect(kinds(h.events, 'v1.group.cleared')).toBe(1)
+    // 旧 a1 turn 结算（gen 不匹配）静默丢弃：不推进 a2
+    h.gates[0]?.resolve({ text: '旧轮回复' })
+    await h.flush()
+    expect(h.gates).toHaveLength(1)
+    // 清空后再发消息：新轮从 a1 起（round 递进；spoken 已清）
+    await h.service.sendUserMessage({ groupId: 'group-1', text: '新话题', nonce: 'n2' })
+    expect(h.gates[1]?.run.agentId).toBe('a1')
+    const payload = h.gates[1]!.run.payload as { text: string; round: number; context: string[] }
+    expect(payload.text).toBe('新话题')
+    expect(payload.round).toBe(2)
+    expect(payload.context).toEqual([])
+    h.gates[1]?.resolve({ text: '新答' })
+    await h.flush()
+  })
+
+  it('单成员 pass 可见化：pass 即记轻量 sysnote；部分 pass 不触发收敛注记', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: 'group-1', text: '各自说说', nonce: 'n1' })
+    h.gates[0]?.resolve({ text: '我先说' })
+    await h.flush()
+    h.gates[1]?.resolve({ text: '[pass]' }) // a2 pass——部分 pass（非全员）
+    await h.flush()
+    const records = await h.transcript.readAll('group-1')
+    expect(records.some((r) => (r.payload as { text?: string }).text === 'a2 本轮 pass')).toBe(true)
+    expect(records.some((r) => (r.payload as { text?: string }).text?.includes('全员 pass'))).toBe(false)
+  })
+
   it('@提及优先：点名成员先发言', async () => {
     const h = makeHarness()
     h.register('a1')
