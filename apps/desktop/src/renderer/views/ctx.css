@@ -393,6 +393,8 @@
 }
 
 .gui-toggle:hover {
-  color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.4);
+  /* 恒深底（cs-bar 显示器拟真区）上的 hover——纯白，任何主题清晰（同 cs-hint 2026-09-06 裁定；
+     日间 accent 是墨黑 #1a1a1a，落在近黑屏底同色看不清） */
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.45);
 }
