@@ -18,6 +18,7 @@ import ApprovalModal from './components/ApprovalModal.vue'
 import BoxOps from './components/BoxOps.vue'
 import ToastHost from './components/ToastHost.vue'
 import CommandPalette from './components/CommandPalette.vue'
+import ContextMenu from './components/ContextMenu.vue'
 import AgentWizard from './components/AgentWizard.vue'
 import GroupWizard from './components/GroupWizard.vue'
 
@@ -261,6 +262,9 @@ onUnmounted(() => kernel.shutdown())
 
     <!-- 命令面板（P4 Step 3）：Ctrl K / omnibox 唤起 -->
     <CommandPalette />
+
+    <!-- 全局右键菜单（2026-10-16 微信式自绘）：main context-menu 经 preload 订阅 -->
+    <ContextMenu />
 
     <!-- 新建 agent 向导（P4 Step 5）：名册入口与命令面板动作共用 -->
     <AgentWizard />

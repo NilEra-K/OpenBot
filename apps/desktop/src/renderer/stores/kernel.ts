@@ -16,6 +16,33 @@ import type { KernelEvent } from '@openbot/transport'
  *  GROUP_CONTEXT_CLEAR_MARKER 同源字面量（renderer 不直依赖内核包；改内核侧须同步此处） */
 const GROUP_CONTEXT_CLEAR_MARKER = 'context-clear'
 
+/** 右键菜单上下文（main context-menu params 精简；坐标已由 main 换算为页面坐标） */
+export interface ContextMenuPayload {
+  x: number
+  y: number
+  isEditable: boolean
+  canUndo: boolean
+  canCut: boolean
+  canCopy: boolean
+  canPaste: boolean
+  canSelectAll: boolean
+  selectionText: string
+  linkURL: string
+}
+
+/** 右键菜单动作（renderer 自绘菜单回传 main 执行——编辑动作须由 webContents 施于焦点元素） */
+export type MenuAction =
+  | 'undo'
+  | 'cut'
+  | 'copy'
+  | 'paste'
+  | 'selectAll'
+  | 'copyLink'
+  | 'openLink'
+  | 'inspect'
+  | 'reload'
+  | 'devtools'
+
 /** preload 注入的全局（index.cts 暴露；E2E 可在页面加载前替换） */
 interface OpenbotGlobal {
   desktop: boolean
@@ -29,6 +56,12 @@ interface OpenbotGlobal {
     onMaximizeChange(cb: (maximized: boolean) => void): () => void
   }
   gateway: { info(): Promise<GatewayEndpoint | null> }
+  menu: {
+    /** 订阅右键菜单请求（main 转发 context-menu 上下文，坐标为页面坐标）；返回退订函数 */
+    onContextMenu(cb: (payload: ContextMenuPayload) => void): () => void
+    /** 菜单动作回传 main 执行（url 链接项 / x,y 检查元素定位） */
+    action(action: MenuAction, payload?: { url?: string; x?: number; y?: number }): void
+  }
   app: {
     version(): Promise<string>
     /** 数据路径（设置页数据区块）：userData / data / transcript 目录 + 会话记录标记原值（null = 随数据目录） */

@@ -25,6 +25,22 @@ contextBridge.exposeInMainWorld('openbot', {
     /** 拉取网关接入点（main 装配完成后才有值；装配失败返回 null） */
     info: () => ipcRenderer.invoke('openbot:gateway') as Promise<{ port: number; token: string } | null>,
   },
+  menu: {
+    /** 订阅右键菜单请求（main 转发 context-menu 上下文，坐标已换算页面坐标）；返回退订函数 */
+    onContextMenu: (cb: (payload: {
+      x: number; y: number; isEditable: boolean
+      canUndo: boolean; canCut: boolean; canCopy: boolean; canPaste: boolean; canSelectAll: boolean
+      selectionText: string; linkURL: string
+    }) => void) => {
+      const listener = (_e: unknown, payload: unknown): void => cb(payload as never)
+      ipcRenderer.on('openbot:context-menu', listener)
+      return () => ipcRenderer.removeListener('openbot:context-menu', listener)
+    },
+    /** 菜单动作回传 main 执行（编辑动作须由 webContents 施于焦点元素——renderer 无特权面） */
+    action: (action: string, payload?: { url?: string; x?: number; y?: number }) => {
+      ipcRenderer.send('openbot:menu-action', action, payload)
+    },
+  },
   app: {
     /** 应用版本（package.json version；About 页真值——不手写不过时） */
     version: () => ipcRenderer.invoke('openbot:app-version') as Promise<string>,

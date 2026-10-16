@@ -11,6 +11,79 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockOpenAi } from './mock-openai'
 
+test('右键菜单（2026-10-16 微信式自绘）：编辑区上下文项 + 全选动作全链 + Esc/外点关闭 + 兜底调试组', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-ctxmenu-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      OPENBOT_USER_DATA: userData,
+      OPENBOT_SANDBOX: 'mock',
+    },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— 编辑区右键：编辑项 + 调试组沉底在场（撤销无输入史不放假项） ——
+    const input = page.locator('.composer-box input')
+    await input.fill('菜单全选目标文字')
+    await input.click({ button: 'right' })
+    await expect(page.locator('.ctxmenu')).toBeVisible()
+    // 坐标对账·底部场景（2026-10-16 修复回归）：输入框在视口底 → 下溢出上翻，菜单底部贴光标
+    // （曾因误减 contentBounds 致菜单偏移整个窗口位、离光标很远）
+    const inputBox = await input.boundingBox()
+    const bottomMenu = await page.locator('.ctxmenu').boundingBox()
+    expect(Math.abs(bottomMenu.y + bottomMenu.height - (inputBox.y + inputBox.height / 2))).toBeLessThanOrEqual(2)
+    await expect(page.locator('.cm-item', { hasText: '全选' })).toBeVisible()
+    await expect(page.locator('.cm-item', { hasText: '开发者工具' })).toBeVisible()
+    await expect(page.locator('.cm-item', { hasText: '剪切' })).toHaveCount(0) // flags 显隐——无选区不放假项（撤销受 fill 的 undo 栈影响不稳,不断言）
+    await page.keyboard.press('Escape')
+
+    // —— 坐标对账·中部场景：流区中部右键 → 菜单贴合光标右下 +2px ——
+    const streamBox = await page.locator('.stream').boundingBox()
+    const midX = streamBox.x + streamBox.width / 2
+    const midY = streamBox.y + streamBox.height / 2
+    await page.mouse.click(midX, midY, { button: 'right' })
+    await expect(page.locator('.ctxmenu')).toBeVisible()
+    const midMenu = await page.locator('.ctxmenu').boundingBox()
+    expect(Math.abs(midMenu.x - midX - 2)).toBeLessThanOrEqual(2)
+    expect(Math.abs(midMenu.y - midY - 2)).toBeLessThanOrEqual(2)
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.ctxmenu')).toHaveCount(0)
+
+    // —— 全选动作全链：菜单点击 → preload 回传 → main webContents.selectAll → 焦点元素（防失焦关键路径） ——
+    await input.press('End') // 先取消既有选区（fill 后光标在尾，无选区）
+    await input.click({ button: 'right' })
+    await page.locator('.cm-item', { hasText: '全选' }).click()
+    const sel = await input.evaluate((el) => {
+      const i = el as HTMLInputElement
+      return { start: i.selectionStart, end: i.selectionEnd, len: i.value.length }
+    })
+    expect(sel.start).toBe(0)
+    expect(sel.end).toBe(sel.len)
+
+    // —— 流区右键（无编辑无选中）：只调试组（检查元素/重载/DevTools） ——
+    await page.locator('.stream').click() // 先清 input 选区与焦点（防 selectionText 混入菜单）
+    await page.locator('.stream').click({ button: 'right' })
+    await expect(page.locator('.ctxmenu')).toBeVisible()
+    await expect(page.locator('.cm-item')).toHaveCount(3)
+
+    // —— Esc 关闭 + 外点关闭 ——
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.ctxmenu')).toHaveCount(0)
+    await input.click({ button: 'right' })
+    await expect(page.locator('.ctxmenu')).toBeVisible()
+    await page.locator('.stream-head').click()
+    await expect(page.locator('.ctxmenu')).toHaveCount(0)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
 test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
   const mock = await startMockOpenAi([
     // 1. steward 收用户消息 → A2A 派发给 worker1

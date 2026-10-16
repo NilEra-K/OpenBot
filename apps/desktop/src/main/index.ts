@@ -3,7 +3,7 @@
  * 加载 renderer（Vue 五视图，Step 7 起）；renderer 业务面只经环回网关（HTTP/SSE/WS），
  * 本文件是装配点（ARCHITECTURE.md §2 铁律 3 的装配例外）。
  */
-import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { dirname, join, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -73,14 +73,25 @@ function createWindow(): void {
   win.webContents.on('console-message', (_e, _level, message) => {
     if (message.trim() !== '') console.log(`[renderer] ${message}`)
   })
-  // 右键菜单：报障定位用（检查元素直接跳到 DOM 对应节点）
+  // 右键菜单（2026-10-16 用户裁定微信式紧凑）：转发 renderer 自绘（原生 Menu 上下留白无 API
+  // 可调）——params.x/y 本就是页面坐标（view 坐标；旧版「检查元素」直接喂 inspectElement 定位
+  // 精准可为佐证），直接透传；2026-10-16 修复：曾误当屏幕坐标减 contentBounds，致菜单整体
+  // 偏左上、偏移量恒等于窗口屏幕位置（用户报障两现象的根因）
   win.webContents.on('context-menu', (_e, params) => {
-    Menu.buildFromTemplate([
-      { label: '检查元素', click: () => { win?.webContents.inspectElement(params.x, params.y) } },
-      { type: 'separator' },
-      { label: '重新加载', click: () => { win?.webContents.reload() } },
-      { label: '开发者工具', click: toggleDevTools },
-    ]).popup()
+    const w = win
+    if (w === null) return
+    w.webContents.send('openbot:context-menu', {
+      x: params.x,
+      y: params.y,
+      isEditable: params.isEditable,
+      canUndo: params.editFlags.canUndo,
+      canCut: params.editFlags.canCut,
+      canCopy: params.editFlags.canCopy,
+      canPaste: params.editFlags.canPaste,
+      canSelectAll: params.editFlags.canSelectAll,
+      selectionText: params.selectionText,
+      linkURL: params.linkURL,
+    })
   })
   // 外链防御（P4 Step 11）：renderer 内 http(s) 链接一律转系统浏览器打开，永不嵌新窗口
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -125,6 +136,25 @@ ipcMain.on('openbot:win', (_e, op: string) => {
   if (op === 'minimize') win.minimize()
   else if (op === 'toggleMaximize') win.isMaximized() ? win.unmaximize() : win.maximize()
   else if (op === 'close') win.close()
+})
+
+// 右键菜单动作分发（renderer 自绘菜单经 preload 回传；编辑动作施于 webContents 焦点元素——
+// 菜单 DOM mousedown.prevent 保证焦点未被菜单抢走）
+ipcMain.on('openbot:menu-action', (_e, action: string, payload?: { url?: string; x?: number; y?: number }) => {
+  const wc = win?.webContents
+  if (wc === undefined) return
+  switch (action) {
+    case 'undo': wc.undo(); break
+    case 'cut': wc.cut(); break
+    case 'copy': wc.copy(); break
+    case 'paste': wc.paste(); break
+    case 'selectAll': wc.selectAll(); break
+    case 'copyLink': if (payload?.url !== undefined) clipboard.writeText(payload.url); break
+    case 'openLink': if (payload?.url !== undefined) void shell.openExternal(payload.url); break
+    case 'inspect': wc.inspectElement(payload?.x ?? 0, payload?.y ?? 0); break
+    case 'reload': wc.reload(); break
+    case 'devtools': toggleDevTools(); break
+  }
 })
 
 // 最大化状态初始查询（广播之外补拉——renderer 加载/重载后自行同步）
