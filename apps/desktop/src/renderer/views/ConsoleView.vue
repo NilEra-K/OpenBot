@@ -452,11 +452,12 @@ const slash = ref<{ open: boolean; mode: SlashMode; start: number; sel: number; 
 })
 const slashLoading = ref(false)
 
-/** 命令清单（子串联想；/quote 进 agent 级） */
+/** 命令清单（子串联想；/quote 进 agent 级；#讨论 为群发言模式前缀——2026-10-18 可扩展模式注册面） */
 const SLASH_COMMANDS: Array<{ name: string; sub: string }> = [
   { name: '/clear', sub: '开启新会话——上下文与界面清空（transcript 留证）' },
   { name: '/resume', sub: '选择回到某个历史会话（默认最近一个）' },
   { name: '/quote', sub: '引用某个 Agent 的会话（随下条消息注入）' },
+  { name: '#讨论', sub: '群聊独立作答——成员各抒己见、互不可见（前缀触发）' },
 ]
 
 const slashItems = computed<Array<{ key: string; label: string; sub: string; color?: string; note?: string }>>(() => {
@@ -503,24 +504,24 @@ const closeSlash = (): void => {
   slash.value = { open: false, mode: 'cmd', start: -1, sel: 0, agentId: null, q: '' }
 }
 
-/** 输入驱动（onComposerInput 内调用）：光标前缀 `/词` → 命令级联想；其余级随 draft 变化关闭 */
+/** 输入驱动（onComposerInput 内调用）：光标前缀 `/词` 或 `#词` → 命令/模式级联想；其余级随 draft 变化关闭 */
 const feedSlash = (value: string, caret: number): void => {
   // agent/session 级：用户开始打字 = 放弃菜单（Backspace 回退不触发 input——键流分支保留）
   if (slash.value.open && slash.value.mode !== 'cmd') {
     closeSlash()
     return
   }
-  const m = value.slice(0, caret).match(/(?:^|\s)\/([a-z]*)$/)
+  const m = value.slice(0, caret).match(/(?:^|\s)(?:\/([a-z]*)|#([^\s#]{0,6}))$/)
   if (m === null) {
     if (slash.value.mode === 'cmd') closeSlash()
     return
   }
-  const q = m[1]!.toLowerCase()
+  const q = (m[1] ?? m[2] ?? '').toLowerCase()
   if (!SLASH_COMMANDS.some((c) => c.name.slice(1).startsWith(q))) {
     closeSlash()
     return
   }
-  slash.value = { open: true, mode: 'cmd', start: caret - m[1]!.length - 1, sel: 0, agentId: null, q }
+  slash.value = { open: true, mode: 'cmd', start: caret - (m[1] ?? m[2])!.length - 1, sel: 0, agentId: null, q }
 }
 
 /** 移除 draft 中 slash 触发词（含 /；cmd 级选中或 quote 展开时） */
@@ -538,6 +539,22 @@ const pickSlash = (i: number): void => {
   const it = slashItems.value[i]
   if (it === undefined) return
   if (s.mode === 'cmd') {
+    // 模式前缀（2026-10-18）：插入 '#讨论 ' 到触发位（不同于 / 命令的移除语义——前缀随消息发送）
+    if (it.key === '#讨论') {
+      const el = draftEl.value
+      if (el !== null && s.start >= 0) {
+        const caret = el.selectionStart ?? el.value.length
+        ui.draft = `${ui.draft.slice(0, s.start)}#讨论 ${ui.draft.slice(Math.max(caret, s.start + 1))}`
+        void nextTick(() => {
+          el.focus()
+          el.setSelectionRange(s.start + 4, s.start + 4)
+        })
+      } else {
+        ui.draft = `#讨论 ${ui.draft}`
+      }
+      closeSlash()
+      return
+    }
     if (it.key === '/clear') {
       removeSlashToken()
       closeSlash()
@@ -1215,7 +1232,8 @@ const GROUP_ICON =
         <div class="sh-text">
           <div class="sh-name">{{ sessionTitle }}</div>
           <div class="sh-status">
-            <span v-if="activeGroup" class="chip chip-accent">群聊 · {{ activeGroup.members.length }} 成员 · 有界轮转</span>
+            <!-- 群徽标「群聊 · N 成员 · 有界轮转」已移除（2026-10-18 用户裁定：无信息量）——
+                 成员数/轮转语义仍在会话档案（ctx）与建群向导说明中 -->
             <span v-if="activeGroup && groupBusy" class="sh-warn">轮转中…</span>
             <span v-if="!activeGroup && activeAgent?.role === 'steward'" class="chip chip-accent">管家</span>
             <span v-if="!kernel.providerConfigured" class="sh-warn">模型端点未配置——回复将失败，去「设置」配置</span>
@@ -1312,6 +1330,8 @@ const GROUP_ICON =
                   <div class="m-body">
                     <div class="m-meta">
                       <span class="m-name">你</span>
+                      <!-- 独立作答徽标（2026-10-18）：#讨论/#独立 触发——成员互不可见各抒己见 -->
+                      <span v-if="kernel.messages[unit.msgIndex]!.groupMode === 'independent'" class="chip chip-accent gm-mode">独立作答</span>
                       <span class="m-time">{{ fmtTime(unit.at) }}</span>
                       <span v-if="kernel.messages[unit.msgIndex]!.pending" class="m-state">发送中…</span>
                       <button v-else-if="kernel.messages[unit.msgIndex]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
@@ -1570,7 +1590,7 @@ const GROUP_ICON =
             <input
               ref="draftEl"
               v-model="ui.draft"
-              :placeholder="remotePeer !== null ? `远端镜像会话（${remotePeer.displayName}）· 只读——对话经中继转发到达` : `对 ${activeAgent?.name ?? ui.activeAgentId} 说…（Enter 发送）`"
+              :placeholder="remotePeer !== null ? `远端镜像会话（${remotePeer.displayName}）· 只读——对话经中继转发到达` : '对 OpenBot 说出需求，使用 / 选择命令或能力'"
               :disabled="!kernel.connected || remotePeer !== null"
               autocomplete="off"
               @input="onComposerInput"

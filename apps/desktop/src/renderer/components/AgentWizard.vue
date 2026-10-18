@@ -40,12 +40,13 @@ const hueWedge = (i: number): { d: string; fill: string } => {
 const DISC_WEDGES = Array.from({ length: DISC_SEGS }, (_, i) => hueWedge(i))
 /** 自建取色器开合（v0.1.66，用户裁定替代原生色盘）：渐变环按钮切换 */
 const pickerOpen = ref(false)
-/** 角色分段：叙事四选一映射内核二值（管家=steward 走任命事务——在职时如实报错；其余=worker） */
+/** 角色分段：叙事四选一映射内核二值（管家=steward 走任命事务——在职时如实报错；其余=worker）。
+ *  persona（2026-10-18 身份修复）：角色默认人设——用户留空即按此生成（注入系统提示词，群聊不冒充管家） */
 const ROLES = [
-  { label: '管家', role: 'steward' },
-  { label: '研究员', role: 'worker' },
-  { label: '工程师', role: 'worker' },
-  { label: '观察员', role: 'worker' },
+  { label: '管家', role: 'steward', persona: '团队的管家——用户的第一对话者，统筹协调' },
+  { label: '研究员', role: 'worker', persona: '团队的研究员，负责查证事实与分析问题' },
+  { label: '工程师', role: 'worker', persona: '团队的工程师，负责动手实现与验证' },
+  { label: '观察员', role: 'worker', persona: '团队的观察员，冷静旁观，补充被忽略的角度' },
 ] as const
 const STEPS = ['身份', '模型与沙箱', '复核']
 
@@ -67,6 +68,8 @@ const onStageAfterEnter = (): void => {
   if (stageEl.value) stageEl.value.style.height = ''
 }
 const name = ref('')
+/** 人设输入（2026-10-18 身份修复）：留空按角色默认生成 */
+const persona = ref('')
 const roleIdx = ref(1) // 默认研究员（管家在职时选管家会被拒绝——默认避开高频失败路径）
 const color = ref<string>(COLORS[3])
 /** 模型覆盖（backlog ③）：空串=默认模型（自动） */
@@ -109,6 +112,7 @@ watch(
     step.value = 0
     slideName.value = 'slide-left'
     name.value = ''
+    persona.value = ''
     roleIdx.value = 1
     color.value = COLORS[3]
     imageBinding.value = ''
@@ -156,6 +160,7 @@ const next = async (): Promise<void> => {
       role: isSteward.value ? 'steward' : 'worker',
       ...(modelOverride.value !== '' ? { modelProvider: modelOverride.value } : {}),
       ...(imageBinding.value !== '' ? { imageId: imageBinding.value } : {}),
+      persona: persona.value.trim() !== '' ? persona.value.trim() : ROLES[roleIdx.value]!.persona,
     })
     toast.push(`Agent「${name.value.trim()}」已创建`, 'success')
     ui.closeWizard()
@@ -233,6 +238,17 @@ const onKeydown = (e: KeyboardEvent): void => {
               @click="roleIdx = i"
             >{{ r.label }}</button>
           </div>
+        </div>
+        <div class="wiz-field">
+          <label class="wiz-label" for="wizPersona">人设 · 留空按角色生成</label>
+          <input
+            id="wizPersona"
+            v-model="persona"
+            class="wiz-input"
+            :placeholder="`例：${ROLES[roleIdx]!.persona}`"
+            autocomplete="off"
+            maxlength="120"
+          />
         </div>
         <div class="wiz-field">
           <span class="wiz-label">身份色 · 社交图谱与会话头像</span>

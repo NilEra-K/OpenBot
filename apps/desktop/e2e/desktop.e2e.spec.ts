@@ -669,7 +669,9 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     await expect(page.locator('.sh-name')).toHaveText('评审组', { timeout: 10_000 })
     // 群空态（2026-10-15 用户需求）：建群注记不即刻呈现——空态与 Agent 同款（icon + 问候语）
     await expect(page.locator('.stream .placeholder')).toContainText('我们能帮您做些什么')
-    await expect(page.locator('.sh-status .chip')).toContainText('群聊 · 2 成员')
+    // 群徽标已移除（2026-10-18 用户裁定：无信息量）——负断言防回归；状态行回落连接态
+    await expect(page.locator('.sh-status .chip')).toHaveCount(0)
+    await expect(page.locator('.sh-status')).toContainText('已连接')
 
     // —— 第1条消息（第1轮，成员响应慢 2.6s）→ 400ms 后插话第2条：supersede ——
     const input = page.locator('.composer-box input')
@@ -2331,6 +2333,98 @@ test('会话列表（2026-10-18 改版）：标题生成 + UUID 新会话 + 相�
     await expect(page.locator('.toast.success', { hasText: '已回到会话：E2E会话标题' })).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('.m.user', { hasText: '第二段话题' })).toBeVisible()
     await expect(page.locator('.m.user', { hasText: '第三段话题' })).toHaveCount(0) // u2 时间线未走分支
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('群聊身份与独立作答（2026-10-18）：persona 自称正确 + #讨论 并发盲答互不可见 + 徽标', async () => {
+  const mock = await startMockOpenAi([
+    // 独立作答：成员按身份行区分（引号精确匹配——同伴名单无引号不误撞），各回各的
+    { match: (l) => l.content.includes('你是本群成员「管家」') && l.content.includes('独立作答'), text: '管家的独立观点：先定基调' },
+    { match: (l) => l.content.includes('你是本群成员「欧米茄」') && l.content.includes('独立作答'), text: '欧米茄的独立观点：我有不同看法' },
+    // 轮转对照（同一群）
+    { match: (l) => l.content.includes('你是本群成员「管家」') && l.content.includes('轮转一下'), text: '管家轮转发言' },
+    { match: (l) => l.content.includes('你是本群成员「欧米茄」') && l.content.includes('轮转一下'), text: '欧米茄轮转补充' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-groupid-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+
+    // —— 建欧米茄（角色默认研究员——persona 自动生成；复核步可见人设行）——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
+    const card = page.locator('.wiz-card')
+    await page.locator('#wizName').fill('欧米茄')
+    await card.getByRole('button', { name: '下一步' }).click()
+    await card.getByRole('button', { name: '下一步' }).click()
+    await expect(card.locator('.wiz-body')).toContainText('研究员')
+    await card.getByRole('button', { name: '创建 Agent' }).click()
+    await expect(page.locator('.toast', { hasText: '欧米茄」已创建' })).toBeVisible({ timeout: 15_000 })
+
+    // —— 建群（管家 + 欧米茄）——
+    await page.locator('.roster-new', { hasText: '建群' }).click()
+    const wiz = page.locator('.wiz-card')
+    await page.locator('#gwName').fill('评审组')
+    await page.locator('.gw-member', { hasText: '管家' }).click()
+    await page.locator('.gw-member', { hasText: '欧米茄' }).click()
+    await wiz.getByRole('button', { name: /^建群/ }).click()
+    await expect(page.locator('.sh-name')).toHaveText('评审组', { timeout: 10_000 })
+
+    // —— #讨论（语法直发——不经菜单；fill 会弹 # 联想，Esc 收起再 Enter 发送）——
+    const input = page.locator('.composer-box input')
+    await input.fill('#讨论 各自说说')
+    await input.press('Escape')
+    await input.press('Enter')
+    // 两员独立观点都到（并发——无需先后依赖）
+    await expect(page.locator('.m-text', { hasText: '管家的独立观点' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.m-text', { hasText: '欧米茄的独立观点' })).toBeVisible({ timeout: 15_000 })
+    // 用户气泡带「独立作答」徽标
+    await expect(page.locator('.gm-mode')).toHaveText('独立作答')
+
+    // prompt 对账（mock 请求留痕）：两请求各带自身身份行与独立注解，均无「本轮已发言」
+    const chatReqs = mock.requests.filter((r) => !r.title)
+    const indep = chatReqs.filter((r) =>
+      (r.messages as Array<{ content?: string }>).some((m) => m.content?.includes('各自说说')),
+    )
+    expect(indep).toHaveLength(2)
+    const joined = indep.map((r) => (r.messages as Array<{ content?: string }>).map((m) => m.content ?? '').join('\n'))
+    expect(joined.some((c) => c.includes('你是本群成员「管家」'))).toBe(true)
+    expect(joined.some((c) => c.includes('你是本群成员「欧米茄」'))).toBe(true)
+    for (const c of joined) {
+      expect(c).toContain('独立作答')
+      expect(c).not.toContain('本轮已发言')
+    }
+
+    // —— 轮转对照（普通消息）：管家先说，欧米茄 prompt 应含「本轮已发言」（锚定语义保留）——
+    await input.fill('轮转一下')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '管家轮转发言' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.m-text', { hasText: '欧米茄轮转补充' })).toBeVisible({ timeout: 15_000 })
+    const omegaRotation = mock.requests
+      .filter((r) => !r.title)
+      .map((r) => (r.messages as Array<{ content?: string }>).map((m) => m.content ?? '').join('\n'))
+      .find((c) => c.includes('轮转一下') && c.includes('你是本群成员「欧米茄」'))
+    expect(omegaRotation).toContain('本轮已发言')
   } finally {
     await app.close()
     await mock.close()

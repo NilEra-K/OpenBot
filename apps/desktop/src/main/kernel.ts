@@ -274,6 +274,8 @@ const registerAgentSchema = z.object({
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/)
     .optional(),
+  /** 人设（2026-10-18 身份修复）：身份描述一句话——注入系统提示词（群聊不冒充管家） */
+  persona: z.string().trim().min(1).max(120).optional(),
   /** 模型覆盖档案名（backlog ③）：可选——引用 providers 档案；悬空显式拒绝（命令面） */
   modelProvider: z.string().trim().min(1).max(64).optional(),
   /** 镜像绑定（P8-4）：可选——引用镜像条目 id；悬空显式拒绝（命令面） */
@@ -1414,7 +1416,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 注册 agent（P4 Step 5）：经装配 addAgent（名册+调度器+专属 Box+turn 接线）；
     // llm 共享 SwitchableChatProvider——主力模型切换对全部 agent 生效（与启动装配同语义）
     .register('v1.system.registerAgent', async (payload) => {
-      const { name, color, role, modelProvider, imageId } = registerAgentSchema.parse(payload)
+      const { name, color, role, modelProvider, imageId, persona } = registerAgentSchema.parse(payload)
       // 管家前置检查：在位时直接拒绝（不创建半成品 agent；任命事务由 addAgent 兜底不变量）
       if (role === 'steward' && (await kernel.agentStore.findSteward()) !== null) {
         throw new KernelError('STATE_STEWARD_EXISTS', '管家已在位（须先罢免或转移）')
@@ -1436,6 +1438,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         color,
         ...(modelProvider !== undefined ? { modelProvider } : {}),
         ...(imageId !== undefined ? { imageId } : {}),
+        ...(persona !== undefined ? { persona } : {}),
         llm: await providerOfAgent(modelProvider, false),
         steward: role === 'steward',
       })

@@ -98,6 +98,8 @@ export interface AgentRegistration {
   /** 镜像绑定（plan-image-firstclass P8-4）：引用镜像条目 id——backend 按 spec.image 路由
    *  （RoutingBoxBackend）；未指定 'default' 落全局后端 */
   imageId?: string
+  /** 人设（2026-10-18 身份修复）：身份描述一句话——注入系统提示词与群轮 prompt */
+  persona?: string
   /** 该 agent 的模型客户端；未提供时用空脚本 mock（首个 turn 即显式报脚本耗尽） */
   llm?: ChatProvider
   /** 注册后立即任命为管家（走标准任命事务：他人在位时如实拒绝） */
@@ -171,6 +173,16 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const schedulers = new Map<string, AgentScheduler>()
   const boxes = new Map<string, string>()
   const llms = new Map<string, ChatProvider>()
+  /** agent 身份元信息（2026-10-18 P1 身份修复：全局「你是管家」提示词致 worker 自认管家）：
+   *  addAgent 登记（档案真相——role 从 agentStore 读，含重启恢复），任命事务经 roster 事件随动 */
+  const agentMeta = new Map<string, { name: string; persona?: string; role: 'steward' | 'worker' }>()
+  bus.on('v1.system.roster', (event) => {
+    const payload = event.payload as { agentId: string; role?: unknown }
+    const meta = agentMeta.get(payload.agentId)
+    if (meta !== undefined && (payload.role === 'steward' || payload.role === 'worker')) {
+      meta.role = payload.role
+    }
+  })
   // turn 引擎延后接线（依赖 messaging/tools，而它们又依赖调度器）——holder 打破构造环
   const executeRef: { current: RunExecutor | null } = { current: null }
   let runCounter = 0
@@ -291,13 +303,23 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     }
   }
   const basePrompt = options.systemPrompt
-  const systemPrompt: string | ((agentId: string) => string) | undefined =
+  // 身份分流（2026-10-18 P1 修复：此前全局一句「你是 OpenBot 管家」——worker（欧米茄/阿尔法）
+  // 全部自认管家）。管家与未登记 agent 沿用基础词；worker 以自身名字+persona 开场并明确边界
+  const identityPrompt = (agentId: string): string => {
+    const meta = agentMeta.get(agentId)
+    const base = typeof basePrompt === 'function' ? basePrompt(agentId) : basePrompt
+    if (meta === undefined || meta.role === 'steward') return base ?? ''
+    const persona = meta.persona !== undefined && meta.persona !== '' ? `（${meta.persona}）` : ''
+    return `你是「${meta.name}」${persona}，OpenBot 团队的成员——不是管家，也不是其他成员。` +
+      `始终以「${meta.name}」第一人称自称，不得自称或冒充管家及其他成员。用简洁中文回复。`
+  }
+  const systemPrompt: string | ((agentId: string) => string) =
     memory === undefined
-      ? basePrompt
+      ? identityPrompt
       : (agentId: string): string => {
-          const base = typeof basePrompt === 'function' ? basePrompt(agentId) : basePrompt
+          const base = identityPrompt(agentId)
           const section = formatMemoryPrompt(memory.listSync(agentId))
-          return section === '' ? (base ?? '') : `${base ?? ''}\n\n${section}`
+          return section === '' ? base : `${base}\n\n${section}`
         }
 
   const runner = new TurnRunner({
@@ -311,6 +333,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     boxOf: (agentId) => boxes.get(agentId) ?? null,
     nextMessageId,
     systemPrompt,
+    // 身份元信息（2026-10-18 身份修复）：群轮 prompt 注入成员自称与同伴名单
+    agentMetaOf: (agentId) => agentMeta.get(agentId),
     maxToolRounds: options.maxToolRounds,
     // 审批闸门（2026-09-06 预算打穿问用户）：复用同一授权通道——desktop 弹窗询问 /
     // CLI AutoApprovalGate 自动续期（总时长 deadline 兜底失控）
@@ -657,8 +681,15 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
       const registered = (await agentStore.list()).some((a) => a.agentId === registration.agentId)
       if (!registered) {
-        await agentStore.register(registration.agentId, registration.name, registration.color, registration.modelProvider, registration.imageId)
+        await agentStore.register(registration.agentId, registration.name, registration.color, registration.modelProvider, registration.imageId, registration.persona)
       }
+      // 身份元信息登记（2026-10-18 身份修复）：档案真相（role 含任命态；重启恢复路径同源）
+      const stored = await agentStore.get(registration.agentId)
+      agentMeta.set(registration.agentId, {
+        name: registration.name ?? stored?.name ?? registration.agentId,
+        ...(registration.persona !== undefined && registration.persona.trim() !== '' ? { persona: registration.persona.trim() } : {}),
+        role: stored?.role ?? (registration.steward === true ? 'steward' : 'worker'),
+      })
       // 记忆预载（backlog ①）：listSync 注入路径的缓存就绪（append 后自动最新）
       if (memory !== undefined) await memory.ensureLoaded(registration.agentId)
       llms.set(registration.agentId, registration.llm ?? new MockChatProvider({ steps: [] }))

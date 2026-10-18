@@ -198,6 +198,8 @@ export interface GroupMessagePayload {
   from: string
   text: string
   runId?: string
+  /** 发言模式（2026-10-18 独立作答）：kind='user' 时在场——渲染层「独立」徽标 */
+  mode?: 'independent'
 }
 
 /** 群清单变更（P5 Step 3）：群档案增删——renderer 拉取 v1.group.list 的时机信号 */

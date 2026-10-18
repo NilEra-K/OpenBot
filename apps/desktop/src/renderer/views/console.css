@@ -596,6 +596,12 @@
   background: var(--bg3);
 }
 
+/* 独立作答徽标（2026-10-18）：群用户气泡 meta 行内小号 chip（复用 .chip 形制收小一号） */
+.gm-mode {
+  height: 16px;
+  font-size: 10px;
+}
+
 .chip-success {
   border-color: rgba(115, 206, 149, 0.35);
   color: var(--success);

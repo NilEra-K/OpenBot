@@ -103,6 +103,8 @@ export interface ChatMessage {
   at: number
   /** 群消息（P5 Step 4）：所属群——群会话流按此过滤 */
   groupId?: string
+  /** 群发言模式（2026-10-18 独立作答）：group-user 在场——「独立」徽标（#讨论/#独立 前缀触发） */
+  groupMode?: 'independent'
   /** 乐观占位：命令响应/事件到达前为 true（UI 显示发送中态） */
   pending?: boolean
   /** 发送失败（网络/领域错误）：UI 显示重试 */
@@ -513,7 +515,7 @@ export const useKernelStore = defineStore('kernel', {
       }))
     },
     /** 注册 agent（P4 Step 5）：命令面受理（name/color/role）→ 重拉名册 → 返回 agentId（向导跳会话用） */
-    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string; imageId?: string }): Promise<string> {
+    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string; imageId?: string; persona?: string }): Promise<string> {
       const created = await this.call<{ agentId: string }>('v1.system.registerAgent', input)
       await this.refreshRoster()
       return created.agentId
@@ -587,12 +589,16 @@ export const useKernelStore = defineStore('kernel', {
       await this.refreshGroups()
       return created.groupId
     },
-    /** 群消息（P5 Step 4）：乐观更新 + nonce 幂等（与用户消息同款收敛） */
+    /** 群消息（P5 Step 4）：乐观更新 + nonce 幂等（与用户消息同款收敛）。
+     *  独立作答（2026-10-18）：`#讨论 ` 前缀内核解析——占位即剥离前缀呈现并带「独立」徽标
+     *  （正则与内核 GROUP_INDEPENDENT_PREFIX 同源——改此处须同步 messaging/group） */
     async sendGroupMessage(groupId: string, text: string, reuseNonce?: string): Promise<void> {
       const nonce = reuseNonce ?? crypto.randomUUID()
       const placeholderId = `~${nonce}`
+      const independent = /^#(讨论|独立)\s+/.test(text)
+      const shown = independent ? text.replace(/^#(讨论|独立)\s+/, '') : text
       if (!this.messages.some((m) => m.messageId === placeholderId)) {
-        this.messages.push({ messageId: placeholderId, kind: 'group-user', from: 'user', to: groupId, text, at: Date.now(), groupId, pending: true })
+        this.messages.push({ messageId: placeholderId, kind: 'group-user', from: 'user', to: groupId, text: shown, at: Date.now(), groupId, ...(independent ? { groupMode: 'independent' as const } : {}), pending: true })
       }
       try {
         const acceptance = await this.call<{ messageId: string }>('v1.group.send', { groupId, text, nonce })
@@ -998,7 +1004,7 @@ export const useKernelStore = defineStore('kernel', {
                 : record.kind === 'a2a-in' && typeof msg.from === 'string'
                   ? { messageId: msg.messageId, kind: 'a2a', from: msg.from, to: agentId, text: msg.text, at: record.at }
                   : record.kind === 'group-user'
-                    ? { messageId: msg.messageId, kind: 'group-user', from: 'user', to: agentId, text: msg.text, at: record.at, groupId: agentId }
+                    ? { messageId: msg.messageId, kind: 'group-user', from: 'user', to: agentId, text: msg.text, at: record.at, groupId: agentId, ...(p['mode'] === 'independent' ? { groupMode: 'independent' as const } : {}) }
                     : record.kind === 'group-agent' && typeof msg.from === 'string'
                       ? { messageId: msg.messageId, kind: 'group-agent', from: msg.from, to: agentId, text: msg.text, at: record.at, groupId: agentId }
                       : record.kind === 'group-sys'
@@ -1136,6 +1142,7 @@ export const useKernelStore = defineStore('kernel', {
             text: p.text,
             at: event.at,
             groupId: p.groupId,
+            ...(p.kind === 'user' && p.mode === 'independent' ? { groupMode: 'independent' as const } : {}),
           })
           // 正文预览块让位（同 v1.message.agent 语义）：成员群终答到达即清其正文 live 块——
           // 群轮正文的家在群流（此前缺失致同一句话在成员私聊呈现两遍：预览气泡 + relay 行）

@@ -274,3 +274,73 @@ describe('GroupService 有界轮转', () => {
     })
   })
 })
+
+describe('GroupService 独立作答（2026-10-18：#讨论 前缀——各抒己见互不可见）', () => {
+  it('#讨论：全员并发入队（不等首员 settle）、context 恒空、mode 留痕与事件携带、前缀剥离', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: '评审组', memberAgentIds: ['a1', 'a2'] })
+    const { runIds } = await h.service.sendUserMessage({ groupId: group.groupId, text: '#讨论 各自说说看法', nonce: 'n1' })
+
+    // 并发实证：sendUserMessage 返回即两员 gate 全部在场（轮转模式此时只有首员）
+    expect(runIds).toHaveLength(2)
+    expect(h.gates).toHaveLength(2)
+    const payloads = h.gates.map((g) => g.run.payload as { context: string[]; mode?: string; memberIds?: string[]; text: string })
+    for (const p of payloads) {
+      expect(p.context).toEqual([]) // 互不可见——不注入「本轮已发言」
+      expect(p.mode).toBe('independent')
+      expect(p.memberIds).toEqual(['a1', 'a2'])
+      expect(p.text).toBe('各自说说看法') // 前缀剥离
+    }
+    // 记录与事件留痕：group-user 带 mode、文本已剥前缀
+    const rec = (await h.transcript.readAll(group.groupId)).find((r) => r.kind === 'group-user')
+    expect((rec?.payload as { mode?: string; text: string }).mode).toBe('independent')
+    expect((rec?.payload as { text: string }).text).toBe('各自说说看法')
+    expect(h.events.find((e) => e.type === 'v1.group.message' && (e.payload as { kind: string }).kind === 'user')?.payload).toMatchObject({ mode: 'independent' })
+  })
+
+  it('独立 settle 不推进新员；全员结算即收敛（各自一次，互不引用）', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#独立 谈谈', nonce: 'n1' })
+    h.gates[0]!.resolve({ text: 'a1 的独立观点' })
+    await h.flush()
+    expect(h.gates).toHaveLength(2) // settle 后不推进（全员已入队）
+    h.gates[1]!.resolve({ text: 'a2 的独立观点' })
+    await h.flush()
+    // settle 不再入队（全员已入队——本 harness 无 runner，发言落盘由 turn 引擎测试覆盖）
+    expect(h.gates).toHaveLength(2)
+    // 有实质发言不触发收敛注记
+    expect((await h.transcript.readAll(group.groupId)).some((r) => r.kind === 'group-sys' && (r.payload as { text: string }).text.includes('收敛'))).toBe(false)
+  })
+
+  it('独立模式 pass：记 sysnote + 全员 pass 收敛', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#讨论 说说', nonce: 'n1' })
+    h.gates[0]!.resolve({ text: '[pass]' })
+    await h.flush()
+    const notes = (await h.transcript.readAll(group.groupId))
+      .filter((r) => r.kind === 'group-sys')
+      .map((r) => (r.payload as { text: string }).text)
+    expect(notes.some((n) => n.includes('a1 本轮 pass'))).toBe(true)
+    expect(notes.some((n) => n.includes('全员 pass，本轮收敛'))).toBe(true)
+  })
+
+  it('supersede 对独立在途轮生效：插话后旧轮成员 settle 静默丢弃', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#讨论 第一问', nonce: 'n1' })
+    const staleGates = [...h.gates]
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '第二问', nonce: 'n2' })
+    for (const g of staleGates) g.resolve({ text: '旧轮发言不该出现' })
+    await h.flush()
+    expect((await h.transcript.readAll(group.groupId)).some((r) => (r.payload as { text?: string }).text === '旧轮发言不该出现')).toBe(false)
+  })
+})

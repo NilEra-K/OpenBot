@@ -67,6 +67,11 @@ export interface TurnRunnerDeps {
    * 缺席时（测试最小注入）不做拦截——写入与编排层代际判定（onSettled）双层防线。
    */
   isGroupTurnStale?: (payload: GroupTurnPayload) => boolean
+  /**
+   * agent 身份元信息（2026-10-18 身份修复，装配注入）：群轮 prompt 注入成员自称与
+   * 同伴名单（只报名字）——成员不再自认管家。缺省时回落 agentId（行为向后兼容）。
+   */
+  agentMetaOf?: (agentId: string) => { name: string; persona?: string } | undefined
 }
 
 interface TurnInput {
@@ -112,12 +117,26 @@ export class TurnRunner {
     // 群成员轮转（§3.6 GroupMemberRunner 语义）：历史=群流，终答写群流
     if (run.kind === 'group') {
       const payload = run.payload as GroupTurnPayload
+      // 身份注入（2026-10-18 P1 修复：群聊成员自认管家）：自称 + 同伴名单（只报名字）；
+      // 模式注入（P2 修复）：独立作答不注入「本轮已发言」——各抒己见互不可见
+      const meta = this.#deps.agentMetaOf?.(run.agentId)
+      const nameOfPeer = (id: string): string => this.#deps.agentMetaOf?.(id)?.name ?? id
+      const identity =
+        meta !== undefined
+          ? `你是本群成员「${meta.name}」${meta.persona !== undefined && meta.persona !== '' ? `（${meta.persona}）` : ''}——不是管家，也不是其他成员，以「${meta.name}」自称。`
+          : ''
+      const peers = payload.memberIds !== undefined ? `本群成员：${payload.memberIds.map(nameOfPeer).join('、')}。` : ''
       const ctx = payload.context.length > 0 ? `本轮已发言：\n${payload.context.join('\n')}\n\n` : ''
       const mentioned = payload.mentioned.length > 0 ? `（点名：${payload.mentioned.join('、')}）` : ''
+      const modeNote =
+        payload.mode === 'independent'
+          ? `（独立作答：本轮各成员分别独立作答、互不可见——给出你自己的观点，不要试图猜测或引用他人）`
+          : `（群聊轮转：仅当你确实无话可说时才回复 ${'[pass]'}；用户要求每位成员回应或点名你时必须直接回应，不要因他人已发言而 ${'[pass]'}）`
+      const toolNote = `回答前可先用工具查证或计算，再下结论。`
       return this.#runTurn(run, {
         userMessage: {
           role: 'user',
-          content: `[群 ${payload.groupId} · 第${payload.round}轮]${mentioned} ${payload.text}\n${ctx}（群聊轮转：仅当你确实无话可说时才回复 ${'[pass]'}；用户要求每位成员回应或点名你时必须直接回应，不要因他人已发言而 ${'[pass]'}）`,
+          content: `${identity}${peers}[群 ${payload.groupId} · 第${payload.round}轮]${mentioned} ${payload.text}\n${ctx}${modeNote}${toolNote}`,
         },
         originMessageId: payload.messageId,
         session: {

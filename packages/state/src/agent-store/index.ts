@@ -30,6 +30,9 @@ export interface AgentProfile {
   /** 镜像绑定（plan-image-firstclass P8-4）：引用镜像条目 id——未指定用默认沙箱；悬空在
    *  装配层如实降级回默认（console 告警——modelProvider 悬空双语义同款）；版本号+读取端兼容 */
   imageId?: string
+  /** 人设（2026-10-18 身份修复）：身份描述一句话——注入系统提示词（自称/职责边界），
+   *  群聊不再冒充管家；可选，版本号+读取端兼容零迁移 */
+  persona?: string
 }
 
 export interface AgentStoreOptions {
@@ -53,8 +56,8 @@ export class AgentStore {
     this.#now = options.now
   }
 
-  /** 注册：一律 worker（steward 只能经任命事务产生）；重名拒绝；color 可选（身份色档案事实） */
-  async register(agentId: string, name?: string, color?: string, modelProvider?: string, imageId?: string): Promise<AgentProfile> {
+  /** 注册：一律 worker（steward 只能经任命事务产生）；重名拒绝；color/persona 可选（身份档案事实） */
+  async register(agentId: string, name?: string, color?: string, modelProvider?: string, imageId?: string, persona?: string): Promise<AgentProfile> {
     return this.#withLock(async () => {
       await this.#load()
       if (this.#profiles.has(agentId)) {
@@ -68,6 +71,7 @@ export class AgentStore {
         ...(color !== undefined ? { color } : {}),
         ...(modelProvider !== undefined && modelProvider !== '' ? { modelProvider } : {}),
         ...(imageId !== undefined && imageId !== '' ? { imageId } : {}),
+        ...(persona !== undefined && persona.trim() !== '' ? { persona: persona.trim() } : {}),
       }
       this.#profiles.set(agentId, profile)
       await this.#persist(profile)

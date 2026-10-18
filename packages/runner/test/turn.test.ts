@@ -33,6 +33,8 @@ interface HarnessOptions {
   extraTool?: import('../src/index.js').Tool
   /** 每 agent 视觉能力（截图回喂分流——缺席=有视觉） */
   supportsImagesOf?: (agentId: string) => boolean
+  /** 身份元信息（2026-10-18 身份修复）：群轮 prompt 注入自称与名单；缺席回落 agentId */
+  agentMetaOf?: (agentId: string) => { name: string; persona?: string } | undefined
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -127,6 +129,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     gate: options.gate,
     onStream: options.onStream,
     ...(options.supportsImagesOf !== undefined ? { supportsImagesOf: options.supportsImagesOf } : {}),
+    ...(options.agentMetaOf !== undefined ? { agentMetaOf: options.agentMetaOf } : {}),
     // 与 assemble 同构（P5 Step 4 修复）：supersede 旧轮终答写入前拦截
     isGroupTurnStale: (p) => groups.isStale(p),
   })
@@ -713,5 +716,68 @@ describe('截图回喂分流（P8-4 后 UI 优化）：GUI 工具注册只看环
     expect(toolMsg?.content as string).toContain('已截图。截图 1:1')
     expect(toolMsg?.content as string).toContain('无视觉能力')
     expect(JSON.stringify(toolMsg?.content)).not.toContain('"type":"image"')
+  })
+})
+
+describe('群聊身份与独立作答（2026-10-18：身份修复 + #讨论 模式）', () => {
+  const meta = {
+    a1: { name: '欧米茄', persona: '团队的研究员' },
+    a2: { name: '阿尔法' },
+  }
+
+  it('独立作答全链：#讨论 前缀 → 全员作答落群流、prompt 无「本轮已发言」、带独立注解与身份行', async () => {
+    const h = makeHarness(
+      {
+        a1: [{ text: '欧米茄的独立观点' }],
+        a2: [{ text: '阿尔法的独立观点' }],
+      },
+      { agentMetaOf: (id) => meta[id as keyof typeof meta] },
+    )
+    const a1 = await h.register('a1')
+    const a2 = await h.register('a2')
+    const group = await h.groups.createGroup({ name: '评审组', memberAgentIds: ['a1', 'a2'] })
+    await h.groups.sendUserMessage({ groupId: group.groupId, text: '#讨论 各自说说看法', nonce: 'n1' })
+    await waitIdle([a1, a2])
+
+    // 两员均落群流（各一次）
+    const texts = (await h.transcript.readAll(group.groupId))
+      .filter((r) => r.kind === 'group-agent')
+      .map((r) => (r.payload as { text: string }).text)
+      .sort()
+    expect(texts).toEqual(['欧米茄的独立观点', '阿尔法的独立观点'])
+
+    // prompt 实证：身份行 + 成员名单 + 独立注解；无「本轮已发言」（互不可见）
+    const prompts = [...h.llms.get('a1')!.requests, ...h.llms.get('a2')!.requests]
+      .map((r) => r.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n'))
+      .filter((c) => c.includes('各自说说看法'))
+    expect(prompts).toHaveLength(2)
+    for (const content of prompts) {
+      expect(content).toContain('你是本群成员「')
+      expect(content).toContain('本群成员：欧米茄、阿尔法')
+      expect(content).toContain('独立作答')
+      expect(content).not.toContain('本轮已发言')
+    }
+    // 欧米茄的 prompt 带自身 persona；阿尔法无 persona 只带名字
+    const omega = prompts.find((c) => c.includes('（团队的研究员）'))
+    expect(omega).toBeDefined()
+    // 前缀剥离：group-user 文本不带 #讨论
+    const userRec = (await h.transcript.readAll(group.groupId)).find((r) => r.kind === 'group-user')
+    expect((userRec?.payload as { text: string; mode?: string })).toMatchObject({ text: '各自说说看法', mode: 'independent' })
+  })
+
+  it('轮转模式（缺省）：上下文传递保留，身份行同样在场', async () => {
+    const h = makeHarness(
+      { a1: [{ text: '先说' }], a2: [{ text: '后说' }] },
+      { agentMetaOf: (id) => meta[id as keyof typeof meta] },
+    )
+    const a1 = await h.register('a1')
+    const a2 = await h.register('a2')
+    const group = await h.groups.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.groups.sendUserMessage({ groupId: group.groupId, text: '按顺序说', nonce: 'n1' })
+    await waitIdle([a1, a2])
+
+    const a2Prompt = h.llms.get('a2')!.requests[0]?.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n') ?? ''
+    expect(a2Prompt).toContain('本轮已发言：\na1：先说') // 轮转上下文保留（与独立模式对照）
+    expect(a2Prompt).toContain('你是本群成员「阿尔法」')
   })
 })

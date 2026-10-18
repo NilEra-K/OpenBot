@@ -530,3 +530,30 @@ describe('会话语义（2026-10-18 /resume 列表改进：UUID + 空会话不�
     ).toBe(false)
   })
 })
+
+describe('身份分流（2026-10-18 P1 修复：全局「你是管家」致 worker 自认管家）', () => {
+  it('worker 系统提示词带自身名字+persona 且不含管家词；管家沿用基础词；persona 落档案', async () => {
+    const kernel = assembleKernel({ now: () => 0, bootPrefix: 't', systemPrompt: '你是 OpenBot 管家——测试基础词' })
+    const client = kernel.transport.createClient()
+    const w1 = new MockChatProvider({ steps: [{ text: '我是欧米茄' }] })
+    const st1 = new MockChatProvider({ steps: [{ text: '我是管家' }] })
+    await kernel.addAgent({ agentId: 'w1', name: '欧米茄', persona: '团队的研究员', llm: w1 })
+    await kernel.addAgent({ agentId: 'st1', name: '大管家', steward: true, llm: st1 })
+
+    await client.call('v1.message.sendUser', { toAgentId: 'w1', text: '你是谁', nonce: 'id1' })
+    await waitIdle(kernel)
+    const w1System = w1.requests[0]?.messages[0]?.content ?? ''
+    expect(w1System).toContain('「欧米茄」')
+    expect(w1System).toContain('团队的研究员')
+    expect(w1System).toContain('不是管家')
+    expect(w1System).not.toContain('你是 OpenBot 管家——测试基础词')
+
+    await client.call('v1.message.sendUser', { toAgentId: 'st1', text: '你是谁', nonce: 'id2' })
+    await waitIdle(kernel)
+    expect(st1.requests[0]?.messages[0]?.content).toBe('你是 OpenBot 管家——测试基础词')
+
+    // persona 持久（档案真相——重启恢复路径同源）
+    expect((await kernel.agentStore.get('w1'))?.persona).toBe('团队的研究员')
+    expect((await kernel.agentStore.get('st1'))?.role).toBe('steward')
+  })
+})

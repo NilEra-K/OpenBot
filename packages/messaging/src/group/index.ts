@@ -45,11 +45,18 @@ export interface GroupTurnPayload {
   round: number
   /** 触发本轮的用户消息 */
   text: string
-  /** 本轮已发言（`名字：内容` 顺序列表——上下文传递） */
+  /** 本轮已发言（`名字：内容` 顺序列表——上下文传递；独立作答模式恒空） */
   context: string[]
   /** 本轮被 @ 的成员（prompt 可见——优先发言已由编排保证） */
   mentioned: string[]
+  /** 发言模式（2026-10-18）：independent=独立作答（全员并发、互不可见）；缺省 rotation 轮转 */
+  mode?: 'independent'
+  /** 全体成员 id（身份注入用——runner 经 agentMetaOf 解析为名字） */
+  memberIds?: string[]
 }
+
+/** 独立作答模式触发前缀（2026-10-18 用户裁定：语法触发、可扩展的模式注册面） */
+export const GROUP_INDEPENDENT_PREFIX = /^#(讨论|独立)\s+/
 
 export interface GroupRecord {
   groupId: string
@@ -69,6 +76,8 @@ interface GroupRuntime {
   turnText: string
   turnMessageId: string
   mentioned: string[]
+  /** 发言模式（2026-10-18）：本轮 independent（独立作答）或缺省 rotation（轮转） */
+  independent?: boolean
 }
 
 export interface GroupDeps {
@@ -154,9 +163,27 @@ export class GroupService {
     if (records.length >= MAX_GROUP_RECORDS) {
       throw new KernelError(GroupErrorCodes.GROUP_LIMIT, `群消息超过上限 ${MAX_GROUP_RECORDS}（${input.groupId}）`)
     }
+    // 发言模式（2026-10-18 用户裁定：讨论性话题各抒己见）：`#讨论 `/`#独立 ` 前缀触发独立
+    // 作答——前缀剥离，group-user 记录与事件留 mode 痕（渲染层徽标）
+    const prefixMatch = input.text.match(GROUP_INDEPENDENT_PREFIX)
+    const independent = prefixMatch !== null
+    const text = independent ? input.text.slice(prefixMatch[0].length) : input.text
     const messageId = this.#deps.nextMessageId()
-    await this.#deps.transcript.append(input.groupId, 'group-user', { messageId, from: 'user', text: input.text, at: this.#deps.now() })
-    this.#deps.bus.emit('v1.group.message', { groupId: input.groupId, messageId, kind: 'user', from: 'user', text: input.text })
+    await this.#deps.transcript.append(input.groupId, 'group-user', {
+      messageId,
+      from: 'user',
+      text,
+      ...(independent ? { mode: 'independent' as const } : {}),
+      at: this.#deps.now(),
+    })
+    this.#deps.bus.emit('v1.group.message', {
+      groupId: input.groupId,
+      messageId,
+      kind: 'user',
+      from: 'user',
+      text,
+      ...(independent ? { mode: 'independent' as const } : {}),
+    })
     await this.#deps.ledger.commit(`group:${input.nonce}`, { messageId })
     // supersede：代际 bump——旧轮成员 settle 后静默丢弃；新轮从提及成员开始依序轮转
     const rt = this.#runtimeOf(input.groupId)
@@ -165,9 +192,10 @@ export class GroupService {
     rt.round += 1
     rt.spoken = []
     rt.passed = []
-    rt.turnText = input.text
+    rt.turnText = text
     rt.turnMessageId = messageId
-    rt.mentioned = this.#mentionedOf(input.text, group)
+    rt.mentioned = this.#mentionedOf(text, group)
+    rt.independent = independent
     rt.running = group.members.length > 0
     const runIds = this.#advance(group, rt)
     return { messageId, runIds }
@@ -217,19 +245,45 @@ export class GroupService {
   }
 
   /** 轮转推进：未发言且未 pass 的下一成员（@提及者优先）；全员结算即收敛。
-   *  gen 在入队时快照捕获（闭包 rt 与新轮共享同一对象——代际比较必须用快照） */
+   *  gen 在入队时快照捕获（闭包 rt 与新轮共享同一对象——代际比较必须用快照）。
+   *  独立作答（2026-10-18）：全员一次性并发入队（context 恒空——互不可见无锚定），
+   *  settle 不再推进下一员（见 #onSettled 的独立收敛判定） */
   #advance(group: GroupRecord, rt: GroupRuntime): string[] {
     const spokenIds = rt.spoken.map((s) => s.id)
     const order = [
       ...rt.mentioned.filter((m) => !spokenIds.includes(m) && !rt.passed.includes(m)),
       ...group.members.filter((m) => !rt.mentioned.includes(m) && !spokenIds.includes(m) && !rt.passed.includes(m)),
     ]
+    const genAtEnqueue = rt.gen
+    if (rt.independent === true) {
+      const runIds: string[] = []
+      for (const memberId of order) {
+        const ticket = this.#deps.schedulerOf(memberId).enqueue({
+          lane: 'agent',
+          kind: 'group',
+          payload: {
+            messageId: rt.turnMessageId,
+            groupId: group.groupId,
+            gen: rt.gen,
+            round: rt.round,
+            text: rt.turnText,
+            context: [],
+            mentioned: [...rt.mentioned],
+            mode: 'independent',
+            memberIds: [...group.members],
+          } satisfies GroupTurnPayload,
+          summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮独立作答 ${memberId}：${rt.turnText}`),
+        })
+        void ticket.settled.then((outcome) => this.#onSettled(group.groupId, genAtEnqueue, memberId, outcome))
+        runIds.push(ticket.runId)
+      }
+      return runIds
+    }
     const next = order[0]
     if (!next) {
       void this.#converge(group.groupId, rt)
       return []
     }
-    const genAtEnqueue = rt.gen
     const ticket = this.#deps.schedulerOf(next).enqueue({
       lane: 'agent',
       kind: 'group',
@@ -241,6 +295,7 @@ export class GroupService {
         text: rt.turnText,
         context: rt.spoken.map((s) => `${s.id}：${s.text}`),
         mentioned: [...rt.mentioned],
+        memberIds: [...group.members],
       } satisfies GroupTurnPayload,
       summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮 ${next}：${rt.turnText}`),
     })
@@ -248,7 +303,8 @@ export class GroupService {
     return [ticket.runId]
   }
 
-  /** 成员结算：代际不匹配（superseded）静默丢弃；[pass]/失败视作缺席；文本记群流进下一员 */
+  /** 成员结算：代际不匹配（superseded）静默丢弃；[pass]/失败视作缺席；文本记群流进下一员。
+   *  独立作答（2026-10-18）：全员已入队——不推进下一员，只在全员结算完毕时收敛 */
   async #onSettled(groupId: string, genAtEnqueue: number, memberId: string, outcome: RunOutcome): Promise<void> {
     if (genAtEnqueue !== this.#runtimeOf(groupId).gen) return // superseded：旧轮静默丢弃
     const group = this.#groups.get(groupId)
@@ -260,7 +316,7 @@ export class GroupService {
         : ''
     if (outcome.state === 'succeeded' && text !== '' && text !== GROUP_PASS_TOKEN) {
       rt.spoken.push({ id: memberId, text })
-      this.#advance(group, rt)
+      await this.#settleAdvance(group, rt)
       return
     }
     if (outcome.state !== 'succeeded') {
@@ -270,7 +326,19 @@ export class GroupService {
     // 此前仅全员 pass 收敛才留痕，个别成员轮过但 pass 在 UI 上不可见
     if (outcome.state === 'succeeded') await this.#sys(groupId, `${memberId} 本轮 pass`)
     rt.passed.push(memberId)
-    this.#advance(group, rt)
+    await this.#settleAdvance(group, rt)
+  }
+
+  /** 结算后推进：轮转模式 → 下一员；独立作答 → 不推进（全员已入队），全员结算完毕即收敛 */
+  async #settleAdvance(group: GroupRecord, rt: GroupRuntime): Promise<void> {
+    if (rt.independent !== true) {
+      this.#advance(group, rt)
+      return
+    }
+    const allDone = group.members.every(
+      (m) => rt.spoken.some((s) => s.id === m) || rt.passed.includes(m),
+    )
+    if (allDone) await this.#converge(group.groupId, rt)
   }
 
   /** 收敛：全员 pass 记 sysnote；轮转结束（running=false） */
