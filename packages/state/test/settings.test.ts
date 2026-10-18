@@ -264,3 +264,22 @@ describe('SettingsStore', () => {
     expect(await makeStore().store.getRelays()).toEqual([])
   })
 })
+
+describe('自定义角色模板（2026-10-18：用户自建档位——小红书运维/微商运营等）', () => {
+  it('upsert 同名覆盖、读取过滤坏条目、remove 幂等；旧文件（无字段）读取=空清单', async () => {
+    const { fs, store } = makeStore()
+    expect(await store.getRoleTemplates()).toEqual([])
+    await store.upsertRoleTemplate({ name: '小红书运维', persona: '负责小红书笔记投放、数据复盘与评论区运营' })
+    await store.upsertRoleTemplate({ name: '微商运营', persona: '负责私域朋友圈运营、客户跟进与转化' })
+    // 同名覆盖（模板键=名）
+    await store.upsertRoleTemplate({ name: '微商运营', persona: '私域运营（v2 文案）' })
+    let list = await store.getRoleTemplates()
+    expect(list.map((r) => r.name)).toEqual(['小红书运维', '微商运营'])
+    expect(list[1]?.persona).toBe('私域运营（v2 文案）')
+    // 删除幂等 + 不存在的名字不报错
+    await store.removeRoleTemplate('微商运营')
+    await store.removeRoleTemplate('不存在')
+    list = await store.getRoleTemplates()
+    expect(list.map((r) => r.name)).toEqual(['小红书运维'])
+  })
+})

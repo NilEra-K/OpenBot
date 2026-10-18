@@ -5,7 +5,7 @@
  * 开合归 ui store（名册入口与命令面板共用）；创建走 kernel.registerAgent 命令面
  * （服务端建名册+调度器+专属 Box；领域失败就地显示，不上全局 toast——表单上下文优先）。
  */
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
@@ -68,9 +68,14 @@ const onStageAfterEnter = (): void => {
   if (stageEl.value) stageEl.value.style.height = ''
 }
 const name = ref('')
-/** 人设输入（2026-10-18 身份修复）：留空按角色默认生成 */
+/** 人设输入（2026-10-18 身份修复）：留空按选中角色默认生成 */
 const persona = ref('')
-const roleIdx = ref(1) // 默认研究员（管家在职时选管家会被拒绝——默认避开高频失败路径）
+/** 选中角色档位（2026-10-18 自定义角色）：按名字键选（内置四角色 + 用户模板统一命名空间）；
+ *  默认研究员（管家在职时选管家会被拒绝——默认避开高频失败路径） */
+const roleKey = ref('研究员')
+/** 自定义角色表单（＋ 自定义展开）：保存即入模板库并选中 */
+const roleForm = reactive({ open: false, name: '', persona: '', busy: false })
+const roleFormNameEl = ref<HTMLInputElement | null>(null)
 const color = ref<string>(COLORS[3])
 /** 模型覆盖（backlog ③）：空串=默认模型（自动） */
 const modelOverride = ref('')
@@ -80,8 +85,59 @@ const error = ref('')
 const creating = ref(false)
 const nameEl = ref<HTMLInputElement | null>(null)
 
-const roleLabel = computed(() => ROLES[roleIdx.value]!.label)
-const isSteward = computed(() => ROLES[roleIdx.value]!.role === 'steward')
+/** 内置四角色（管家置顶——任命语义特殊）；自定义模板走「自定义 ▾」下拉清单（2026-10-18
+ *  用户裁定：档位多了 chips 拥挤——内置常驻 + 自定义弹层，宽度恒定） */
+const builtinRoles = ROLES
+/** 当前选中的自定义档位（未选自定义 = undefined——按钮回落「自定义」文案） */
+const selectedCustom = computed(() => kernel.roleTemplates.find((t) => t.name === roleKey.value))
+const isSteward = computed(() => selectedCustom.value === undefined && roleKey.value === '管家')
+const roleLabel = computed(() => roleKey.value)
+/** 选中档位的默认人设（人设框留空时按此提交；占位提示同源——内置与自定义统一取值） */
+const rolePersona = computed(
+  () => builtinRoles.find((r) => r.label === roleKey.value)?.persona ?? selectedCustom.value?.persona ?? '',
+)
+/** 自定义档位选择器（2026-10-18）：**二级模态**——在向导之上居中弹出，向导高度纹丝不动。
+ *  三轮迭代定稿：absolute 被 wiz-foot 挡 / Teleport 游离出框 / 流内展开顶高卡片且脚部
+ *  不可达（用户三轮报障）——挤在向导卡内做弹层是错位，独立小模态是正解 */
+const roleMenu = reactive({ open: false })
+const toggleRoleMenu = (): void => {
+  roleMenu.open = !roleMenu.open
+  roleForm.open = false
+  roleForm.name = ''
+  roleForm.persona = ''
+  if (roleMenu.open) void nextTick(() => roleFormNameEl.value?.focus())
+}
+const closeRoleMenu = (): void => {
+  roleMenu.open = false
+  roleForm.open = false
+}
+const selectRole = (role: string): void => {
+  roleKey.value = role
+  persona.value = rolePersona.value // 所见即所得（2026-10-18 优化）：选中即填默认人设，可改可清
+  closeRoleMenu()
+}
+/** 同名覆盖知情（2026-10-18 优化）：upsert 是静默覆盖——重名时表单内如实提示 */
+const roleFormOverwrite = computed(
+  () => roleForm.name.trim() !== '' && kernel.roleTemplates.some((t) => t.name === roleForm.name.trim()),
+)
+const saveRoleForm = async (): Promise<void> => {
+  if (roleForm.busy || roleForm.name.trim() === '' || roleForm.persona.trim() === '') return
+  roleForm.busy = true
+  try {
+    await kernel.upsertRoleTemplate(roleForm.name.trim(), roleForm.persona.trim())
+    roleKey.value = roleForm.name.trim()
+    persona.value = roleForm.persona.trim()
+    closeRoleMenu()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    roleForm.busy = false
+  }
+}
+const removeRole = async (role: string): Promise<void> => {
+  await kernel.removeRoleTemplate(role).catch(() => {})
+  if (roleKey.value === role) roleKey.value = '研究员'
+}
 /** 当前主力（复核如实显示继承对象；未配置时如实标注）——v2 呈现「供应商 · 模型」 */
 const primaryModel = computed(() =>
   kernel.defaultProvider === null
@@ -113,7 +169,9 @@ watch(
     slideName.value = 'slide-left'
     name.value = ''
     persona.value = ''
-    roleIdx.value = 1
+    roleKey.value = '研究员'
+    roleForm.open = false
+    roleMenu.open = false
     color.value = COLORS[3]
     imageBinding.value = ''
     error.value = ''
@@ -160,7 +218,8 @@ const next = async (): Promise<void> => {
       role: isSteward.value ? 'steward' : 'worker',
       ...(modelOverride.value !== '' ? { modelProvider: modelOverride.value } : {}),
       ...(imageBinding.value !== '' ? { imageId: imageBinding.value } : {}),
-      persona: persona.value.trim() !== '' ? persona.value.trim() : ROLES[roleIdx.value]!.persona,
+      persona: persona.value.trim() !== '' ? persona.value.trim() : rolePersona.value,
+      roleName: roleKey.value,
     })
     toast.push(`Agent「${name.value.trim()}」已创建`, 'success')
     ui.closeWizard()
@@ -225,30 +284,39 @@ const onKeydown = (e: KeyboardEvent): void => {
             maxlength="24"
           />
         </div>
-        <div class="wiz-field">
-          <span class="wiz-label">角色定位</span>
+        <div class="wiz-field wiz-role-field">
+          <span class="wiz-label">角色定位 · 内置四档 + 自定义（小红书运维/微商运营等按需建档）</span>
           <div class="wiz-seg" role="radiogroup" aria-label="角色定位">
             <button
-              v-for="(r, i) in ROLES"
+              v-for="r in builtinRoles"
               :key="r.label"
               type="button"
-              :class="{ 'is-sel': i === roleIdx }"
+              :class="{ 'is-sel': r.label === roleKey }"
               role="radio"
-              :aria-checked="i === roleIdx"
-              @click="roleIdx = i"
+              :aria-checked="r.label === roleKey"
+              @click="selectRole(r.label)"
             >{{ r.label }}</button>
+            <!-- 自定义 ▾：选中自定义档位时呈现该档位名；点击弹清单 -->
+            <button
+              type="button"
+              class="wiz-role-menu-btn"
+              :class="{ 'is-sel': selectedCustom !== undefined }"
+              :aria-expanded="roleMenu.open"
+              @click="toggleRoleMenu()"
+            >{{ selectedCustom?.name ?? '自定义' }}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></button>
           </div>
         </div>
         <div class="wiz-field">
-          <label class="wiz-label" for="wizPersona">人设 · 留空按角色生成</label>
+          <label class="wiz-label" for="wizPersona">人设 · 留空按选中角色生成</label>
           <input
             id="wizPersona"
             v-model="persona"
             class="wiz-input"
-            :placeholder="`例：${ROLES[roleIdx]!.persona}`"
+            :placeholder="`例：${rolePersona}`"
             autocomplete="off"
-            maxlength="120"
+            maxlength="500"
           />
+          <div v-if="persona.length > 300" class="wiz-count">{{ persona.length }}/500</div>
         </div>
         <div class="wiz-field">
           <span class="wiz-label">身份色 · 社交图谱与会话头像</span>
@@ -352,6 +420,46 @@ const onKeydown = (e: KeyboardEvent): void => {
         <button class="wiz-btn primary" type="button" :disabled="creating" @click="next()">
           {{ step === 2 ? (creating ? '创建中…' : '创建 Agent') : '下一步' }}
         </button>
+      </div>
+    </div>
+
+    <!-- 自定义角色二级模态（2026-10-18 三轮定稿）：居中弹于向导之上——向导高度不动、
+         脚部恒可达；列表选中即关，新建表单常驻（无二次顶高）；×/Esc/点遮罩三路关闭 -->
+    <div v-if="roleMenu.open" class="wiz-romodal-mask" @mousedown.self="closeRoleMenu()">
+      <div class="wiz-romodal" role="dialog" aria-label="自定义角色" @keydown.esc.stop="closeRoleMenu()">
+        <div class="wiz-romodal-head">
+          <span>自定义角色</span>
+          <button type="button" class="wiz-romodal-x" aria-label="关闭" @click="closeRoleMenu()">×</button>
+        </div>
+        <div class="wiz-romodal-list">
+          <template v-if="kernel.roleTemplates.length > 0">
+            <button
+              v-for="t in kernel.roleTemplates"
+              :key="t.name"
+              type="button"
+              class="wiz-role-item"
+              :class="{ 'is-sel': t.name === roleKey }"
+              role="option"
+              :aria-selected="t.name === roleKey"
+              @click="selectRole(t.name)"
+            >
+              <svg v-if="t.name === roleKey" class="wiz-role-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7" /></svg>
+              <span class="wiz-role-item-name">{{ t.name }}</span>
+              <span class="wiz-role-item-desc">{{ t.persona }}</span>
+              <span class="wiz-role-x" role="button" tabindex="-1" aria-label="删除自定义角色" title="删除该自定义角色" @click.stop="removeRole(t.name)">×</span>
+            </button>
+          </template>
+          <div v-else class="wiz-role-empty">尚无自定义角色——用下方表单按需建档（小红书运维、微商运营…）</div>
+        </div>
+        <div class="wiz-role-form">
+          <input ref="roleFormNameEl" v-model="roleForm.name" class="wiz-input" placeholder="角色名（≤12 字，例：小红书运维）" maxlength="12" />
+          <input v-model="roleForm.persona" class="wiz-input" placeholder="人设描述（≤500 字）——该角色 Agent 的默认身份" maxlength="500" @keydown.enter.prevent="saveRoleForm" />
+          <div v-if="roleFormOverwrite" class="wiz-role-hint">已存在同名档位——保存将覆盖其人设</div>
+          <div class="wiz-role-form-actions">
+            <button type="button" class="wiz-rb" :disabled="roleForm.busy" @click="saveRoleForm">保存并选用</button>
+            <span v-if="roleForm.persona.length > 300" class="wiz-count">{{ roleForm.persona.length }}/500</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -697,5 +805,196 @@ const onKeydown = (e: KeyboardEvent): void => {
 
 .wiz-select:focus {
   border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+
+/* 自定义角色（2026-10-18 三轮定稿）：「自定义 ▾」触发二级模态——居中弹于向导之上，
+ * 向导卡片高度零变化（前两轮：absolute 被脚挡 / 流内顶高且脚部不可达） */
+.wiz-role-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  /* 2026-10-18 修复：inline-flex 内容默认 flex-start 靠左（其余档位按钮是 UA 文本居中）——
+     补 justify 居中；左内边距 20px = 箭头半宽 7×2 + UA 右内边距 6（对称抵消），令**文字**
+     光学居中与其余档位一致（实测：-7 → -3 → 0） */
+  justify-content: center;
+  padding-left: 20px;
+  gap: 4px;
+  color: var(--ink3);
+}
+.wiz-role-menu-btn.is-sel {
+  color: var(--ink);
+}
+.wiz-romodal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70; /* 压过 wiz-overlay(60)——二级模态 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+}
+.wiz-romodal {
+  display: flex;
+  flex-direction: column;
+  width: 400px;
+  max-width: calc(100vw - 48px);
+  max-height: min(480px, calc(100vh - 96px));
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--bg2);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 18px 48px rgba(0, 0, 0, 0.22);
+}
+.wiz-romodal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.wiz-romodal-x {
+  border: none;
+  background: none;
+  color: var(--ink3);
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.wiz-romodal-x:hover {
+  color: var(--ink);
+  background: var(--bg3);
+}
+.wiz-romodal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-height: 56px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg1);
+}
+.wiz-role-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.wiz-role-item:hover {
+  background: var(--bg3);
+}
+.wiz-role-item.is-sel {
+  background: var(--bg3);
+  font-weight: 600;
+}
+.wiz-role-item-name {
+  flex: none;
+  font-size: 12.5px;
+}
+.wiz-role-item-desc {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wiz-role-x {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wiz-role-item:hover .wiz-role-x {
+  display: inline-flex;
+}
+.wiz-role-item:hover .wiz-role-item-desc {
+  padding-right: 22px;
+}
+.wiz-role-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--ink3);
+  text-align: center;
+}
+.wiz-role-new {
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink3);
+  cursor: pointer;
+}
+.wiz-role-new:hover {
+  color: var(--ink);
+}
+.wiz-role-check {
+  flex: none;
+  color: var(--ink);
+}
+.wiz-role-hint {
+  font-size: 11px;
+  color: var(--warning, #e3ce5c);
+}
+.wiz-count {
+  align-self: flex-end;
+  font-size: 10.5px;
+  color: var(--ink3);
+}
+.wiz-role-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 4px 2px;
+  margin-top: 10px;
+}
+.wiz-role-form-actions {
+  display: flex;
+  gap: 8px;
+}
+.wiz-rb {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg2);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.wiz-rb-ghost {
+  background: none;
+  color: var(--ink3);
+}
+.wiz-rb:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 </style>

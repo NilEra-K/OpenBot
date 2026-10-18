@@ -335,7 +335,7 @@ const toggleGroupGui = (agentId: string): void => {
         </div>
 
         <div class="ctx-sec">档案</div>
-        <div class="kv"><span class="k">角色</span><span class="v">{{ activeAgent?.role === 'steward' ? '管家（steward）' : '工人（worker）' }}</span></div>
+        <div class="kv"><span class="k">角色</span><span class="v">{{ activeAgent?.roleName ? `${activeAgent.roleName}（${activeAgent.role === 'steward' ? 'steward' : 'worker'}）` : activeAgent?.role === 'steward' ? '管家（steward）' : '工人（worker）' }}</span></div>
         <!-- 人设（2026-10-18 身份修复）：点击改写——即时生效（群聊不冒充管家）；留空保存即清除 -->
         <div v-if="!personaEdit.open" class="kv kv-click" role="button" tabindex="0" title="点击编辑人设" @click="openPersonaEdit" @keydown.enter="openPersonaEdit">
           <span class="k">人设</span>
@@ -344,7 +344,7 @@ const toggleGroupGui = (agentId: string): void => {
         <div v-else class="kv kv-edit">
           <span class="k">人设</span>
           <span class="v">
-            <input ref="personaInputEl" v-model="personaEdit.text" maxlength="120" placeholder="一句话身份描述，例：团队的研究员，负责查证事实" @keydown.enter="savePersona" @keydown.esc="personaEdit.open = false" />
+            <input ref="personaInputEl" v-model="personaEdit.text" maxlength="500" placeholder="一句话身份描述，例：团队的研究员，负责查证事实" @keydown.enter="savePersona" @keydown.esc="personaEdit.open = false" />
             <button class="kv-btn" type="button" @click="savePersona">保存</button>
             <button class="kv-btn kv-btn-ghost" type="button" @click="personaEdit.open = false">取消</button>
           </span>

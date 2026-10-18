@@ -2457,3 +2457,69 @@ test('群聊身份与独立作答（2026-10-18）：persona 自称正确 + #讨�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('自定义角色（2026-10-18）：向导建档位 → 选中建 Agent → roleName/persona 留档与档案呈现 → 删除档位', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-roles-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— 向导：自定义 ▾ → 新建档位「小红书运维」（下拉清单交互）——
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
+    const card = page.locator('.wiz-card')
+    await expect(card).toBeVisible()
+    await card.locator('.wiz-role-menu-btn').click()
+    await expect(page.locator('.wiz-romodal')).toBeVisible()
+    await expect(page.locator('.wiz-role-empty')).toBeVisible() // 空态如实
+    // 新建表单常驻（无二次展开）；二级模态不顶高——向导卡片高度零变化
+    const cardBox = await card.boundingBox()
+    await page.locator('.wiz-role-form input').nth(0).fill('小红书运维')
+    await page.locator('.wiz-role-form input').nth(1).fill('负责小红书笔记投放、数据复盘与评论区运营')
+    await page.locator('.wiz-rb', { hasText: '保存并选用' }).click()
+    expect(Math.abs((await card.boundingBox()).height - cardBox.height)).toBeLessThan(1)
+    // 保存即选中：按钮呈现档位名选中态；人设占位随选中档位
+    const menuBtn = card.locator('.wiz-role-menu-btn')
+    await expect(menuBtn).toHaveText(/小红书运维/)
+    await expect(menuBtn).toHaveClass(/is-sel/)
+    // B 优化：选中即填入默认人设（所见即所得——值断言替代占位断言）
+    await expect(card.locator('#wizPersona')).toHaveValue(/小红书笔记投放/)
+
+    // —— 用该档位建 Agent（人设留空=按档位默认）——
+    await page.locator('#wizName').fill('种草姬')
+    await card.getByRole('button', { name: '下一步' }).click()
+    await card.getByRole('button', { name: '下一步' }).click()
+    await card.getByRole('button', { name: '创建 Agent' }).click()
+    await expect(page.locator('.toast', { hasText: '种草姬」已创建' })).toBeVisible({ timeout: 15_000 })
+
+    // —— ctx 档案：角色行带档位名（权限语义 worker 如实保留）+ 人设行档位默认文案 ——
+    await page.getByTitle('会话档案').click()
+    await expect(page.locator('.ctx .kv', { hasText: '角色' })).toContainText('小红书运维（worker）')
+    await expect(page.locator('.ctx .kv', { hasText: '人设' })).toContainText('小红书笔记投放')
+
+    // —— 档位复用与删除：重开向导，清单里档位仍在；hover 删除后清单为空 ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 新建 Agent' }).click()
+    await card.locator('.wiz-role-menu-btn').click()
+    const row = page.locator('.wiz-role-item', { hasText: '小红书运维' })
+    await expect(row).toBeVisible() // 模板已持久
+    await row.hover()
+    await row.locator('.wiz-role-x').click()
+    await expect(page.locator('.wiz-role-item')).toHaveCount(0)
+    await expect(page.locator('.wiz-role-empty')).toBeVisible()
+    // 已建 Agent 不受影响（roleName/persona 已留档，只是档位不再可选）；× 关模态再关向导
+    await page.locator('.wiz-romodal-x').click()
+    await card.locator('.wiz-btn', { hasText: '取消' }).first().click()
+    await page.locator('.roster-item', { hasText: '种草姬' }).click()
+    // 档案视图此前已开（ctxSettings 会话局部态）——直接断言
+    await expect(page.locator('.ctx .kv', { hasText: '角色' })).toContainText('小红书运维（worker）')
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

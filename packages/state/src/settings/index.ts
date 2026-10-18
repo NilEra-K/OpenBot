@@ -62,6 +62,13 @@ export interface RelaySettings {
   roomName?: string
 }
 
+/** 自定义角色模板（2026-10-18 用户需求：小红书运维/微商运营等用户自建档位）：
+ *  name 即档位名（模板键），persona 为默认人设文案——建 Agent 时选中即预填，可微调 */
+export interface RoleTemplate {
+  name: string
+  persona: string
+}
+
 export interface AppSettings {
   version: 2
   defaultProvider?: string
@@ -76,6 +83,8 @@ export interface AppSettings {
   relay?: RelaySettings
   /** 全局回退端点（P4 Step 11）：引用 providers 内档案名；主力请求失败时本轮降级，下轮自动回主力（不粘滞） */
   fallbackProvider?: string
+  /** 自定义角色模板（2026-10-18）：可选字段（旧文件兼容）；内置四角色不落库（代码内建） */
+  roleTemplates?: RoleTemplate[]
 }
 
 /** 展示形状：给 renderer/命令面，绝无 key 材料 */
@@ -369,6 +378,33 @@ export class SettingsStore {
     return settings.fallbackProvider ?? null
   }
 
+  /** 自定义角色模板（2026-10-18）：读取（旧文件缺席 = 空清单；坏条目过滤） */
+  async getRoleTemplates(): Promise<RoleTemplate[]> {
+    const settings = await this.load()
+    return (settings.roleTemplates ?? []).filter(
+      (r) => typeof r?.name === 'string' && r.name !== '' && typeof r?.persona === 'string' && r.persona !== '',
+    )
+  }
+
+  /** 新增/更新角色模板（同名覆盖）；上限 20 个（防泛滥——角色档位是精挑的不是收藏夹） */
+  async upsertRoleTemplate(input: { name: string; persona: string }): Promise<RoleTemplate[]> {
+    const settings = await this.load()
+    const templates = (settings.roleTemplates ?? []).filter((r) => r.name !== input.name)
+    if (templates.length >= 20 && (settings.roleTemplates ?? []).every((r) => r.name !== input.name)) {
+      throw new KernelError('SETTINGS_ROLE_LIMIT', '自定义角色已达上限 20 个')
+    }
+    templates.push({ name: input.name, persona: input.persona })
+    await this.#save({ ...settings, roleTemplates: templates })
+    return structuredClone(templates)
+  }
+
+  /** 删除角色模板（不存在的名字幂等通过——已建 Agent 的 roleName/persona 不受影响，只是档位不再可选） */
+  async removeRoleTemplate(name: string): Promise<void> {
+    const settings = await this.load()
+    const templates = (settings.roleTemplates ?? []).filter((r) => r.name !== name)
+    await this.#save({ ...settings, roleTemplates: templates })
+  }
+
   async #save(settings: AppSettings): Promise<void> {
     this.#cache = structuredClone(settings)
     await this.#fs.write(this.#path, `${JSON.stringify(settings, null, 2)}\n`)
@@ -408,6 +444,7 @@ function parseLoose(raw: string | null): AppSettings {
       fallbackProvider?: unknown
       relays?: RelaySettings[]
       relay?: RelaySettings
+      roleTemplates?: unknown
       providers?: Array<Record<string, unknown>>
     }
     if (parsed && (parsed.version === 1 || parsed.version === 2) && Array.isArray(parsed.providers)) {
@@ -436,6 +473,15 @@ function parseLoose(raw: string | null): AppSettings {
         ...(asStr(parsed.defaultModel) !== undefined ? { defaultModel: asStr(parsed.defaultModel) } : {}),
         ...(asStr(parsed.sandbox) !== undefined ? { sandbox: parsed.sandbox as SandboxPreference } : {}),
         ...(asStr(parsed.fallbackProvider) !== undefined ? { fallbackProvider: asStr(parsed.fallbackProvider) } : {}),
+        ...(Array.isArray(parsed.roleTemplates)
+          ? {
+              roleTemplates: parsed.roleTemplates.filter(
+                (r): r is RoleTemplate =>
+                  typeof (r as { name?: unknown })?.name === 'string' && (r as { name: string }).name !== '' &&
+                  typeof (r as { persona?: unknown })?.persona === 'string' && (r as { persona: string }).persona !== '',
+              ),
+            }
+          : {}),
         ...(parsed.relays !== undefined ? { relays: parsed.relays } : {}),
         // P7 早期单房间字段：读兼容保留（getRelays 回退），写入走 relays
         ...(parsed.relay !== undefined ? { relay: parsed.relay } : {}),

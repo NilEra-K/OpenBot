@@ -100,6 +100,8 @@ export interface AgentRegistration {
   imageId?: string
   /** 人设（2026-10-18 身份修复）：身份描述一句话——注入系统提示词与群轮 prompt */
   persona?: string
+  /** 角色档位名（2026-10-18 自定义角色）：呈现留档（权限语义在 steward 标志） */
+  roleName?: string
   /** 该 agent 的模型客户端；未提供时用空脚本 mock（首个 turn 即显式报脚本耗尽） */
   llm?: ChatProvider
   /** 注册后立即任命为管家（走标准任命事务：他人在位时如实拒绝） */
@@ -687,7 +689,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       // 重启幂等：名册已有此 agent（持久化态）则只重建内存态（调度器/Box/llm），不重复注册
       const registered = (await agentStore.list()).some((a) => a.agentId === registration.agentId)
       if (!registered) {
-        await agentStore.register(registration.agentId, registration.name, registration.color, registration.modelProvider, registration.imageId, registration.persona)
+        await agentStore.register(registration.agentId, registration.name, registration.color, registration.modelProvider, registration.imageId, registration.persona, registration.roleName)
       }
       // 身份元信息登记（2026-10-18 身份修复）：档案真相（role 含任命态；重启恢复路径同源）
       const stored = await agentStore.get(registration.agentId)

@@ -275,7 +275,9 @@ const registerAgentSchema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/)
     .optional(),
   /** 人设（2026-10-18 身份修复）：身份描述一句话——注入系统提示词（群聊不冒充管家） */
-  persona: z.string().trim().min(1).max(120).optional(),
+  persona: z.string().trim().min(1).max(500).optional(),
+  /** 角色档位名（2026-10-18 自定义角色）：呈现留档 */
+  roleName: z.string().trim().min(1).max(12).optional(),
   /** 模型覆盖档案名（backlog ③）：可选——引用 providers 档案；悬空显式拒绝（命令面） */
   modelProvider: z.string().trim().min(1).max(64).optional(),
   /** 镜像绑定（P8-4）：可选——引用镜像条目 id；悬空显式拒绝（命令面） */
@@ -1130,6 +1132,23 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await applyProvider()
       return { ok: true }
     }, nameSchema)
+    // ---- 自定义角色模板（2026-10-18 用户需求：小红书运维/微商运营等用户自建档位）----
+    // 内置四角色在渲染层内建不落库；用户模板存 settings.roleTemplates（additive 旧文件兼容）
+    .register('v1.roles.list', async () => ({ templates: await settings.getRoleTemplates() }))
+    .register(
+      'v1.roles.upsert',
+      async (payload) => {
+        const input = z
+          .object({ name: z.string().trim().min(1).max(12), persona: z.string().trim().min(1).max(500) })
+          .parse(payload)
+        return { templates: await settings.upsertRoleTemplate(input) }
+      },
+      z.object({ name: z.string().trim().min(1).max(12), persona: z.string().trim().min(1).max(500) }),
+    )
+    .register('v1.roles.remove', async (payload) => {
+      await settings.removeRoleTemplate(nameSchema.parse(payload).name)
+      return { ok: true }
+    }, nameSchema)
     // 供应商重排（左栏拖拽排序）：names 全量清单须与既有档案同集合（settings 层校验）；顺序不影响 provider 实例，无需热切换
     .register('v1.settings.reorderProviders', async (payload) => {
       await settings.reorder(reorderProvidersSchema.parse(payload).names)
@@ -1416,7 +1435,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 注册 agent（P4 Step 5）：经装配 addAgent（名册+调度器+专属 Box+turn 接线）；
     // llm 共享 SwitchableChatProvider——主力模型切换对全部 agent 生效（与启动装配同语义）
     .register('v1.system.registerAgent', async (payload) => {
-      const { name, color, role, modelProvider, imageId, persona } = registerAgentSchema.parse(payload)
+      const { name, color, role, modelProvider, imageId, persona, roleName } = registerAgentSchema.parse(payload)
       // 管家前置检查：在位时直接拒绝（不创建半成品 agent；任命事务由 addAgent 兜底不变量）
       if (role === 'steward' && (await kernel.agentStore.findSteward()) !== null) {
         throw new KernelError('STATE_STEWARD_EXISTS', '管家已在位（须先罢免或转移）')
@@ -1439,6 +1458,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         ...(modelProvider !== undefined ? { modelProvider } : {}),
         ...(imageId !== undefined ? { imageId } : {}),
         ...(persona !== undefined ? { persona } : {}),
+        ...(roleName !== undefined ? { roleName } : {}),
         llm: await providerOfAgent(modelProvider, false),
         steward: role === 'steward',
       })
@@ -1461,11 +1481,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 与模型/镜像改写的重启语义不同，无实例态需要重建）
     .register('v1.system.setPersona', async (payload) => {
       const { agentId, persona } = z
-        .object({ agentId: z.string().min(1), persona: z.string().trim().min(1).max(120).nullable() })
+        .object({ agentId: z.string().min(1), persona: z.string().trim().min(1).max(500).nullable() })
         .parse(payload)
       await kernel.setPersona(agentId, persona)
       return { ok: true }
-    }, z.object({ agentId: z.string().min(1), persona: z.string().trim().min(1).max(120).nullable() }))
+    }, z.object({ agentId: z.string().min(1), persona: z.string().trim().min(1).max(500).nullable() }))
     // 镜像绑定改写（P8-4）：null=清除回默认沙箱；悬空显式拒绝；重启生效（Box 是装配期创建——
     // 与模型覆盖同语义；改绑后的下一次应用重启把 agent 的 Box 落到新载体）
     .register('v1.system.setImage', async (payload) => {

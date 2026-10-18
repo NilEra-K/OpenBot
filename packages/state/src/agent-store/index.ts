@@ -33,6 +33,9 @@ export interface AgentProfile {
   /** 人设（2026-10-18 身份修复）：身份描述一句话——注入系统提示词（自称/职责边界），
    *  群聊不再冒充管家；可选，版本号+读取端兼容零迁移 */
   persona?: string
+  /** 角色档位名（2026-10-18 自定义角色）：创建时选中的档位（内置四角色或用户模板）——
+   *  呈现用（ctx 档案/名册）；权限语义恒在 role 字段；可选，零迁移 */
+  roleName?: string
 }
 
 export interface AgentStoreOptions {
@@ -57,7 +60,7 @@ export class AgentStore {
   }
 
   /** 注册：一律 worker（steward 只能经任命事务产生）；重名拒绝；color/persona 可选（身份档案事实） */
-  async register(agentId: string, name?: string, color?: string, modelProvider?: string, imageId?: string, persona?: string): Promise<AgentProfile> {
+  async register(agentId: string, name?: string, color?: string, modelProvider?: string, imageId?: string, persona?: string, roleName?: string): Promise<AgentProfile> {
     return this.#withLock(async () => {
       await this.#load()
       if (this.#profiles.has(agentId)) {
@@ -72,6 +75,7 @@ export class AgentStore {
         ...(modelProvider !== undefined && modelProvider !== '' ? { modelProvider } : {}),
         ...(imageId !== undefined && imageId !== '' ? { imageId } : {}),
         ...(persona !== undefined && persona.trim() !== '' ? { persona: persona.trim() } : {}),
+        ...(roleName !== undefined && roleName.trim() !== '' ? { roleName: roleName.trim() } : {}),
       }
       this.#profiles.set(agentId, profile)
       await this.#persist(profile)

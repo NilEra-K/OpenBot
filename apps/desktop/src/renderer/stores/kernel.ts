@@ -94,6 +94,8 @@ export interface RosterEntry {
   boxId?: string | null
   /** 人设（2026-10-18 身份修复）：ctx 档案可编辑（即时生效）；缺席=身份行只带名字 */
   persona?: string
+  /** 角色档位名（2026-10-18 自定义角色）：呈现留档（内置四角色或用户模板名） */
+  roleName?: string
 }
 
 export interface ChatMessage {
@@ -373,6 +375,8 @@ export const useKernelStore = defineStore('kernel', {
     stewardId: null as string | null,
     /** 群清单（P5 Step 4）：boot 与 v1.group.state 事件时刷新 */
     groups: [] as GroupEntry[],
+    /** 自定义角色模板（2026-10-18）：boot 拉取 + 向导保存/删除后刷新（内置四角色在渲染层内建） */
+    roleTemplates: [] as Array<{ name: string; persona: string }>,
     /** 群终答 runId 集合（群轮过程私聊隔离的判据）：群流装载（group-agent 记录）与
      *  v1.group.message 实况收集——识别「成员档案里的遗留群轮过程记录」（新数据已落群流） */
     groupRunIds: [] as string[],
@@ -485,6 +489,7 @@ export const useKernelStore = defineStore('kernel', {
         if (this.caps?.snapshot) await this.refreshSnapshots()
         await this.refreshSandbox()
         await this.refreshGroups()
+        await this.refreshRoleTemplates()
         this.connected = true
       } catch (err) {
         this.bootError = err instanceof Error ? err.message : String(err)
@@ -505,7 +510,7 @@ export const useKernelStore = defineStore('kernel', {
     },
     /** 名册快照重拉（boot 与注册后共用——roster 事件只带 agentId/role，档案字段以快照为准） */
     async refreshRoster(): Promise<void> {
-      const agents = await this.call<Array<{ agentId: string; name?: string; role: string; color?: string; modelProvider?: string; imageId?: string; boxId?: string | null; persona?: string }>>('v1.system.listAgents')
+      const agents = await this.call<Array<{ agentId: string; name?: string; role: string; color?: string; modelProvider?: string; imageId?: string; boxId?: string | null; persona?: string; roleName?: string }>>('v1.system.listAgents')
       this.roster = agents.map((a) => ({
         agentId: a.agentId,
         name: a.name,
@@ -515,6 +520,7 @@ export const useKernelStore = defineStore('kernel', {
         ...(a.imageId !== undefined ? { imageId: a.imageId } : {}),
         boxId: a.boxId ?? null,
         ...(a.persona !== undefined ? { persona: a.persona } : {}),
+        ...(a.roleName !== undefined ? { roleName: a.roleName } : {}),
       }))
     },
     /** 更新人设（2026-10-18）：即时生效（提示词每轮取档案真相）——成功后重拉名册 */
@@ -523,7 +529,7 @@ export const useKernelStore = defineStore('kernel', {
       await this.refreshRoster()
     },
     /** 注册 agent（P4 Step 5）：命令面受理（name/color/role）→ 重拉名册 → 返回 agentId（向导跳会话用） */
-    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string; imageId?: string; persona?: string }): Promise<string> {
+    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string; imageId?: string; persona?: string; roleName?: string }): Promise<string> {
       const created = await this.call<{ agentId: string }>('v1.system.registerAgent', input)
       await this.refreshRoster()
       return created.agentId
@@ -590,6 +596,19 @@ export const useKernelStore = defineStore('kernel', {
     /** 群清单重拉（P5 Step 4：boot 与 v1.group.state 事件时） */
     async refreshGroups(): Promise<void> {
       this.groups = await this.call<GroupEntry[]>('v1.group.list')
+    },
+    /** 自定义角色模板（2026-10-18）：向导档位数据源 */
+    async refreshRoleTemplates(): Promise<void> {
+      const r = await this.call<{ templates: Array<{ name: string; persona: string }> }>('v1.roles.list')
+      this.roleTemplates = r.templates
+    },
+    async upsertRoleTemplate(name: string, persona: string): Promise<void> {
+      const r = await this.call<{ templates: Array<{ name: string; persona: string }> }>('v1.roles.upsert', { name, persona })
+      this.roleTemplates = r.templates
+    },
+    async removeRoleTemplate(name: string): Promise<void> {
+      await this.call('v1.roles.remove', { name })
+      await this.refreshRoleTemplates()
     },
     /** 建群（成员名册在位校验在内核）→ 刷新清单，返回 groupId（跳群会话用） */
     async createGroup(name: string, memberAgentIds: string[]): Promise<string> {
