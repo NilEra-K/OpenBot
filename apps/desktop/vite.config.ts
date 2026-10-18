@@ -12,5 +12,13 @@ export default defineConfig({
   base: './',
   plugins: [vue()],
   server: { port: 5183, strictPort: true },
-  build: { outDir: '../../dist/renderer', emptyOutDir: true },
+  build: {
+    outDir: '../../dist/renderer',
+    emptyOutDir: true,
+    // 字体永不内联为 data URI（2026-10-18 CSP 报障）：@fontsource 小体积 woff2 分片曾被
+    // 内联成 base64 data: 加载，被 CSP default-src 'self' 拦截——字体一律以 'self' 真实
+    // 文件加载，CSP 保持严格不放宽 font-src data:；其余资源维持 4096 默认阈值
+    assetsInlineLimit: (filePath, content) =>
+      !filePath.endsWith('.woff2') && !filePath.endsWith('.woff') && content.length <= 4096,
+  },
 })

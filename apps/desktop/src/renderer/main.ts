@@ -4,6 +4,9 @@
  */
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+// 中文统一字体（2026-10-18 用户裁定：拉丁走系统 Consolas，中文捆绑 Noto Sans SC 三平台一致）
+// fontsource 按 unicode-range 分片，运行时只加载用到的区段
+import '@fontsource/noto-sans-sc/400.css'
 import App from './App.vue'
 
 const app = createApp(App)
