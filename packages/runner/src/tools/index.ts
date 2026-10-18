@@ -39,6 +39,9 @@ export interface ToolContext {
   /** 该 agent 绑定的 Box；null = 无沙箱，in-box 工具报 TOOL_NO_BOX */
   boxId: string | null
   signal: AbortSignal
+  /** 过程记录落盘键（群轮 = groupId——群轮过程落群流，成员私聊档案零群痕迹；缺省 = 私聊轮，
+   *  过程落 agentId。只影响 exec 记录归属，不影响实况流与事件（两者按 agentId 呈现归群视图） */
+  sessionKey?: string
 }
 
 /** 工具结果（plan-computer-use Step 3）：纯文本快路径；图像在场（computer 截图）时
@@ -209,8 +212,9 @@ export function execTool(deps: BoxToolDeps): Tool {
           exitCode: result.exitCode,
         })
         emit?.({ type: 'end', agentId: ctx.agentId, runId: ctx.runId, stream: 'exec', exitCode: result.exitCode })
-        // 过程事实：exec 完成点聚合落 transcript（实况断线不补，事实可重放）
-        await deps.transcript?.append(ctx.agentId, 'exec', {
+        // 过程事实：exec 完成点聚合落 transcript（实况断线不补，事实可重放）；
+        // 落盘键 = sessionKey ?? agentId（群轮落群流——过程归群，成员档案零群痕迹）
+        await deps.transcript?.append(ctx.sessionKey ?? ctx.agentId, 'exec', {
           runId: ctx.runId,
           boxId,
           command,
@@ -227,8 +231,8 @@ export function execTool(deps: BoxToolDeps): Tool {
           stream: 'exec',
           reason: err instanceof Error ? err.message : String(err),
         })
-        // 中止也是事实：记录错误语义（重启后呈现同样诚实）
-        await deps.transcript?.append(ctx.agentId, 'exec', {
+        // 中止也是事实：记录错误语义（重启后呈现同样诚实；落盘键同成功路径——sessionKey 优先）
+        await deps.transcript?.append(ctx.sessionKey ?? ctx.agentId, 'exec', {
           runId: ctx.runId,
           boxId,
           command,

@@ -259,8 +259,10 @@ export class TurnRunner {
       }
       // 过程事实：本轮思考落 transcript（v0.1.48 修正：存**真思考聚合**——onThinking 通道；
       // 此前存终答文本是双通道前的旧语义，重启后"思考没了"的根因。终答文本的家在 agent 消息，
-      // 不再重复进 thinking；无思考的轮次记空串留过程痕迹（恢复投影跳过））
-      await this.#deps.transcript.append(agentId, 'thinking', {
+      // 不再重复进 thinking；无思考的轮次记空串留过程痕迹（恢复投影跳过）。
+      // 落盘键 = sessionKey（群轮落群流——群轮的消息与过程同归群，成员私聊档案零群痕迹；
+      // 私聊轮不变落 agentId）
+      await this.#deps.transcript.append(sessionKey, 'thinking', {
         runId: run.runId,
         round: chatRound,
         text: truncateForTranscript(thinkingText, MAX_THINKING_CHARS),
@@ -334,6 +336,8 @@ export class TurnRunner {
           toolCallId: call.id,
           boxId,
           signal: run.signal,
+          // 群轮过程落群流（exec 记录落盘键——见 ToolContext.sessionKey）
+          ...(input.session ? { sessionKey: input.session.groupId } : {}),
         }
         const result = await this.#deps.tools.execute(ctx, call)
         // 含图回喂（plan-computer-use Step 3）+ 视觉分流（P8-4 后 UI 优化，用户裁定）：
@@ -412,7 +416,9 @@ export class TurnRunner {
       emit({ type: 'abort', stream: 'llm', reason: err instanceof Error ? err.message : String(err) })
       throw err
     }
-    await this.#deps.transcript.append(agentId, 'thinking', {
+    // 落盘键 = sessionKey（与主轮同语义：群轮过程落群流，私聊轮落 agentId）
+    const sessionKey = input.session?.groupId ?? agentId
+    await this.#deps.transcript.append(sessionKey, 'thinking', {
       runId: run.runId,
       round: nextChatRound,
       text: truncateForTranscript(wrapupThinking, MAX_THINKING_CHARS),

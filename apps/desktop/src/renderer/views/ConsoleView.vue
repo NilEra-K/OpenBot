@@ -184,16 +184,20 @@ const fmtDay = (at: number): string => {
 const agentOfRun = (runId?: string): string | null =>
   runId !== undefined && runId.includes('-run-') ? (runId.split('-run-')[0] ?? null) : null
 
-/** 该 agent 有排程中的 run（进行中单元与三个点占位的触发条件） */
+/** 该 agent 有排程中的 run（进行中单元与三个点占位的触发条件）；群轮 run（kind='group'）
+ *  不点亮私聊「进行中」——群轮反馈归群视图（轮转中提示），打断走 supersede 连发语义，
+ *  私聊侧的中止入口不再误杀群轮成员 run */
 const agentBusy = computed(() =>
-  kernel.runs.some((r) => r.agentId === ui.activeAgentId && (r.state === 'queued' || r.state === 'running')),
+  kernel.runs.some(
+    (r) => r.agentId === ui.activeAgentId && r.kind !== 'group' && (r.state === 'queued' || r.state === 'running'),
+  ),
 )
 
 /** 进行中 run（中止入口的目标） */
 const activeRun = computed(
   () =>
     kernel.runs.find(
-      (r) => r.agentId === ui.activeAgentId && (r.state === 'queued' || r.state === 'running'),
+      (r) => r.agentId === ui.activeAgentId && r.kind !== 'group' && (r.state === 'queued' || r.state === 'running'),
     ) ?? null,
 )
 
@@ -251,6 +255,10 @@ const streamUnits = computed<StreamUnit[]>(() => {
   const active = ui.activeAgentId
   const raw: RawRow[] = []
   kernel.messages.forEach((m, i) => {
+    // 群维度消息（group-*）只归群视图（groupUnits 按 groupId 过滤）——私聊流零群痕迹：
+    // 此前 group-agent 落 from===active 分支被当 relay 行渲染（群里说的话漏进 1:1 会话，
+    // 且点击 relay 会把 groupId 塞进 activeAgentId 进入伪会话）
+    if (m.groupId !== undefined) return
     // 远端 mirror 消息（P7）：归属该远端成员自己的会话（from 即 `remote:<memberId>`——
     // 原型语义：远端成员是名册一员，mirror 消息进其会话流，不再塞管家会话）
     const related =
@@ -268,12 +276,16 @@ const streamUnits = computed<StreamUnit[]>(() => {
     })
   })
   kernel.execs.forEach((e, i) => {
+    // 群轮 exec 卡不进私聊流（isGroupRun：实况 run kind ∥ 遗留清扫集合）——操作过程归群
+    if (e.runId !== undefined && kernel.isGroupRun(e.runId)) return
     if (agentOfRun(e.runId) === active) raw.push({ key: `e${i}`, at: e.at, kind: 'exec', execIndex: i })
   })
   // llm 实况双通道（v0.1.43）：think 块进思考卡；正文块按时间序作 live 消息行（终答到达由
   // store 去重让位）。agentId 直配；实况断线不补，重启后历史只有事实事件（诚实分层）
   for (const block of kernel.streams) {
     if (block.agentId !== active || block.stream !== 'llm' || block.stdout === '') continue
+    // 群轮思考/正文不进私聊流（think 卡与预览气泡同判据——群轮的呈现归群视图）
+    if (kernel.isGroupRun(block.runId)) continue
     if (block.think === true) {
       raw.push({ key: `t-${block.key}`, at: block.at, kind: 'think', block })
       continue
@@ -343,7 +355,8 @@ const streamUnits = computed<StreamUnit[]>(() => {
 /** 已终结块组的状态行：该 agent 最新 run 的终态文案——v0.1.43 强化：所有非正常终态都醒目
  *  交代（此前仅 aborted/failed 两条且弱呈现——「只有 think 没有终答」时用户不知为何） */
 const endedOutcomeLabel = computed(() => {
-  const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId).at(-1)
+  // 群轮 run 不在此交代（其终态归群流注记）——只看该 agent 的私聊/协作 run
+  const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId && r.kind !== 'group').at(-1)
   if (!last) return null
   if (last.state === 'aborted') return '本轮已中止——未产出终答（过程与思考见上方）'
   if (last.state === 'failed') return (last.code ? `失败 · ${last.code}` : '失败') + '——未产出终答（过程与思考见上方）'

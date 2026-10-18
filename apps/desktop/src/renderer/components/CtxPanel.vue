@@ -23,8 +23,11 @@ import GuiScreen from './GuiScreen.vue'
 const kernel = useKernelStore()
 const ui = useUiStore()
 
-/** 当前会话 agent 的流块 */
-const mine = computed(() => kernel.streams.filter((s) => s.agentId === ui.activeAgentId))
+/** 当前会话 agent 的流块（群轮过程不进私聊屏——isGroupRun 过滤；群视图的成员屏阵列
+ *  另走 groupScreens 直取 kernel.streams，与本过滤互不影响） */
+const mine = computed(() =>
+  kernel.streams.filter((s) => s.agentId === ui.activeAgentId && !kernel.isGroupRun(s.runId)),
+)
 
 /** 屏幕：exec 块按时间序（取最近 6 条，屏幕缓冲有限） */
 const screenBlocks = computed(() => mine.value.filter((s) => s.stream === 'exec').slice(-6))

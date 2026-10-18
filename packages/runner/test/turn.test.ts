@@ -504,18 +504,23 @@ describe('TurnRunner A2A 链路（chat → send_message → 对端 turn → box 
     await h.groups.sendUserMessage({ groupId: group.groupId, text: '各自说说', nonce: 'n1' })
     await waitIdle([s1, s2])
 
-    // 群流：建群 sys + user + a1 发言 + a2 pass 注记（2026-10-15 pass 可见化——[pass] 本身不落群流）
+    // 群流：建群 sys + user + a1 发言 + a2 pass 注记（2026-10-15 pass 可见化——[pass] 本身不落群流）；
+    // 群轮 thinking 过程记录随终答同落群流（2026-10-18 群过程归群——成员档案零群痕迹）
     expect((await h.transcript.readAll(group.groupId)).map((r) => r.kind)).toEqual([
       'group-sys',
       'group-user',
+      'thinking',
       'group-agent',
+      'thinking',
       'group-sys',
     ])
-    expect(((await h.transcript.readAll(group.groupId))[3]?.payload as { text: string }).text).toBe('a2 本轮 pass')
-    const agentRecord = (await h.transcript.readAll(group.groupId))[2]?.payload as { from: string; text: string }
+    const groupRecords = await h.transcript.readAll(group.groupId)
+    expect((groupRecords[5]?.payload as { text: string }).text).toBe('a2 本轮 pass')
+    const agentRecord = groupRecords[3]?.payload as { from: string; text: string }
     expect(agentRecord).toMatchObject({ from: 'a1', text: 'a1 的群发言' })
-    // 私聊流零污染：群里说的话不出现在 1:1 会话（过程 thinking 归 agent 不算领域消息）
-    expect((await h.transcript.readAll('a1')).filter((r) => r.kind === 'agent')).toHaveLength(0)
+    // 私聊流零污染：群里说的话不出现在 1:1 会话，过程（thinking/exec）也归群流——成员档案
+    // 零群痕迹（2026-10-18 修正：此前群轮 thinking 落成员档案，重启后被投影成私聊孤儿思考卡）
+    expect((await h.transcript.readAll('a1')).filter((r) => ['agent', 'thinking', 'exec'].includes(r.kind))).toHaveLength(0)
     // 事件族：group.message = sys + user + agent + a2 pass 注记（2026-10-15 pass 可见化——[pass] 本身不发）
     expect(h.events.filter((e) => e.type === 'v1.group.message')).toHaveLength(4)
     // a2 的 turn 输入：群前缀 + a1 已发言上下文（轮转传递）+ [pass] 指令
@@ -524,6 +529,27 @@ describe('TurnRunner A2A 链路（chat → send_message → 对端 turn → box 
     expect(last).toContain(`[群 ${group.groupId}`)
     expect(last).toContain('a1 的群发言')
     expect(last).toContain('[pass]')
+  })
+
+  it('群轮工具调用：exec 过程记录落群流（ToolContext.sessionKey——成员档案零群痕迹）', async () => {
+    const h = makeHarness({
+      a1: [
+        { toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['node', '-v'] } }] },
+        { text: '群里执行完成' },
+      ],
+    })
+    const a1 = await h.register('a1')
+    const group = await h.groups.createGroup({ name: '工具群', memberAgentIds: ['a1'] })
+    await h.groups.sendUserMessage({ groupId: group.groupId, text: '跑个命令', nonce: 'n1' })
+    await waitIdle([a1])
+
+    // 群流：exec 过程记录落群（runId 前缀仍是成员——渲染层 isGroupRun 按群终答 runId 判）
+    const groupRecords = await h.transcript.readAll(group.groupId)
+    const execRecord = groupRecords.find((r) => r.kind === 'exec')?.payload as { runId: string; command: string[] }
+    expect(execRecord).toMatchObject({ command: ['node', '-v'] })
+    expect(execRecord.runId).toMatch(/^a1-run-/)
+    // 成员档案：消息与过程（thinking/exec）双零群痕迹
+    expect(await h.transcript.readAll('a1')).toHaveLength(0)
   })
 
   it('supersede 写入拦截（P5 Step 4 修复）：旧代际 turn 终答不落群流不发事件（防线在写入点）', async () => {

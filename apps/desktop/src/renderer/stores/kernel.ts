@@ -369,6 +369,9 @@ export const useKernelStore = defineStore('kernel', {
     stewardId: null as string | null,
     /** 群清单（P5 Step 4）：boot 与 v1.group.state 事件时刷新 */
     groups: [] as GroupEntry[],
+    /** 群终答 runId 集合（群轮过程私聊隔离的判据）：群流装载（group-agent 记录）与
+     *  v1.group.message 实况收集——识别「成员档案里的遗留群轮过程记录」（新数据已落群流） */
+    groupRunIds: [] as string[],
     messages: [] as ChatMessage[],
     pendingApprovals: [] as PendingApproval[],
     execs: [] as ExecCard[],
@@ -421,6 +424,14 @@ export const useKernelStore = defineStore('kernel', {
     colorOf(state): (agentId: string) => string {
       return (agentId: string): string =>
         state.roster.find((a) => a.agentId === agentId)?.color ?? agentColor(agentId)
+    },
+    /** 群轮 run 判定（私聊视图过滤——群轮的消息与过程只归群）：当前会话实况 run 走生命周期
+     *  kind（v1.lifecycle.queued 带 kind='group'）；历史/遗留 run 走群终答 runId 集合
+     *  （群流 group-agent 记录精确比对——runId 的 boot 前缀是启动批次号，同批私聊/群轮
+     *  共用，不能按前缀判） */
+    isGroupRun(state): (runId: string) => boolean {
+      return (runId: string): boolean =>
+        state.runs.some((r) => r.runId === runId && r.kind === 'group') || state.groupRunIds.includes(runId)
     },
   },
   actions: {
@@ -834,6 +845,17 @@ export const useKernelStore = defineStore('kernel', {
         }
       }
       if (bootBoundaries.length > 0) this.sessionBoundaries[agentId] = bootBoundaries
+      // 群键判定（本调用是群装载还是成员装载）：群键的过程记录（新语义：群轮 thinking/exec
+      // 落群流）不投影——群视图无过程卡（v0.1.73 裁定），且 exec 卡按 runId 前缀会被成员
+      // 私聊拾取（agentOfRun 剥前缀），必须在此拦下
+      const isGroupKey = this.groups.some((g) => g.groupId === agentId)
+      // 群流先行装载（遗留清扫判据）：成员档案含过程记录（thinking/exec）时先把全部群
+      // transcript 拉齐——旧数据群轮过程曾落成员档案，须以群流 group-agent 记录的 runId
+      // 识别（boot 时序保证群清单先于 connected，本调用必在其后；新数据群轮过程已落群流，
+      // 此步对纯新数据是空转幂等）
+      if (!isGroupKey && records.some((r) => r.kind === 'thinking' || r.kind === 'exec')) {
+        await Promise.all(this.groups.map((g) => this.loadHistory(g.groupId).catch(() => {})))
+      }
       // 界面直接清空（v0.1.50 用户裁定）：有效窗口 = 最后边界之后——更早的消息不投影到呈现层
       // （transcript append-only 留证；与实时 cleared 事件的 filter 同款语义）。
       // 群键叠加清空点窗口（2026-10-15 /clear 群语义）：最后 group-sys 清空点之后才投影
@@ -848,6 +870,16 @@ export const useKernelStore = defineStore('kernel', {
         bootBoundaries.length > 0 ? bootBoundaries[bootBoundaries.length - 1]!.at : Number.NEGATIVE_INFINITY,
         groupClearAt,
       )
+      // 群终答 runId 收集（isGroupRun 历史判据的装载来源）：**全量扫描**——不受呈现窗口
+      // 限制（清空点/会话边界之前的群终答仍是「该 run 是群轮」的判据；窗口只是呈现语义——
+      // 目验实证：放在窗口过滤后，/clear 过的群收集数为零，清扫失效）
+      if (isGroupKey) {
+        for (const record of records) {
+          if (record.kind !== 'group-agent') continue
+          const rid = (record.payload as Record<string, unknown>)['runId']
+          if (typeof rid === 'string' && !this.groupRunIds.includes(rid)) this.groupRunIds.push(rid)
+        }
+      }
       for (const m of this.messages) {
         if (bootTombstoned.has(m.messageId)) m.tombstoned = true
         const revised = bootRevisions.get(m.messageId)
@@ -856,12 +888,16 @@ export const useKernelStore = defineStore('kernel', {
       for (const record of records) {
         if (record.at < windowStartAt) continue // 清空呈现：边界之前的记录不投影（含过程事实）
         const p = record.payload as Record<string, unknown>
+        // 群键的过程记录（群轮 thinking/exec 落群流的新语义）不投影——群视图无过程卡，
+        // exec 卡按 runId 前缀会被成员私聊拾取（agentOfRun 剥前缀），必须在此拦下
+        if (isGroupKey && (record.kind === 'thinking' || record.kind === 'exec')) continue
         // ---- 过程事实恢复（thinking/exec 记录）：投影为已结束的伪流块与 exec 卡——
         // 渲染层 streamUnits/execStreamsOf 零改动复用；实况块在场时跳过（按 runId+维度去重，
         // renderer 刷新而内核还活的场景不双计；与消息 messageId 去重同款哲学） ----
         if (record.kind === 'thinking') {
           if (typeof p['runId'] !== 'string' || typeof p['text'] !== 'string') continue
           if (p['text'] === '') continue // 无思考轮（v0.1.48 空串留痕）——不投影
+          if (this.isGroupRun(p['runId'])) continue // 群轮过程（遗留数据）——成员私聊视图不投影
           const round = typeof p['round'] === 'number' ? p['round'] : undefined
           if (
             this.streams.some(
@@ -893,6 +929,7 @@ export const useKernelStore = defineStore('kernel', {
           ) {
             continue
           }
+          if (this.isGroupRun(p['runId'])) continue // 群轮过程（遗留数据）——成员私聊视图不投影
           const command = p['command'] as string[]
           if (!this.execs.some((c) => c.key === p['runId'])) {
             this.execs.push({
@@ -1062,6 +1099,10 @@ export const useKernelStore = defineStore('kernel', {
           const p = event.payload
           if (p.kind === 'user') this.bumpEdge('user', p.groupId)
           else if (p.kind === 'agent') this.bumpEdge(p.from, p.groupId)
+          // 群终答 runId 收集（isGroupRun 历史判据的实况来源——成员档案遗留群轮过程记录的识别）
+          if (p.kind === 'agent' && typeof p.runId === 'string' && !this.groupRunIds.includes(p.runId)) {
+            this.groupRunIds.push(p.runId)
+          }
           if (this.messages.some((m) => m.messageId === p.messageId)) return
           this.messages.push({
             messageId: p.messageId,
@@ -1072,6 +1113,13 @@ export const useKernelStore = defineStore('kernel', {
             at: event.at,
             groupId: p.groupId,
           })
+          // 正文预览块让位（同 v1.message.agent 语义）：成员群终答到达即清其正文 live 块——
+          // 群轮正文的家在群流（此前缺失致同一句话在成员私聊呈现两遍：预览气泡 + relay 行）
+          if (p.kind === 'agent') {
+            this.streams = this.streams.filter(
+              (b) => !(b.agentId === p.from && b.stream === 'llm' && b.think !== true),
+            )
+          }
           return
         }
         case 'v1.group.cleared': {

@@ -625,8 +625,9 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
   const mock = await startMockOpenAi([
     // 旧轮（第1轮）成员响应：延迟中用户插话 → supersede；settle 后代际不匹配被内核静默丢弃
     { match: (l) => l.role === 'user' && l.content.includes('· 第1轮]'), delayMs: 2600, text: '旧轮发言不该出现' },
-    // 新轮（第2轮）首位成员：即时发言（落群流——顺序轮转的第一声）
-    { match: (l) => l.role === 'user' && l.content.includes('· 第2轮]') && !l.content.includes('本轮已发言'), text: '新轮第一位发言' },
+    // 新轮（第2轮）首位成员：即时发言（落群流——顺序轮转的第一声）；reasoning 供私聊隔离断言
+    // （群轮思考卡不得出现在成员私聊——2026-10-18 群过程归群修复）
+    { match: (l) => l.role === 'user' && l.content.includes('· 第2轮]') && !l.content.includes('本轮已发言'), text: '新轮第一位发言', reasoning: '群轮思考不该进私聊' },
     // 轮转后续成员（上下文含「本轮已发言」）：[pass]
     { match: (l) => l.role === 'user' && l.content.includes('本轮已发言'), text: '[pass]' },
     // 第3轮全员 [pass]：无人发言 → 收敛 sysnote（首位 pass 后上下文仍空，同此步命中）
@@ -740,6 +741,18 @@ test('群聊（P5 Step 4）：建群 → 轮转发言 → supersede 丢弃旧轮
     await page.getByRole('button', { name: '图谱', exact: true }).click()
     await expect(page.locator('.ggroup')).toBeVisible()
     await expect(page.locator('.gnode[aria-label*="评审组"]')).toBeVisible()
+
+    // —— 群轮过程私聊隔离（2026-10-18 修复）：成员私聊视图零群痕迹 ——
+    // 切到管家私聊（群轮首位发言人）：群消息（relay 行）、思考卡、正文预览均不在场——
+    // 修复前群终答以 relay 行 + 预览气泡双重呈现、reasoning 落成员档案被投影成思考卡
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.locator('.roster-item', { hasText: '管家' }).first().click()
+    await expect(page.locator('.sh-name')).toHaveText('管家')
+    await expect(page.locator('.stream')).not.toContainText('新轮第一位发言')
+    await expect(page.locator('.stream')).not.toContainText('清空后首答')
+    await expect(page.locator('.stream')).not.toContainText('群轮思考不该进私聊')
+    await expect(page.locator('.think')).toHaveCount(0)
+    await expect(page.locator('.relay')).toHaveCount(0)
   } finally {
     await mock.close()
     await app.close()
