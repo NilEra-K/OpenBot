@@ -432,3 +432,101 @@ describe('addAgent 镜像绑定（plan-image-firstclass P8-4）：create 按 ima
     expect(agents.find((a) => a.agentId === 'a-dangling')?.boxId).toBe('fb-box-1')
   })
 })
+
+describe('会话语义（2026-10-18 /resume 列表改进：UUID + 空会话不计入 + 标题）', () => {
+  /** 按请求形状分派的桩 provider（标题请求走哨兵 system——与对话请求区分，时序无关） */
+  const shapeStub = (title: string, answer: string) =>
+    ({
+      chat: async (request: { system?: string }) => ({
+        text: request.system?.includes('会话标题生成器') === true ? title : answer,
+        toolCalls: [],
+        meta: { model: 'stub' },
+      }),
+    }) as import('@openbot/llm').ChatProvider
+
+  it('/clear 空会话 no-op：不落边界（skipped）；有消息后生成 UUID；连续 clear 只计首条', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'a1', llm: shapeStub('测试标题', '好的') })
+
+    // 全新 agent：当前段为空 → skipped，零边界
+    const r0 = await client.call<{ sessionId: string; skipped?: boolean }>('v1.session.clear', { agentId: 'a1' })
+    expect(r0.skipped).toBe(true)
+    expect(
+      (await client.call<Array<{ kind: string }>>('v1.transcript.read', { agentId: 'a1' })).filter((r) => r.kind === 'session-start'),
+    ).toHaveLength(0)
+
+    // 有消息后 clear：sessionId 为 UUID
+    await client.call('v1.message.sendUser', { toAgentId: 'a1', text: '帮我把项目打包', nonce: 'c1' })
+    await waitIdle(kernel)
+    const r1 = await client.call<{ sessionId: string; skipped?: boolean }>('v1.session.clear', { agentId: 'a1' })
+    expect(r1.skipped).toBeUndefined()
+    expect(r1.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+
+    // 新段为空立即再 clear → skipped；边界仍只一条
+    const r2 = await client.call<{ sessionId: string; skipped?: boolean }>('v1.session.clear', { agentId: 'a1' })
+    expect(r2.skipped).toBe(true)
+    expect(
+      (await client.call<Array<{ kind: string }>>('v1.transcript.read', { agentId: 'a1' })).filter((r) => r.kind === 'session-start'),
+    ).toHaveLength(1)
+  })
+
+  it('v1.session.list：空段不返回（含连续 clear 遗留）；resume 回溯后续写归旧会话；当前段恒在', async () => {
+    const kernel = makeKernel()
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'a1', llm: shapeStub('测试标题', '好的') })
+
+    await client.call('v1.message.sendUser', { toAgentId: 'a1', text: '一问', nonce: 'l1' })
+    await waitIdle(kernel)
+    const { sessionId: u1 } = await client.call<{ sessionId: string }>('v1.session.clear', { agentId: 'a1' })
+    await client.call('v1.session.clear', { agentId: 'a1' }) // 空段 no-op（不产生条目）
+    await client.call('v1.message.sendUser', { toAgentId: 'a1', text: '二问', nonce: 'l2' })
+    await waitIdle(kernel)
+    await client.call('v1.session.resume', { agentId: 'a1' }) // 弹栈回初始段
+    await client.call('v1.message.sendUser', { toAgentId: 'a1', text: '三问', nonce: 'l3' })
+    await waitIdle(kernel)
+
+    const { sessions } = await client.call<{ sessions: Array<{ sessionId: string; messageCount: number; current: boolean; firstText: string }> }>(
+      'v1.session.list',
+      { agentId: 'a1' },
+    )
+    // 初始段（一问一答 + resume 后三问一答，current）与新会话（二问一答）各一条——无空段
+    expect(sessions.map((s) => [s.sessionId, s.messageCount, s.current])).toEqual([
+      ['s-0', 4, true],
+      [u1, 2, false],
+    ])
+  })
+
+  it('会话标题（sessionTitles）：首问后异步生成 session-title 留档，list 携带；缺省关闭零打扰', async () => {
+    const kernel = assembleKernel({ now: () => 0, bootPrefix: 't', systemPrompt: 'x', sessionTitles: true })
+    const client = kernel.transport.createClient()
+    await kernel.addAgent({ agentId: 'a1', llm: shapeStub('打包部署小助手', '好的') })
+
+    await client.call('v1.message.sendUser', { toAgentId: 'a1', text: '帮我把这个项目打包', nonce: 't1' })
+    await waitIdle(kernel)
+    // 标题是受理后 fire-and-forget：轮询留痕（失败静默——此处桩恒成功）
+    let titled = false
+    for (let i = 0; i < 200 && !titled; i++) {
+      const records = await client.call<Array<{ kind: string; payload: unknown }>>('v1.transcript.read', { agentId: 'a1' })
+      titled = records.some((r) => r.kind === 'session-title')
+      if (!titled) await new Promise<void>((resolve) => setTimeout(resolve, 5))
+    }
+    expect(titled).toBe(true)
+    const { sessions } = await client.call<{ sessions: Array<{ sessionId: string; current: boolean; title?: string }> }>(
+      'v1.session.list',
+      { agentId: 'a1' },
+    )
+    expect(sessions.find((s) => s.current)?.title).toBe('打包部署小助手')
+
+    // 缺省关闭（makeKernel 无 sessionTitles）：同等流量零 session-title 记录
+    const kernelOff = makeKernel()
+    const clientOff = kernelOff.transport.createClient()
+    await kernelOff.addAgent({ agentId: 'a1', llm: shapeStub('不该出现', '好的') })
+    await clientOff.call('v1.message.sendUser', { toAgentId: 'a1', text: '普通一问', nonce: 't2' })
+    await waitIdle(kernelOff)
+    await new Promise<void>((resolve) => setTimeout(resolve, 50))
+    expect(
+      (await clientOff.call<Array<{ kind: string }>>('v1.transcript.read', { agentId: 'a1' })).some((r) => r.kind === 'session-title'),
+    ).toBe(false)
+  })
+})

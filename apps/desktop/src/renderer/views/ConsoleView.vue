@@ -180,6 +180,31 @@ const fmtDay = (at: number): string => {
   return `${d.getMonth() + 1} 月 ${d.getDate()} 日`
 }
 
+/** 会话列表时间（2026-10-18 用户需求）：<24h 相对时间（刚刚/N 分钟以前/N 小时以前），
+ *  更早带日期（同年 M月D日 HH:mm；跨年补年份）。快照语义——列表打开时定格，不逐秒跳动 */
+const fmtSessionTime = (at: number): string => {
+  const diff = Date.now() - at
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟以前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时以前`
+  const d = new Date(at)
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const md = `${d.getMonth() + 1}月${d.getDate()}日`
+  return d.getFullYear() === new Date().getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}年${md} ${hm}`
+}
+
+/** 会话 id 次行显示（UUID 截短前 8 位；旧 s-N 短格式原样） */
+const shortSessionId = (id: string): string => (id.length > 13 ? `${id.slice(0, 8)}…` : id)
+
+/** 会话列表项标签（2026-10-18 用户需求）：标题（内核首问后异步生成的工作总结）→
+ *  首问截断（旧数据回退）→ 无标题占位 */
+const sessionLabel = (s: { title?: string; firstText: string }): string => {
+  if (s.title !== undefined && s.title !== '') return s.title
+  const firstLine = (s.firstText.split('\n')[0] ?? '').replace(/[*`#>]/g, '').trim()
+  if (firstLine === '') return '（无标题）'
+  return firstLine.length > 30 ? `${firstLine.slice(0, 30)}…` : firstLine
+}
+
 /** runId 的 agent 前缀（P1 约定 `${agentId}-run-N`） */
 const agentOfRun = (runId?: string): string | null =>
   runId !== undefined && runId.includes('-run-') ? (runId.split('-run-')[0] ?? null) : null
@@ -408,8 +433,12 @@ const doSlashClear = async (): Promise<void> => {
     toast.push('群上下文已清空——成员不再记得之前的群聊（transcript 留证）', 'success')
     return
   }
-  const sid = await kernel.sessionClear(ui.activeAgentId)
-  toast.push(`已开启新会话 ${sid}（上下文与界面已清空，transcript 留证）`, 'success')
+  const r = await kernel.sessionClear(ui.activeAgentId)
+  // 空会话 no-op（2026-10-18 用户裁定「空会话不计入」）：内核未落边界——如实提示
+  toast.push(
+    r.skipped === true ? '当前会话为空——未开启新会话' : '已开启新会话（上下文与界面已清空，transcript 留证）',
+    'success',
+  )
 }
 const doSlashResume = async (): Promise<void> => {
   await kernel.sessionResume(ui.activeAgentId)
@@ -442,7 +471,7 @@ const slashItems = computed<Array<{ key: string; label: string; sub: string; col
       color: kernel.colorOf(a.agentId),
     }))
   }
-  // resume 级：当前 agent 的历史会话（排除当前会话——回到当前无意义）
+  // resume 级：当前 agent 的历史会话（排除当前会话——回到当前无意义；空会话内核已过滤）
   if (slash.value.mode === 'resume') {
     return refPickerSessions.value
       .filter((s) => !s.current)
@@ -450,16 +479,16 @@ const slashItems = computed<Array<{ key: string; label: string; sub: string; col
       .reverse()
       .map((s) => ({
         key: s.sessionId,
-        label: s.sessionId,
-        sub: `${fmtTime(s.lastAt)} · ${s.messageCount} 条`,
-        note: s.firstText !== '' ? s.firstText : '（空会话）',
+        label: sessionLabel(s),
+        sub: `${fmtSessionTime(s.lastAt)} · ${s.messageCount} 条`,
+        note: shortSessionId(s.sessionId),
       }))
   }
   return refPickerSessions.value.slice().reverse().map((s) => ({
     key: s.sessionId,
-    label: s.sessionId + (s.current ? '（当前）' : ''),
-    sub: `${fmtTime(s.lastAt)} · ${s.messageCount} 条`,
-    note: s.firstText !== '' ? s.firstText : '（空会话）',
+    label: sessionLabel(s) + (s.current ? '（当前）' : ''),
+    sub: `${fmtSessionTime(s.lastAt)} · ${s.messageCount} 条`,
+    note: shortSessionId(s.sessionId),
   }))
 })
 
@@ -556,13 +585,13 @@ const pickSlash = (i: number): void => {
       })
     return
   }
-  // resume 级（v0.1.47 会话选择化）：回到选定的历史会话
+  // resume 级（v0.1.47 会话选择化）：回到选定的历史会话（toast 带标题/首问标签）
   if (s.mode === 'resume') {
     closeSlash()
     const target = it.key === 's-0' ? undefined : it.key // 初始段无 start——缺省语义即回退窗口
     void kernel
       .sessionResume(ui.activeAgentId, target)
-      .then(() => toast.push(target !== undefined ? `已回到会话 ${target}` : '已恢复上一会话上下文', 'success'))
+      .then(() => toast.push(target !== undefined ? `已回到会话：${it.label}` : '已恢复上一会话上下文', 'success'))
       .catch((err: unknown) => toast.push(err instanceof Error ? err.message : String(err), 'error'))
     return
   }
@@ -577,8 +606,8 @@ const openQuoteFromMenu = (): void => {
   slash.value = { open: true, mode: 'agent', start: -1, sel: 0, agentId: null, q: '' }
 }
 
-/** 引用会话数据源（slash session 级复用；保留 v0.1.45 状态名） */
-const refPickerSessions = ref<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }>>([])
+/** 引用会话数据源（slash session 级复用；保留 v0.1.45 状态名；title 为内核首问后生成的标题） */
+const refPickerSessions = ref<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean; title?: string }>>([])
 const pendingRef = ref<{ agentId: string; sessionId: string | null } | null>(null)
 const clearPendingRef = (): void => {
   pendingRef.value = null

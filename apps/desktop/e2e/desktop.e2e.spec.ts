@@ -328,8 +328,8 @@ test('中止工作中的 agent（审批挂起中打断：run aborted 收敛 + �
     // 排程视图：run 卡「已中止」
     await page.getByRole('button', { name: '排程', exact: true }).click()
     await expect(page.locator('.run .chip', { hasText: '已中止' })).toBeVisible({ timeout: 15_000 })
-    // llm 第二轮不发起：mock 端点只收到过第一次请求
-    expect(mock.requests.length).toBe(1)
+    // llm 第二轮不发起：mock 端点只收到过第一次对话请求（会话标题请求按 title 标记排除）
+    expect(mock.requests.filter((r) => !r.title).length).toBe(1)
   } finally {
     await app.close()
     await mock.close()
@@ -1440,8 +1440,8 @@ test('记忆（backlog ①）：save_memory 落盘 → 重启注入新会话系�
     await page2.locator('.composer-box input').fill('新会话开场')
     await page2.locator('.composer-box input').press('Enter')
     await expect(page2.locator('.m-text', { hasText: '重启后的新对话' })).toBeVisible({ timeout: 30_000 })
-    // 新会话的系统提示（messages[0].role=system）含注入节与保存文本
-    const later = mock.requests.slice(reqBefore)
+    // 新会话的系统提示（messages[0].role=system）含注入节与保存文本（标题请求按 title 标记排除）
+    const later = mock.requests.slice(reqBefore).filter((r) => !r.title)
     const system = later.map((r) => r.messages[0]).find((m) => (m as { role?: string }).role === 'system')
     expect(JSON.stringify(system)).toContain('## 此前记忆')
     expect(JSON.stringify(system)).toContain(SAVED)
@@ -1615,8 +1615,8 @@ test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image
     await page.locator('.composer-box input').press('Enter')
     await expect(page.locator('.m-text', { hasText: '桌面已看到' })).toBeVisible({ timeout: 30_000 })
     // 第二轮请求（工具回喂后）的 tool 消息含 image_url part（openai-compat wire——mock 后端
-    // 的 exec 输出即 base64 位——链路形状断言而非图像有效性）
-    const second = mock.requests.at(-1)
+    // 的 exec 输出即 base64 位——链路形状断言而非图像有效性；标题请求按 title 标记排除）
+    const second = mock.requests.filter((r) => !r.title).at(-1)
     const toolMsg = second?.messages.find((m) => (m as { role?: string }).role === 'tool')
     expect(JSON.stringify(toolMsg)).toContain('image_url')
     expect(JSON.stringify(toolMsg)).toContain('data:image/jpeg;base64,')
@@ -2248,6 +2248,89 @@ test('思考双通道（v0.1.43）：reasoning 流进思考卡、正文流为 li
     await expect(page.locator('.think')).toHaveCount(0, { timeout: 5_000 })
     await expect(page.locator('.stream-inner .m')).toHaveCount(0)
     await expect(page.locator('.stream-inner .placeholder')).toBeVisible()
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('会话列表（2026-10-18 改版）：标题生成 + UUID 新会话 + 相对时间 + 空会话不计入', async () => {
+  const mock = await startMockOpenAi([{ match: (l) => l.role === 'user', text: '一轮回答' }])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-sessions-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+
+    const input = page.locator('.composer-box input')
+    // —— 空会话 /clear：no-op（不落边界——「空会话不计入」）——
+    await input.fill('/clear')
+    await input.press('Enter')
+    await expect(page.locator('.toast.success', { hasText: '当前会话为空——未开启新会话' })).toBeVisible({ timeout: 10_000 })
+
+    // —— 首轮对话（标题请求被 mock 哨兵拦截，回 canned「E2E会话标题」）——
+    await input.fill('帮我配置部署环境')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '一轮回答' })).toBeVisible({ timeout: 15_000 })
+
+    // —— /clear 开新会话（UUID）；新会话为空立即再 clear → no-op ——
+    await input.fill('/clear')
+    await input.press('Enter')
+    await expect(page.locator('.toast.success', { hasText: '已开启新会话' })).toBeVisible({ timeout: 10_000 })
+    await input.fill('/clear')
+    await input.press('Enter')
+    // 首个 no-op toast 可能仍在场——取最新一条
+    await expect(page.locator('.toast.success', { hasText: '当前会话为空——未开启新会话' }).last()).toBeVisible({ timeout: 10_000 })
+
+    // —— 第二段对话（u1 获得标题）→ /clear（u2）→ 第三段对话（current=u2）——
+    // 注：/clear 清空界面——每轮回答在 DOM 中都是该段唯一一条，不走 nth 累计索引
+    await input.fill('第二段话题')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '一轮回答' })).toBeVisible({ timeout: 15_000 })
+    await input.fill('/clear')
+    await input.press('Enter')
+    // 前一次「已开启新会话」toast 可能仍在场（6s 生命周期）——取最新一条
+    await expect(page.locator('.toast.success', { hasText: '已开启新会话' }).last()).toBeVisible({ timeout: 10_000 })
+    await input.fill('第三段话题')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '一轮回答' })).toBeVisible({ timeout: 15_000 })
+
+    // —— /resume 列表：当前段（u2）排除；两项 = u1（UUID 截短 note + 标题 + 相对时间）与 s-0 ——
+    await input.fill('/resume')
+    await expect(page.locator('.sm-item', { hasText: '/resume' })).toBeVisible() // cmd 级联想在场
+    await page.locator('.composer-box input').press('Enter') // cmd 级选中 /resume → 进会话级
+    await expect(page.locator('.slash-menu .sm-title', { hasText: '恢复会话' })).toBeVisible()
+    await expect(page.locator('.sm-item .sm-label', { hasText: 'E2E会话标题' }).first()).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('.sm-item')).toHaveCount(2)
+    // 首项（最近=u1）：标题 + 相对时间 + UUID 截短 note；次项（初始段）：s-0
+    const first = page.locator('.sm-item').first()
+    await expect(first.locator('.sm-sub')).toContainText(/条$/)
+    expect((await first.locator('.sm-sub').textContent()) ?? '').toMatch(/(刚刚|分钟以前|小时以前)/)
+    expect((await first.locator('.sm-note').textContent()) ?? '').toMatch(/^[0-9a-f]{8}…$/)
+    await expect(page.locator('.sm-item').nth(1).locator('.sm-note')).toHaveText('s-0')
+
+    // —— Enter 回最近会话（u1）：toast 带标题 + 第二段对话回到流内 ——
+    await page.locator('.composer-box input').press('Enter')
+    await expect(page.locator('.toast.success', { hasText: '已回到会话：E2E会话标题' })).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('.m.user', { hasText: '第二段话题' })).toBeVisible()
+    await expect(page.locator('.m.user', { hasText: '第三段话题' })).toHaveCount(0) // u2 时间线未走分支
   } finally {
     await app.close()
     await mock.close()

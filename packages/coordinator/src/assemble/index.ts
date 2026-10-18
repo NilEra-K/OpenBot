@@ -22,6 +22,7 @@ import { ShellService } from '../shell-service/index.js'
 import { GuiStreamService } from '../gui-stream/index.js'
 import { StatsService } from '../stats-service/index.js'
 import type { DiskProbe } from '../stats-service/index.js'
+import { sessionSegments } from './session-segments.js'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 
@@ -79,6 +80,12 @@ export interface AssembleOptions {
     warnBytes?: number
     criticalBytes?: number
   }
+  /**
+   * 会话标题生成（2026-10-18 /resume 列表改进）：注入即启用——当前段首条用户消息后，
+   * 用该 agent 的模型客户端异步生成 ≤20 字标题（session-title 记录留档；失败静默，
+   * 列表回退首问截断）。缺省不启用（CLI/测试最小面——mock 步骤不被额外请求打扰）。
+   */
+  sessionTitles?: boolean
 }
 
 export interface AgentRegistration {
@@ -323,6 +330,31 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     await impl.call(backend, boxId)
   }
 
+  // ---- 会话标题异步生成（2026-10-18 /resume 列表改进）：当前段首条用户消息触发一次，
+  //  小请求独立于对话流（无工具无流）；session-title 记录留档。fire-and-forget——不阻塞
+  //  消息受理，失败静默（列表回退首问截断）。首问文本作输入（用户裁定：问完第一句话后得出）
+  const SESSION_TITLE_SENTINEL = '你是会话标题生成器'
+  const generateSessionTitle = async (agentId: string): Promise<void> => {
+    const llm = llms.get(agentId)
+    if (llm === undefined) return
+    const records = await transcript.readAll(agentId)
+    const current = sessionSegments(records).find((s) => s.current)
+    if (current === undefined || current.messageCount === 0 || current.title !== undefined) return
+    try {
+      const response = await llm.chat({
+        system:
+          `${SESSION_TITLE_SENTINEL}。用不超过 20 个字概括下面用户请求的主题，` +
+          '直接输出标题本身——不要引号、不要句号、不要任何解释。',
+        messages: [{ role: 'user', content: current.firstText }],
+      })
+      const title = (response.text ?? '').trim().replace(/["'「」『』。]/g, '').slice(0, 24)
+      if (title === '') return
+      await transcript.append(agentId, 'session-title', { sessionId: current.sessionId, title })
+    } catch {
+      // 标题是锦上添花：失败/超时静默（agent 的 provider 异常不该影响对话流）
+    }
+  }
+
   // ---- 命令目录（P1）：协议纯度——只有领域命令，无 UI 指令 ----
   transport
     .register('v1.system.ping', async () => ({ pong: true }))
@@ -374,11 +406,15 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       bus.emit('v1.system.roster', { agentId, role: 'worker', cause: 'dismissed' })
       return profile
     })
-    .register('v1.message.sendUser', async (payload) =>
-      messaging.sendUserMessage(
+    .register('v1.message.sendUser', async (payload) => {
+      const acceptance = await messaging.sendUserMessage(
         payload as { toAgentId: string; text: string; nonce: string; sessionRef?: { agentId: string; sessionId: string | null } },
-      ),
-    )
+      )
+      // 会话标题（2026-10-18）：首条用户消息受理后异步触发（sessionTitles 缺省关——测试/Cli
+      // 零打扰；段内已有标题幂等跳过在 generateSessionTitle 内判）
+      if (options.sessionTitles === true) void generateSessionTitle((payload as { toAgentId: string }).toAgentId)
+      return acceptance
+    })
     // ---- 「会话掌控」命令族（sessionView 元事件的写入面；组装解释在 runner） ----
     // 编辑用户消息：append revision（regenerate=true 额外重驱——enqueue user lane chat，
     // originMessageId=目标消息：组装剔除旧位置，userMessage 带新文本，revision 替换后流内一致）
@@ -409,12 +445,16 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       bus.emit('v1.session.revived', { agentId, messageId })
       return { ok: true }
     })
-    // /clear：开新 session（sessionId 服务端生成 s-N；在跑 run 由 renderer 先 cancel——v1.scheduler.cancel 既有面）
+    // /clear：开新 session（sessionId=UUID，2026-10-18 改版；在跑 run 由 renderer 先 cancel——v1.scheduler.cancel 既有面）。
+    // 空会话 no-op（2026-10-18 用户裁定「空会话不计入」）：当前段无消息时不落边界——连续 /clear 只计首条
     .register('v1.session.clear', async (payload) => {
       const { agentId } = payload as { agentId: string }
       const records = await transcript.readAll(agentId)
-      const count = records.filter((r) => r.kind === 'session-start').length
-      const sessionId = 's-' + String(count + 1)
+      const current = sessionSegments(records).find((s) => s.current)
+      if (current !== undefined && current.messageCount === 0) {
+        return { sessionId: current.sessionId, skipped: true }
+      }
+      const sessionId = randomUUID()
       await transcript.append(agentId, 'session-start', { sessionId })
       bus.emit('v1.session.cleared', { agentId, sessionId })
       return { sessionId }
@@ -436,27 +476,22 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       bus.emit('v1.session.resumed', { agentId, ...(sessionId !== undefined ? { sessionId } : {}) })
       return { ok: true }
     })
-    // 会话清单（composer 引用选择器与 ctx 历史会话节数据源）：按 session-start 切分
+    // 会话清单（composer 引用选择器与 /resume 选择级数据源）：sessionSegments 段扫描
+    // （栈语义——resume 回溯续写归旧会话）。空会话不计入（2026-10-18 用户裁定）：非当前段
+    // 且无消息不返回；当前段恒返回（resume 级本就排除 current）
     .register('v1.session.list', async (payload) => {
       const { agentId } = payload as { agentId: string }
       const records = await transcript.readAll(agentId)
-      const sessions: Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }> = []
-      let current: { sessionId: string; messageCount: number; firstText: string; lastAt: number } | null = null
-      for (const r of records) {
-        if (r.kind === 'session-start') {
-          if (current !== null) sessions.push({ ...current, current: false })
-          const p = r.payload as { sessionId?: string }
-          current = { sessionId: typeof p.sessionId === 'string' ? p.sessionId : 's-' + String(sessions.length + 1), messageCount: 0, firstText: '', lastAt: r.at }
-          continue
-        }
-        if (r.kind !== 'user' && r.kind !== 'agent') continue
-        if (current === null) current = { sessionId: 's-0', messageCount: 0, firstText: '', lastAt: r.at } // 初始段（首 clear 之前）也列出（可引用）
-        const text = typeof (r.payload as { text?: string }).text === 'string' ? (r.payload as { text: string }).text : ''
-        if (current.messageCount === 0) current.firstText = text
-        current.messageCount += 1
-        current.lastAt = r.at
-      }
-      if (current !== null) sessions.push({ ...current, current: true })
+      const sessions = sessionSegments(records)
+        .filter((s) => s.current || s.messageCount > 0)
+        .map(({ sessionId, messageCount, firstText, lastAt, title, current }) => ({
+          ...(title !== undefined ? { title } : {}),
+          sessionId,
+          messageCount,
+          firstText,
+          lastAt,
+          current,
+        }))
       return { sessions }
     })
     .register('v1.message.sendA2a', async (payload) =>

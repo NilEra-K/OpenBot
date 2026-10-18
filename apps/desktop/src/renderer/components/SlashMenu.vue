@@ -8,13 +8,13 @@
 export interface SlashItem {
   /** 列表键（命令名 / agentId / sessionId） */
   key: string
-  /** 主标签（命令名 / agent 名 / s-N） */
+  /** 主标签（命令名 / agent 名 / 会话标题——2026-10-18 改版） */
   label: string
   /** 右侧辅助（命令说明 / agentId / 时间·条数） */
   sub: string
   /** 身份色圆点（agent 级用；缺席不渲染） */
   color?: string
-  /** 摘要次行（session 级首条摘要） */
+  /** 次行（session 级：sessionId 截短——UUID 前 8 位 / 旧 s-N 原样） */
   note?: string
 }
 
@@ -41,8 +41,9 @@ const emit = defineEmits<{ pick: [index: number] }>()
     >
       <span v-if="it.color" class="stat-dot" :style="{ background: it.color }"></span>
       <span class="sm-main">
-        <span class="sm-label" :class="{ mono: it.note !== undefined }">{{ it.label }}</span>
-        <span v-if="it.note !== undefined" class="sm-note">{{ it.note }}</span>
+        <span class="sm-label">{{ it.label }}</span>
+        <!-- 2026-10-18：session 级主标签改为标题（中文）不再 mono；id 截短进 note（mono） -->
+        <span v-if="it.note !== undefined" class="sm-note mono">{{ it.note }}</span>
       </span>
       <span class="sm-sub">{{ it.sub }}</span>
     </button>

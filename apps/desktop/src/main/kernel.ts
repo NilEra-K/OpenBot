@@ -1013,6 +1013,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       return switchableGate
     },
     systemPrompt: '你是 OpenBot 管家——本机多 agent 社交控制台的默认对话者，用简洁中文回复。',
+    // 会话标题（2026-10-18 /resume 列表改进）：首问后异步 ≤20 字总结（session-title 留档）
+    sessionTitles: true,
     // Step 6：宿主磁盘探针（fs.statfs userData 所在卷）+ 压力阈值。
     // env OPENBOT_DISK_WARN_BYTES 覆盖 warn 阈值（E2E 确定性驱动压力角标；critical 取其半→可直达 critical 档）
     stats: (() => {

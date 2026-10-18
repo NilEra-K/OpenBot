@@ -676,13 +676,13 @@ export const useKernelStore = defineStore('kernel', {
     async sessionRevive(agentId: string, messageId: string): Promise<void> {
       await this.call('v1.session.revive', { agentId, messageId })
     },
-    async sessionClear(agentId: string): Promise<string> {
+    async sessionClear(agentId: string): Promise<{ sessionId: string; skipped?: boolean }> {
       // 在跑 run 先中止（clear = 新会话开始——旧话题的进行中工作不再继续）
       for (const r of this.runs.filter((x) => x.agentId === agentId && (x.state === 'queued' || x.state === 'running'))) {
         await this.cancelRun(agentId, r.runId).catch(() => {})
       }
-      const r = await this.call<{ sessionId: string }>('v1.session.clear', { agentId })
-      return r.sessionId
+      // skipped=true：当前段为空——内核未落边界（2026-10-18「空会话不计入」裁定）
+      return await this.call<{ sessionId: string; skipped?: boolean }>('v1.session.clear', { agentId })
     },
     /** 群上下文清空（2026-10-15 /clear 群语义）：清空点落群流 + 在途轮作废（内核侧）；
      *  呈现清空走 v1.group.cleared 事件（与私聊 v1.session.cleared 同款实时路径） */
@@ -692,8 +692,8 @@ export const useKernelStore = defineStore('kernel', {
     async sessionResume(agentId: string, sessionId?: string): Promise<void> {
       await this.call('v1.session.resume', { agentId, ...(sessionId !== undefined ? { sessionId } : {}) })
     },
-    async listSessions(agentId: string): Promise<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }>> {
-      const r = await this.call<{ sessions: Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean }> }>('v1.session.list', { agentId })
+    async listSessions(agentId: string): Promise<Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean; title?: string }>> {
+      const r = await this.call<{ sessions: Array<{ sessionId: string; messageCount: number; firstText: string; lastAt: number; current: boolean; title?: string }> }>('v1.session.list', { agentId })
       return r.sessions
     },
     /** 刷新 provider 配置（boot 与 settings 视图操作后调用） */
@@ -832,6 +832,9 @@ export const useKernelStore = defineStore('kernel', {
       const bootTombstoned = new Set<string>()
       const bootRevisions = new Map<string, string>()
       const bootBoundaries: Array<{ at: number; sessionId: string }> = []
+      // resume 未走分支的失效区间（目标回溯专用）：[目标之后首边界, resume 点)——组装侧
+      // sessionView deadRanges 的呈现镜像（定向 resume 回退多级时，中间时间线已失效）
+      const bootDeadRanges: Array<[number, number]> = []
       for (const record of records) {
         if (record.kind === 'tombstone') bootTombstoned.add(String((record.payload as Record<string, unknown>)['messageId'] ?? ''))
         else if (record.kind === 'revive') bootTombstoned.delete(String((record.payload as Record<string, unknown>)['messageId'] ?? ''))
@@ -841,7 +844,19 @@ export const useKernelStore = defineStore('kernel', {
         } else if (record.kind === 'session-start') {
           bootBoundaries.push({ at: record.at, sessionId: String((record.payload as Record<string, unknown>)['sessionId'] ?? 's-?') })
         } else if (record.kind === 'session-resume') {
-          bootBoundaries.pop() // 组装侧 sessionView 栈语义同款——boot 呈现窗口与内核一致
+          // 组装侧 sessionView 同构：缺省弹栈；带目标截栈到目标（目标之后首边界起、到本
+          // resume 点的记录失效——此前只弹栈，定向回退多级时未走分支消息被时间窗误投影）
+          const target = (record.payload as Record<string, unknown>)['sessionId']
+          if (typeof target !== 'string') {
+            bootBoundaries.pop()
+          } else {
+            const idx = bootBoundaries.findIndex((b) => b.sessionId === target)
+            if (idx >= 0) {
+              const later = bootBoundaries[idx + 1]
+              if (later !== undefined) bootDeadRanges.push([later.at, record.at])
+              bootBoundaries.length = idx + 1
+            }
+          }
         }
       }
       if (bootBoundaries.length > 0) this.sessionBoundaries[agentId] = bootBoundaries
@@ -887,6 +902,8 @@ export const useKernelStore = defineStore('kernel', {
       }
       for (const record of records) {
         if (record.at < windowStartAt) continue // 清空呈现：边界之前的记录不投影（含过程事实）
+        // resume 未走分支的失效区间：目标回溯截栈时，中间时间线不投影（deadRanges 同款）
+        if (bootDeadRanges.some(([from, to]) => record.at >= from && record.at < to)) continue
         const p = record.payload as Record<string, unknown>
         // 群键的过程记录（群轮 thinking/exec 落群流的新语义）不投影——群视图无过程卡，
         // exec 卡按 runId 前缀会被成员私聊拾取（agentOfRun 剥前缀），必须在此拦下
@@ -1057,13 +1074,20 @@ export const useKernelStore = defineStore('kernel', {
           return
         }
         case 'v1.session.resumed': {
-          const b = this.sessionBoundaries[event.payload.agentId] ?? []
-          b.pop() // resume 抵消最近边界（呈现层同步——组装侧 sessionView 栈语义同款）
-          this.sessionBoundaries[event.payload.agentId] = b
-          // 界面被清空的消息找回（v0.1.50 清空裁定的对偶）：重放历史——boot 栈语义
-          // （resume 弹栈）使窗口回到上一会话，旧消息重新投影
-          loadedHistory.delete(event.payload.agentId)
-          void this.loadHistory(event.payload.agentId).catch(() => {})
+          // 回到历史会话 = 该 agent 呈现按 transcript 全量重投影（boot 同款：栈弹栈/目标回溯
+          // 由 loadHistory 重放边界记录吸收）。此前只重拉不清理——resume 目标之后「未走分支」
+          // 的消息/过程残屏（目标回溯时手写 pop 也与组装侧栈语义脱钩）；先清再投影，等价 boot
+          const agentId = event.payload.agentId
+          delete this.sessionBoundaries[agentId] // loadHistory 依记录重放重建（缺席即无边界）
+          this.messages = this.messages.filter(
+            (m) => !((m.kind === 'user' || m.kind === 'agent') && (m.to === agentId || m.from === agentId)),
+          )
+          // 过程事实同清（对齐 cleared 窗口语义）：已结束块/exec 卡按重投影窗口回归；
+          // live 块如实保留（在跑 run 的实况不因会话切换丢帧）
+          this.streams = this.streams.filter((s) => s.agentId !== agentId || s.state === 'live')
+          this.execs = this.execs.filter((e) => e.runId?.split('-run-')[0] !== agentId || e.phase !== 'finished')
+          loadedHistory.delete(agentId)
+          void this.loadHistory(agentId).catch(() => {})
           return
         }
         case 'v1.message.agent':

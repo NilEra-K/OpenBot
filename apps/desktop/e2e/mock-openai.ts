@@ -22,8 +22,9 @@ interface ScriptStep {
 
 export interface MockOpenAi {
   port: number
-  /** 收到的请求体留痕（断言「内核让 LLM 说了什么」） */
-  requests: Array<{ model: string; stream?: boolean; messages: unknown[] }>
+  /** 收到的请求体留痕（断言「内核让 LLM 说了什么」；title=true 为会话标题请求——
+   *  计数/取末条断言须按需过滤） */
+  requests: Array<{ model: string; stream?: boolean; messages: unknown[]; title?: boolean }>
   close(): Promise<void>
 }
 
@@ -52,6 +53,22 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
         messages?: WireMessage[]
       }
       const messages = body.messages ?? []
+
+      // 会话标题请求（2026-10-18 内核 sessionTitles）：哨兵 system 识别——内置应答**不消费剧本步**
+      // （标题请求的 last 也是 user 消息，宽松剧本规则会被误吃；非流式——标题调用不带 onText）
+      if (messages.some((m) => m.role === 'system' && m.content.startsWith('你是会话标题生成器'))) {
+        requests.push({ model: body.model ?? '', stream: body.stream, messages, title: true })
+        responseSeq += 1
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(
+          JSON.stringify({
+            id: `mock-title-${responseSeq}`,
+            choices: [{ index: 0, message: { role: 'assistant', content: 'E2E会话标题' }, finish_reason: 'stop' }],
+            usage: {},
+          }),
+        )
+        return
+      }
       requests.push({ model: body.model ?? '', stream: body.stream, messages })
 
       const last = messages[messages.length - 1] ?? { role: '', content: '' }
