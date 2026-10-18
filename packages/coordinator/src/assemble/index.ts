@@ -7,7 +7,7 @@ import { AgentScheduler, EventBus, KernelError } from '@openbot/core'
 import type { LifecycleFinishedPayload, RunExecutor } from '@openbot/core'
 import type { ApprovalRequestedPayload, RunPolicy } from '@openbot/core'
 import { AgentStore, IdempotencyLedger, InMemoryFs, TranscriptStore, formatMemoryPrompt } from '@openbot/state'
-import type { FsAdapter, MemoryStore } from '@openbot/state'
+import type { AgentProfile, FsAdapter, MemoryStore } from '@openbot/state'
 import { MockChatProvider } from '@openbot/llm'
 import type { ChatProvider } from '@openbot/llm'
 import { BoxRegistry, BoxesErrorCodes, MockBoxBackend, X11ScreenControl } from '@openbot/boxes'
@@ -143,6 +143,8 @@ export interface AssembledKernel {
   readonly schedulers: ReadonlyMap<string, AgentScheduler>
   /** 注册 agent：名册 + 调度器 + 专属 Box + turn 引擎接线 */
   addAgent(registration: AgentRegistration): Promise<void>
+  /** 更新人设（2026-10-18）：档案持久 + 身份元信息热更（提示词即时生效） */
+  setPersona(agentId: string, persona: string | null): Promise<AgentProfile>
   /** watchdog 手动驱动（测试/确定性冒烟用；生产经 startWatchdog） */
   tick(): void
   /** 启动 watchdog 定时驱动（真实时钟场景） */
@@ -222,6 +224,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       if (!scheduler) throw new AgentSchedulerMissingError(agentId)
       return scheduler
     },
+    // 汇总人管家优先（2026-10-18 #汇总）：agentMeta 角色注入
+    roleOf: (agentId) => agentMeta.get(agentId)?.role,
   })
   void groups.load().catch(() => {}) // 启动恢复群清单（fire-and-forget：失败=空清单如实）
 
@@ -354,22 +358,23 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     await impl.call(backend, boxId)
   }
 
-  // ---- 会话标题异步生成（2026-10-18 /resume 列表改进）：当前段首条用户消息触发一次，
-  //  小请求独立于对话流（无工具无流）；session-title 记录留档。fire-and-forget——不阻塞
-  //  消息受理，失败静默（列表回退首问截断）。首问文本作输入（用户裁定：问完第一句话后得出）
+  // ---- 会话标题异步生成（2026-10-18 /resume 列表改进；同日裁定改为**首答后**生成——
+  //  问+答一起总结更准）：段内首条 agent 回复落地时触发一次，小请求独立于对话流（无工具无流）；
+  //  session-title 记录留档。fire-and-forget——不阻塞消息流，失败静默（列表回退首问截断）
   const SESSION_TITLE_SENTINEL = '你是会话标题生成器'
   const generateSessionTitle = async (agentId: string): Promise<void> => {
     const llm = llms.get(agentId)
     if (llm === undefined) return
     const records = await transcript.readAll(agentId)
     const current = sessionSegments(records).find((s) => s.current)
-    if (current === undefined || current.messageCount === 0 || current.title !== undefined) return
+    // 首答后判据：段内已有 agent 回复（firstAgentText）且未生成过标题
+    if (current === undefined || current.title !== undefined || current.firstAgentText === '') return
     try {
       const response = await llm.chat({
         system:
-          `${SESSION_TITLE_SENTINEL}。用不超过 20 个字概括下面用户请求的主题，` +
+          `${SESSION_TITLE_SENTINEL}。用不超过 20 个字概括下面这轮问答的工作主题，` +
           '直接输出标题本身——不要引号、不要句号、不要任何解释。',
-        messages: [{ role: 'user', content: current.firstText }],
+        messages: [{ role: 'user', content: `用户问：${current.firstText}\n助手答：${current.firstAgentText}` }],
       })
       const title = (response.text ?? '').trim().replace(/["'「」『』。]/g, '').slice(0, 24)
       if (title === '') return
@@ -377,6 +382,11 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     } catch {
       // 标题是锦上添花：失败/超时静默（agent 的 provider 异常不该影响对话流）
     }
+  }
+  if (options.sessionTitles === true) {
+    bus.on('v1.message.agent', (event) => {
+      void generateSessionTitle((event.payload as { agentId: string }).agentId)
+    })
   }
 
   // ---- 命令目录（P1）：协议纯度——只有领域命令，无 UI 指令 ----
@@ -430,15 +440,11 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       bus.emit('v1.system.roster', { agentId, role: 'worker', cause: 'dismissed' })
       return profile
     })
-    .register('v1.message.sendUser', async (payload) => {
-      const acceptance = await messaging.sendUserMessage(
+    .register('v1.message.sendUser', async (payload) =>
+      messaging.sendUserMessage(
         payload as { toAgentId: string; text: string; nonce: string; sessionRef?: { agentId: string; sessionId: string | null } },
-      )
-      // 会话标题（2026-10-18）：首条用户消息受理后异步触发（sessionTitles 缺省关——测试/Cli
-      // 零打扰；段内已有标题幂等跳过在 generateSessionTitle 内判）
-      if (options.sessionTitles === true) void generateSessionTitle((payload as { toAgentId: string }).toAgentId)
-      return acceptance
-    })
+      ),
+    )
     // ---- 「会话掌控」命令族（sessionView 元事件的写入面；组装解释在 runner） ----
     // 编辑用户消息：append revision（regenerate=true 额外重驱——enqueue user lane chat，
     // originMessageId=目标消息：组装剔除旧位置，userMessage 带新文本，revision 替换后流内一致）
@@ -727,6 +733,17 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
           cause: 'appointed',
         })
       }
+    },
+    /** 更新人设（2026-10-18 身份修复）：落档案 + agentMeta 热更（提示词即时生效——
+     *  与 setModelProvider 的重启语义不同，persona 只进 prompt 无实例态） */
+    async setPersona(agentId: string, persona: string | null) {
+      const profile = await agentStore.setPersona(agentId, persona)
+      const meta = agentMeta.get(agentId)
+      if (meta !== undefined) {
+        if (profile.persona !== undefined) meta.persona = profile.persona
+        else delete meta.persona
+      }
+      return { ...profile }
     },
     tick() {
       for (const scheduler of schedulers.values()) scheduler.tick()

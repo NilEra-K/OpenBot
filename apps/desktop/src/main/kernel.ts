@@ -1457,6 +1457,15 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await kernel.agentStore.setModelProvider(agentId, modelProvider)
       return { ok: true, restartRequired: true }
     }, z.object({ agentId: z.string().min(1), modelProvider: z.string().trim().min(1).max(64).nullable() }))
+    // 人设改写（2026-10-18 身份修复）：null=清除；**即时生效**（提示词每轮取档案真相——
+    // 与模型/镜像改写的重启语义不同，无实例态需要重建）
+    .register('v1.system.setPersona', async (payload) => {
+      const { agentId, persona } = z
+        .object({ agentId: z.string().min(1), persona: z.string().trim().min(1).max(120).nullable() })
+        .parse(payload)
+      await kernel.setPersona(agentId, persona)
+      return { ok: true }
+    }, z.object({ agentId: z.string().min(1), persona: z.string().trim().min(1).max(120).nullable() }))
     // 镜像绑定改写（P8-4）：null=清除回默认沙箱；悬空显式拒绝；重启生效（Box 是装配期创建——
     // 与模型覆盖同语义；改绑后的下一次应用重启把 agent 的 Box 落到新载体）
     .register('v1.system.setImage', async (payload) => {

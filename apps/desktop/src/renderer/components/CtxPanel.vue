@@ -13,15 +13,35 @@
  * 档案=群档案（成员行跳会话 + 轮转边界如实 kv——原型的「3 轮/10 条/每员 2 条」是编造数值不照搬）。
  * 图形界面画面（GUI 像素流）属后续版本（plan-p3 补记）。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import type { LiveStreamBlock } from '../stores/kernel'
 import { useKernelStore } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
+import { useToastStore } from '../stores/toast'
 import BoxScreen from './BoxScreen.vue'
 import GuiScreen from './GuiScreen.vue'
 
 const kernel = useKernelStore()
 const ui = useUiStore()
+const toast = useToastStore()
+
+// ---- 人设编辑（2026-10-18 身份修复）：存量 agent 补录/改写——即时生效（提示词热更） ----
+const personaEdit = reactive({ open: false, text: '' })
+const personaInputEl = ref<HTMLInputElement | null>(null)
+const openPersonaEdit = (): void => {
+  personaEdit.open = true
+  personaEdit.text = activeAgent.value?.persona ?? ''
+  void nextTick(() => personaInputEl.value?.focus())
+}
+const savePersona = async (): Promise<void> => {
+  try {
+    await kernel.setPersona(ui.activeAgentId, personaEdit.text.trim() === '' ? null : personaEdit.text)
+    personaEdit.open = false
+    toast.push('人设已更新（即时生效）', 'success')
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
 
 /** 当前会话 agent 的流块（群轮过程不进私聊屏——isGroupRun 过滤；群视图的成员屏阵列
  *  另走 groupScreens 直取 kernel.streams，与本过滤互不影响） */
@@ -316,6 +336,19 @@ const toggleGroupGui = (agentId: string): void => {
 
         <div class="ctx-sec">档案</div>
         <div class="kv"><span class="k">角色</span><span class="v">{{ activeAgent?.role === 'steward' ? '管家（steward）' : '工人（worker）' }}</span></div>
+        <!-- 人设（2026-10-18 身份修复）：点击改写——即时生效（群聊不冒充管家）；留空保存即清除 -->
+        <div v-if="!personaEdit.open" class="kv kv-click" role="button" tabindex="0" title="点击编辑人设" @click="openPersonaEdit" @keydown.enter="openPersonaEdit">
+          <span class="k">人设</span>
+          <span class="v">{{ activeAgent?.persona ? activeAgent.persona : '未设置（点击补录——身份行只带名字）' }}<span class="kv-note">（点击编辑）</span></span>
+        </div>
+        <div v-else class="kv kv-edit">
+          <span class="k">人设</span>
+          <span class="v">
+            <input ref="personaInputEl" v-model="personaEdit.text" maxlength="120" placeholder="一句话身份描述，例：团队的研究员，负责查证事实" @keydown.enter="savePersona" @keydown.esc="personaEdit.open = false" />
+            <button class="kv-btn" type="button" @click="savePersona">保存</button>
+            <button class="kv-btn kv-btn-ghost" type="button" @click="personaEdit.open = false">取消</button>
+          </span>
+        </div>
         <div class="kv">
           <span class="k">模型</span>
           <span class="v">

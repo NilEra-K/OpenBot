@@ -17,6 +17,8 @@ export interface SessionSegment {
   messageCount: number
   /** 段内首条消息文本（标题缺席时的呈现回退） */
   firstText: string
+  /** 段内首条 agent 回复文本（2026-10-18 标题改首答后生成——问+答一起总结） */
+  firstAgentText: string
   /** 段内最后活动时间（空段 = 边界时间） */
   lastAt: number
   /** 会话标题（段内最新一条 session-title 记录；无则缺席） */
@@ -42,7 +44,7 @@ export function sessionSegments(records: SegmentRecord[]): SessionSegment[] {
   const segOf = (sessionId: string, at: number): SessionSegment => {
     let seg = segments.get(sessionId)
     if (seg === undefined) {
-      seg = { sessionId, messageCount: 0, firstText: '', lastAt: at, current: false }
+      seg = { sessionId, messageCount: 0, firstText: '', firstAgentText: '', lastAt: at, current: false }
       segments.set(sessionId, seg)
     }
     return seg
@@ -85,6 +87,7 @@ export function sessionSegments(records: SegmentRecord[]): SessionSegment[] {
     const seg = segOf(receiving, record.at)
     const text = typeof p['text'] === 'string' ? p['text'] : ''
     if (seg.messageCount === 0) seg.firstText = text
+    if (record.kind === 'agent' && seg.firstAgentText === '') seg.firstAgentText = text
     seg.messageCount += 1
     seg.lastAt = record.at
   }

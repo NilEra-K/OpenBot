@@ -452,12 +452,21 @@ const slash = ref<{ open: boolean; mode: SlashMode; start: number; sel: number; 
 })
 const slashLoading = ref(false)
 
-/** 命令清单（子串联想；/quote 进 agent 级；#讨论 为群发言模式前缀——2026-10-18 可扩展模式注册面） */
+/** 群发言模式徽标文案（2026-10-18 模式体系——与内核 GROUP_MODE_PREFIXES 注册表同源） */
+const GROUP_MODE_LABELS: Record<'independent' | 'summary' | 'mention', string> = {
+  independent: '独立作答',
+  summary: '汇总',
+  mention: '点名',
+}
+
+/** 命令清单（子串联想；/quote 进 agent 级；# 前缀为群发言模式——2026-10-18 可扩展注册面） */
 const SLASH_COMMANDS: Array<{ name: string; sub: string }> = [
   { name: '/clear', sub: '开启新会话——上下文与界面清空（transcript 留证）' },
   { name: '/resume', sub: '选择回到某个历史会话（默认最近一个）' },
   { name: '/quote', sub: '引用某个 Agent 的会话（随下条消息注入）' },
   { name: '#讨论', sub: '群聊独立作答——成员各抒己见、互不可见（前缀触发）' },
+  { name: '#汇总', sub: '群聊独立作答后由汇总人交叉总结（管家优先）' },
+  { name: '#点名', sub: '仅被 @ 的成员应答（需在消息中 @ 成员）' },
 ]
 
 const slashItems = computed<Array<{ key: string; label: string; sub: string; color?: string; note?: string }>>(() => {
@@ -539,18 +548,19 @@ const pickSlash = (i: number): void => {
   const it = slashItems.value[i]
   if (it === undefined) return
   if (s.mode === 'cmd') {
-    // 模式前缀（2026-10-18）：插入 '#讨论 ' 到触发位（不同于 / 命令的移除语义——前缀随消息发送）
-    if (it.key === '#讨论') {
+    // 模式前缀（2026-10-18）：插入 '#<模式> ' 到触发位（不同于 / 命令的移除语义——前缀随消息发送）
+    if (it.key.startsWith('#')) {
       const el = draftEl.value
+      const insert = `${it.key} `
       if (el !== null && s.start >= 0) {
         const caret = el.selectionStart ?? el.value.length
-        ui.draft = `${ui.draft.slice(0, s.start)}#讨论 ${ui.draft.slice(Math.max(caret, s.start + 1))}`
+        ui.draft = `${ui.draft.slice(0, s.start)}${insert}${ui.draft.slice(Math.max(caret, s.start + 1))}`
         void nextTick(() => {
           el.focus()
-          el.setSelectionRange(s.start + 4, s.start + 4)
+          el.setSelectionRange(s.start + insert.length, s.start + insert.length)
         })
       } else {
-        ui.draft = `#讨论 ${ui.draft}`
+        ui.draft = `${insert}${ui.draft}`
       }
       closeSlash()
       return
@@ -1330,8 +1340,8 @@ const GROUP_ICON =
                   <div class="m-body">
                     <div class="m-meta">
                       <span class="m-name">你</span>
-                      <!-- 独立作答徽标（2026-10-18）：#讨论/#独立 触发——成员互不可见各抒己见 -->
-                      <span v-if="kernel.messages[unit.msgIndex]!.groupMode === 'independent'" class="chip chip-accent gm-mode">独立作答</span>
+                      <!-- 发言模式徽标（2026-10-18 模式体系）：#讨论/#汇总/#点名 触发 -->
+                      <span v-if="kernel.messages[unit.msgIndex]!.groupMode !== undefined" class="chip chip-accent gm-mode">{{ GROUP_MODE_LABELS[kernel.messages[unit.msgIndex]!.groupMode!] }}</span>
                       <span class="m-time">{{ fmtTime(unit.at) }}</span>
                       <span v-if="kernel.messages[unit.msgIndex]!.pending" class="m-state">发送中…</span>
                       <button v-else-if="kernel.messages[unit.msgIndex]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>

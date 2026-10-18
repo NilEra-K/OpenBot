@@ -131,7 +131,9 @@ export class TurnRunner {
       const modeNote =
         payload.mode === 'independent'
           ? `（独立作答：本轮各成员分别独立作答、互不可见——给出你自己的观点，不要试图猜测或引用他人）`
-          : `（群聊轮转：仅当你确实无话可说时才回复 ${'[pass]'}；用户要求每位成员回应或点名你时必须直接回应，不要因他人已发言而 ${'[pass]'}）`
+          : payload.mode === 'summary'
+            ? `（本轮汇总：你是汇总人——综合上方各成员的独立观点，给出收敛的结论：共识、分歧与建议；直接面向用户成文）`
+            : `（群聊轮转：仅当你确实无话可说时才回复 ${'[pass]'}；用户要求每位成员回应或点名你时必须直接回应，不要因他人已发言而 ${'[pass]'}）`
       const toolNote = `回答前可先用工具查证或计算，再下结论。`
       return this.#runTurn(run, {
         userMessage: {

@@ -2348,6 +2348,10 @@ test('群聊身份与独立作答（2026-10-18）：persona 自称正确 + #讨�
     // 轮转对照（同一群）
     { match: (l) => l.content.includes('你是本群成员「管家」') && l.content.includes('轮转一下'), text: '管家轮转发言' },
     { match: (l) => l.content.includes('你是本群成员「欧米茄」') && l.content.includes('轮转一下'), text: '欧米茄轮转补充' },
+    // #汇总：管家（steward）汇总轮
+    { match: (l) => l.content.includes('本轮汇总') && l.content.includes('你是本群成员「管家」'), text: '汇总结论：两人一致' },
+    // #点名：仅被 @ 的欧米茄应答（点名行带冒号——与轮转注解的「点名你时」区分）
+    { match: (l) => l.content.includes('你是本群成员「欧米茄」') && l.content.includes('（点名：agent-1）'), text: '欧米茄被点名发言' },
   ])
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-groupid-'))
   const app = await _electron.launch({
@@ -2425,6 +2429,28 @@ test('群聊身份与独立作答（2026-10-18）：persona 自称正确 + #讨�
       .map((r) => (r.messages as Array<{ content?: string }>).map((m) => m.content ?? '').join('\n'))
       .find((c) => c.includes('轮转一下') && c.includes('你是本群成员「欧米茄」'))
     expect(omegaRotation).toContain('本轮已发言')
+
+    // —— #汇总：盲答两员 + 管家（steward 优先）交叉总结 + 「汇总」徽标 ——
+    await input.fill('#汇总 评估一下')
+    await input.press('Escape')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '汇总结论：两人一致' })).toBeVisible({ timeout: 15_000 })
+    // 盲答阶段两员各答一次（同款独立文案累计两条）
+    await expect(page.locator('.m-text', { hasText: '管家的独立观点' })).toHaveCount(2)
+    // 汇总人 prompt：带全量观点与汇总注解
+    const summaryReq = mock.requests
+      .filter((r) => !r.title)
+      .map((r) => (r.messages as Array<{ content?: string }>).map((m) => m.content ?? '').join('\n'))
+      .find((c) => c.includes('本轮汇总'))
+    expect(summaryReq).toContain('欧米茄的独立观点')
+    await expect(page.locator('.gm-mode').last()).toHaveText('汇总')
+
+    // —— #点名：仅 @欧米茄 应答（管家零请求）；「点名」徽标 ——
+    await input.fill('#点名 @agent-1 说说看') // @提及一期命中面=agentId（显示名匹配记档后续）
+    await input.press('Escape')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '欧米茄被点名发言' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.gm-mode').last()).toHaveText('点名')
   } finally {
     await app.close()
     await mock.close()

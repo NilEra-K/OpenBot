@@ -344,3 +344,54 @@ describe('GroupService 独立作答（2026-10-18：#讨论 前缀——各抒己
     expect((await h.transcript.readAll(group.groupId)).some((r) => (r.payload as { text?: string }).text === '旧轮发言不该出现')).toBe(false)
   })
 })
+
+describe('GroupService 汇总与点名模式（2026-10-18 模式体系扩展）', () => {
+  it('#汇总：盲答全员 → 汇总轮（首位发言成员兜底）带全量观点 context；settle 收敛不续轮', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#汇总 评估方案', nonce: 'n1' })
+    expect(h.gates).toHaveLength(2) // 阶段一：全员盲答
+    h.gates[0]!.resolve({ text: '观点一' })
+    h.gates[1]!.resolve({ text: '观点二' })
+    await h.flush()
+    // 阶段二：汇总人入队（roleOf 未注入——首位发言成员兜底；管家优先注入由装配/E2E 覆盖）
+    expect(h.gates).toHaveLength(3)
+    const summaryPayload = h.gates[2]!.run.payload as { mode?: string; context: string[]; memberIds?: string[] }
+    expect(summaryPayload.mode).toBe('summary')
+    expect(summaryPayload.context).toEqual(['a1：观点一', 'a2：观点二'])
+    expect(summaryPayload.memberIds).toEqual(['a1', 'a2'])
+    h.gates[2]!.resolve({ text: '汇总结论' })
+    await h.flush()
+    expect(h.gates).toHaveLength(3) // 汇总 settle 即收敛——不续轮
+    // group-user 留 mode 痕
+    const rec = (await h.transcript.readAll(group.groupId)).find((r) => r.kind === 'group-user')
+    expect((rec?.payload as { mode?: string }).mode).toBe('summary')
+  })
+
+  it('#点名：仅被 @ 的成员入队（轮转语义保留）；未点名任何成员回退轮转并注记', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#点名 @a2 说说看', nonce: 'n1' })
+    expect(h.gates).toHaveLength(1) // 门控：仅 a2
+    expect((h.gates[0]!.run.payload as { mentioned: string[] }).mentioned).toEqual(['a2'])
+    h.gates[0]!.resolve({ text: '被点名的回答' })
+    await h.flush()
+    expect(h.gates).toHaveLength(1) // a2 结算后 a1 不被叫起
+
+    // 空点名：回退轮转 + sysnote 如实注记
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#点名 无人被点名', nonce: 'n2' })
+    expect(h.gates).toHaveLength(2) // 回退轮转（首员）
+    const notes = (await h.transcript.readAll(group.groupId))
+      .filter((r) => r.kind === 'group-sys')
+      .map((r) => (r.payload as { text: string }).text)
+    expect(notes.some((n) => n.includes('未点名任何成员'))).toBe(true)
+    const rec = (await h.transcript.readAll(group.groupId))
+      .filter((r) => r.kind === 'group-user')
+      .map((r) => (r.payload as { mode?: string }).mode)
+    expect(rec).toEqual(['mention', undefined]) // 回退轮转的消息无 mode 痕
+  })
+})

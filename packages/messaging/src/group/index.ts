@@ -49,14 +49,22 @@ export interface GroupTurnPayload {
   context: string[]
   /** 本轮被 @ 的成员（prompt 可见——优先发言已由编排保证） */
   mentioned: string[]
-  /** 发言模式（2026-10-18）：independent=独立作答（全员并发、互不可见）；缺省 rotation 轮转 */
-  mode?: 'independent'
+  /** 发言模式（2026-10-18）：independent=独立作答（全员并发、互不可见）；summary=汇总
+   *  （阶段一独立盲答 + 汇总人交叉总结）；缺省 rotation 轮转。mention 门控在编排层（不入 payload） */
+  mode?: 'independent' | 'summary'
   /** 全体成员 id（身份注入用——runner 经 agentMetaOf 解析为名字） */
   memberIds?: string[]
 }
 
-/** 独立作答模式触发前缀（2026-10-18 用户裁定：语法触发、可扩展的模式注册面） */
-export const GROUP_INDEPENDENT_PREFIX = /^#(讨论|独立)\s+/
+/** 群发言模式（2026-10-18 用户裁定：语法触发、可扩展的模式注册面） */
+export type GroupSpeakMode = 'independent' | 'summary' | 'mention'
+
+/** 模式触发前缀注册表：新模式在此同位追加（#辩论 等）——前缀剥离、group-user 记 mode 痕 */
+export const GROUP_MODE_PREFIXES: Array<{ re: RegExp; mode: GroupSpeakMode }> = [
+  { re: /^#(讨论|独立)\s+/, mode: 'independent' },
+  { re: /^#汇总\s+/, mode: 'summary' },
+  { re: /^#点名\s+/, mode: 'mention' },
+]
 
 export interface GroupRecord {
   groupId: string
@@ -76,8 +84,10 @@ interface GroupRuntime {
   turnText: string
   turnMessageId: string
   mentioned: string[]
-  /** 发言模式（2026-10-18）：本轮 independent（独立作答）或缺省 rotation（轮转） */
-  independent?: boolean
+  /** 发言模式（2026-10-18）：本轮触发模式（缺省 rotation）；summary 阶段二进行中用 summarizing 标记 */
+  mode?: GroupSpeakMode
+  /** 汇总轮进行中（#summary 阶段二：汇总人 run 已入队——settle 即收敛） */
+  summarizing?: boolean
 }
 
 export interface GroupDeps {
@@ -86,6 +96,8 @@ export interface GroupDeps {
   nextMessageId: () => string
   transcript: TranscriptStore
   ledger: IdempotencyLedger
+  /** 角色查询（2026-10-18 #汇总）：汇总人管家优先——装配注入 agentMeta 角色；缺省首位发言成员 */
+  roleOf?: (agentId: string) => 'steward' | 'worker' | undefined
   fs: FsAdapter
   root: string
   schedulerOf: (agentId: string) => AgentScheduler
@@ -163,17 +175,29 @@ export class GroupService {
     if (records.length >= MAX_GROUP_RECORDS) {
       throw new KernelError(GroupErrorCodes.GROUP_LIMIT, `群消息超过上限 ${MAX_GROUP_RECORDS}（${input.groupId}）`)
     }
-    // 发言模式（2026-10-18 用户裁定：讨论性话题各抒己见）：`#讨论 `/`#独立 ` 前缀触发独立
-    // 作答——前缀剥离，group-user 记录与事件留 mode 痕（渲染层徽标）
-    const prefixMatch = input.text.match(GROUP_INDEPENDENT_PREFIX)
-    const independent = prefixMatch !== null
-    const text = independent ? input.text.slice(prefixMatch[0].length) : input.text
+    // 发言模式（2026-10-18 用户裁定：语法触发、可扩展）：前缀注册表解析——剥离前缀，
+    // group-user 记录与事件留 mode 痕（渲染层徽标）。#点名 未点名任何成员 → 回退轮转并注记
+    let mode: GroupSpeakMode | undefined
+    let text = input.text
+    for (const entry of GROUP_MODE_PREFIXES) {
+      const m = text.match(entry.re)
+      if (m !== null) {
+        mode = entry.mode
+        text = text.slice(m[0].length)
+        break
+      }
+    }
+    const mentioned = this.#mentionedOf(text, group)
+    if (mode === 'mention' && mentioned.length === 0) {
+      await this.#sys(input.groupId, '#点名 未点名任何成员——按轮转处理')
+      mode = undefined
+    }
     const messageId = this.#deps.nextMessageId()
     await this.#deps.transcript.append(input.groupId, 'group-user', {
       messageId,
       from: 'user',
       text,
-      ...(independent ? { mode: 'independent' as const } : {}),
+      ...(mode !== undefined ? { mode } : {}),
       at: this.#deps.now(),
     })
     this.#deps.bus.emit('v1.group.message', {
@@ -182,7 +206,7 @@ export class GroupService {
       kind: 'user',
       from: 'user',
       text,
-      ...(independent ? { mode: 'independent' as const } : {}),
+      ...(mode !== undefined ? { mode } : {}),
     })
     await this.#deps.ledger.commit(`group:${input.nonce}`, { messageId })
     // supersede：代际 bump——旧轮成员 settle 后静默丢弃；新轮从提及成员开始依序轮转
@@ -192,10 +216,11 @@ export class GroupService {
     rt.round += 1
     rt.spoken = []
     rt.passed = []
+    rt.summarizing = false
     rt.turnText = text
     rt.turnMessageId = messageId
-    rt.mentioned = this.#mentionedOf(text, group)
-    rt.independent = independent
+    rt.mentioned = mentioned
+    rt.mode = mode
     rt.running = group.members.length > 0
     const runIds = this.#advance(group, rt)
     return { messageId, runIds }
@@ -246,16 +271,21 @@ export class GroupService {
 
   /** 轮转推进：未发言且未 pass 的下一成员（@提及者优先）；全员结算即收敛。
    *  gen 在入队时快照捕获（闭包 rt 与新轮共享同一对象——代际比较必须用快照）。
-   *  独立作答（2026-10-18）：全员一次性并发入队（context 恒空——互不可见无锚定），
-   *  settle 不再推进下一员（见 #onSettled 的独立收敛判定） */
+   *  独立/汇总（2026-10-18）：全员一次性并发入队（context 恒空——互不可见无锚定），
+   *  settle 不再推进下一员（见 #settleAdvance 的收敛与汇总轮判定）。
+   *  点名门控（#点名）：候选仅限被 @ 的成员 */
   #advance(group: GroupRecord, rt: GroupRuntime): string[] {
     const spokenIds = rt.spoken.map((s) => s.id)
-    const order = [
-      ...rt.mentioned.filter((m) => !spokenIds.includes(m) && !rt.passed.includes(m)),
-      ...group.members.filter((m) => !rt.mentioned.includes(m) && !spokenIds.includes(m) && !rt.passed.includes(m)),
-    ]
+    const remaining = (id: string): boolean => !spokenIds.includes(id) && !rt.passed.includes(id)
+    const order =
+      rt.mode === 'mention'
+        ? rt.mentioned.filter(remaining)
+        : [
+            ...rt.mentioned.filter(remaining),
+            ...group.members.filter((m) => !rt.mentioned.includes(m) && remaining(m)),
+          ]
     const genAtEnqueue = rt.gen
-    if (rt.independent === true) {
+    if (rt.mode === 'independent' || rt.mode === 'summary') {
       const runIds: string[] = []
       for (const memberId of order) {
         const ticket = this.#deps.schedulerOf(memberId).enqueue({
@@ -269,7 +299,7 @@ export class GroupService {
             text: rt.turnText,
             context: [],
             mentioned: [...rt.mentioned],
-            mode: 'independent',
+            mode: 'independent', // 汇总阶段一与独立作答同语义（盲答）
             memberIds: [...group.members],
           } satisfies GroupTurnPayload,
           summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮独立作答 ${memberId}：${rt.turnText}`),
@@ -304,12 +334,21 @@ export class GroupService {
   }
 
   /** 成员结算：代际不匹配（superseded）静默丢弃；[pass]/失败视作缺席；文本记群流进下一员。
-   *  独立作答（2026-10-18）：全员已入队——不推进下一员，只在全员结算完毕时收敛 */
+   *  独立/汇总（2026-10-18）：全员已入队——不推进下一员，只在全员结算完毕时收敛（或进汇总轮） */
   async #onSettled(groupId: string, genAtEnqueue: number, memberId: string, outcome: RunOutcome): Promise<void> {
     if (genAtEnqueue !== this.#runtimeOf(groupId).gen) return // superseded：旧轮静默丢弃
     const group = this.#groups.get(groupId)
     const rt = this.#runtimeOf(groupId)
     if (!group) return
+    // 汇总轮 settle（#汇总 阶段二）：汇总观点经 runner 落群流；此处只收敛（不进 spoken）
+    if (rt.summarizing === true) {
+      rt.summarizing = false
+      if (outcome.state !== 'succeeded') {
+        await this.#sys(groupId, `${memberId} 汇总失败（${outcome.code ?? outcome.state}）`)
+      }
+      await this.#converge(groupId, rt)
+      return
+    }
     const text =
       outcome.state === 'succeeded'
         ? String(((outcome.result as { text?: string } | undefined)?.text ?? '')).trim()
@@ -329,16 +368,52 @@ export class GroupService {
     await this.#settleAdvance(group, rt)
   }
 
-  /** 结算后推进：轮转模式 → 下一员；独立作答 → 不推进（全员已入队），全员结算完毕即收敛 */
+  /** 结算后推进：轮转/点名 → 下一员；独立/汇总 → 不推进（全员已入队），全员结算完毕后
+   *  独立即收敛、汇总进入阶段二（汇总轮） */
   async #settleAdvance(group: GroupRecord, rt: GroupRuntime): Promise<void> {
-    if (rt.independent !== true) {
+    if (rt.mode !== 'independent' && rt.mode !== 'summary') {
       this.#advance(group, rt)
       return
     }
     const allDone = group.members.every(
       (m) => rt.spoken.some((s) => s.id === m) || rt.passed.includes(m),
     )
-    if (allDone) await this.#converge(group.groupId, rt)
+    if (!allDone) return
+    if (rt.mode === 'summary' && rt.spoken.length > 0) {
+      await this.#enqueueSummary(group, rt)
+      return
+    }
+    await this.#converge(group.groupId, rt)
+  }
+
+  /** 汇总轮（#汇总 阶段二）：汇总人（群内管家优先——无管家则首位发言成员）综合各员独立观点。
+   *  汇总人 run 带 mode='summary'（runner 给汇总注解）与全量观点 context；settle 即收敛 */
+  async #enqueueSummary(group: GroupRecord, rt: GroupRuntime): Promise<void> {
+    const summarizer =
+      group.members.find((m) => this.#deps.roleOf?.(m) === 'steward') ?? rt.spoken[0]?.id ?? group.members[0]
+    if (summarizer === undefined) {
+      await this.#converge(group.groupId, rt)
+      return
+    }
+    rt.summarizing = true
+    const genAtEnqueue = rt.gen
+    const ticket = this.#deps.schedulerOf(summarizer).enqueue({
+      lane: 'agent',
+      kind: 'group',
+      payload: {
+        messageId: rt.turnMessageId,
+        groupId: group.groupId,
+        gen: rt.gen,
+        round: rt.round,
+        text: rt.turnText,
+        context: rt.spoken.map((s) => `${s.id}：${s.text}`),
+        mentioned: [],
+        mode: 'summary',
+        memberIds: [...group.members],
+      } satisfies GroupTurnPayload,
+      summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮汇总 ${summarizer}`),
+    })
+    void ticket.settled.then((outcome) => this.#onSettled(group.groupId, genAtEnqueue, summarizer, outcome))
   }
 
   /** 收敛：全员 pass 记 sysnote；轮转结束（running=false） */

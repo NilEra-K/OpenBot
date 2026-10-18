@@ -398,3 +398,43 @@
   color: #ffffff;
   border-color: rgba(255, 255, 255, 0.45);
 }
+
+/* 人设编辑（2026-10-18 身份修复）：档案 kv 行的点击编辑形态 */
+.kv-click {
+  cursor: pointer;
+  border-radius: 8px;
+}
+.kv-click:hover .v {
+  color: var(--ink);
+}
+.kv-edit .v {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.kv-edit input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg1);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.kv-btn {
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg2);
+  color: var(--ink);
+  font-size: 11px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.kv-btn-ghost {
+  background: none;
+  color: var(--ink3);
+}

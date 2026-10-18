@@ -100,6 +100,27 @@ export class AgentStore {
     })
   }
 
+  /** 更新人设（2026-10-18 身份修复）：null = 清除；即时生效（提示词每轮取档案真相） */
+  async setPersona(agentId: string, persona: string | null): Promise<AgentProfile> {
+    return this.#withLock(async () => {
+      await this.#load()
+      const profile = this.#profiles.get(agentId)
+      if (!profile) {
+        throw new KernelError(AgentStoreErrorCodes.STATE_AGENT_NOT_FOUND, `agent 不存在：${agentId}`)
+      }
+      const next: AgentProfile =
+        persona === null || persona.trim() === ''
+          ? (() => {
+              const { persona: _drop, ...rest } = profile
+              return rest
+            })()
+          : { ...profile, persona: persona.trim() }
+      this.#profiles.set(agentId, next)
+      await this.#persist(next)
+      return { ...next }
+    })
+  }
+
   /** 更新镜像绑定（P8-4）：null = 清除（回默认沙箱） */
   async setImage(agentId: string, imageId: string | null): Promise<AgentProfile> {
     return this.#withLock(async () => {

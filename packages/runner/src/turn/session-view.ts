@@ -128,22 +128,35 @@ export function sessionView(records: SessionRecord[]): SessionView {
 }
 
 /**
- * 按 sessionId 提取会话段（引用注入与 v1.session.list 共用）：返回该 session-start 边界到
- * 下一个 session-start（或流尾）之间的记录（含边界后全部原始记录——元事件保留供二次变换）。
- * sessionId=null 提取初始段（首个 session-start 之前）。
+ * 按 sessionId 提取会话段（引用注入与 v1.session.list 共用）：**栈语义**（2026-10-18 对齐
+ * sessionView/sessionSegments——resume 回溯续写归旧会话；此前朴素切段在定向回退多级时
+ * 计数与注入内容错位）。返回归属该会话的全部记录（resume 后续写的消息含在内）；边界记录
+ * 本身不进输出（提取片对 sessionView 无边界=全窗，tombstone/revision 照常解释）。
+ * sessionId=null 提取初始段（栈空时接收的全部记录）。
  */
 export function extractSession(records: SessionRecord[], sessionId: string | null): SessionRecord[] {
   const out: SessionRecord[] = []
-  let active = sessionId === null // null = 初始段（从流头开始，遇 start 停）
+  const stack: string[] = []
+  let ordinal = 0
   for (const record of records) {
     const p = payloadOf(record)
     if (record.kind === 'session-start') {
-      const id = typeof p['sessionId'] === 'string' ? p['sessionId'] : ''
-      if (sessionId === null) break // 初始段结束
-      active = id === sessionId
+      ordinal += 1
+      const id = typeof p['sessionId'] === 'string' && p['sessionId'] !== '' ? p['sessionId'] : `s-${ordinal}`
+      stack.push(id)
       continue
     }
-    if (active) out.push(record)
+    if (record.kind === 'session-resume') {
+      const target = typeof p['sessionId'] === 'string' ? p['sessionId'] : null
+      if (target === null) stack.pop()
+      else {
+        const idx = stack.indexOf(target)
+        if (idx >= 0) stack.length = idx + 1
+      }
+      continue
+    }
+    const receiving = stack.length > 0 ? stack[stack.length - 1]! : null
+    if (receiving === sessionId) out.push(record)
   }
   return out
 }

@@ -10,7 +10,7 @@ const rec = (kind: string, payload: Record<string, unknown> = {}, at = 0): { kin
 describe('sessionSegments（栈语义段扫描——v1.session.list/clear/标题触发共用）', () => {
   it('空 transcript：仅初始段（current、零消息）', () => {
     expect(sessionSegments([])).toEqual([
-      { sessionId: INITIAL_SESSION_ID, messageCount: 0, firstText: '', lastAt: 0, current: true },
+      { sessionId: INITIAL_SESSION_ID, messageCount: 0, firstText: '', firstAgentText: '', lastAt: 0, current: true },
     ])
   })
 
