@@ -10,6 +10,7 @@ import { initThemeWatch } from './stores/ui'
 import type { ViewName } from './stores/ui'
 import ConsoleView from './views/ConsoleView.vue'
 import BoxesView from './views/BoxesView.vue'
+import PluginsView from './views/PluginsView.vue'
 import TasksView from './views/TasksView.vue'
 import GraphView from './views/GraphView.vue'
 import RoomsView from './views/RoomsView.vue'
@@ -61,6 +62,7 @@ const views: Array<{ id: ViewName; label: string; icon: string; component: unkno
   { id: 'console', label: '控制台', icon: 'chat', component: ConsoleView },
   { id: 'tasks', label: '排程', icon: 'lanes', component: TasksView },
   { id: 'boxes', label: 'Box', icon: 'box', component: BoxesView },
+  { id: 'plugins', label: '插件', icon: 'puzzle', component: PluginsView },
   { id: 'graph', label: '图谱', icon: 'graph', component: GraphView },
   { id: 'rooms', label: '跨用户房间', icon: 'rooms', component: RoomsView },
   { id: 'settings', label: '设置', icon: 'sliders', component: SettingsView },
@@ -153,6 +155,8 @@ const ICONS: Record<string, string> = {
   graph:
     '<circle cx="6" cy="7" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="17" cy="17" r="2.4"/><circle cx="7" cy="18" r="2.4"/><path d="M8.3 7.8l7.3-1.2M8.2 9.1l7.2 6.3M8.9 17.2l-.5-7M16.7 15.1l-.7-6.7"/>',
   rooms: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  puzzle:
+    '<path d="M10 3.5a1.8 1.8 0 1 1 3.6 0V5h2.9a1.5 1.5 0 0 1 1.5 1.5v3h1.5a1.8 1.8 0 1 1 0 3.6h-1.5v3a1.5 1.5 0 0 1-1.5 1.5h-2.9v1.6a1.8 1.8 0 1 1-3.6 0v-1.6h-3A1.5 1.5 0 0 1 4.2 16v-3H2.8a1.8 1.8 0 1 1 0-3.6h1.4v-3A1.5 1.5 0 0 1 5.7 5h3V3.5z"/>',
   sliders:
     '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>',
 }

@@ -377,6 +377,10 @@ export const useKernelStore = defineStore('kernel', {
     groups: [] as GroupEntry[],
     /** 自定义角色模板（2026-10-18）：boot 拉取 + 向导保存/删除后刷新（内置四角色在渲染层内建） */
     roleTemplates: [] as Array<{ name: string; persona: string }>,
+    /** 插件市场清单（2026-10-19 插件视图一期）：v1.plugins.market（内核内置源，将来接真实源） */
+    pluginMarket: [] as Array<{ id: string; name: string; description: string; version: string }>,
+    /** 已安装插件（2026-10-19）：boot 拉取 + 安装/卸载/启停动作后随命令返回刷新 */
+    installedPlugins: [] as Array<{ id: string; name: string; description: string; version: string; enabled: boolean }>,
     /** 群终答 runId 集合（群轮过程私聊隔离的判据）：群流装载（group-agent 记录）与
      *  v1.group.message 实况收集——识别「成员档案里的遗留群轮过程记录」（新数据已落群流） */
     groupRunIds: [] as string[],
@@ -490,6 +494,7 @@ export const useKernelStore = defineStore('kernel', {
         await this.refreshSandbox()
         await this.refreshGroups()
         await this.refreshRoleTemplates()
+        await this.refreshPlugins()
         this.connected = true
       } catch (err) {
         this.bootError = err instanceof Error ? err.message : String(err)
@@ -609,6 +614,27 @@ export const useKernelStore = defineStore('kernel', {
     async removeRoleTemplate(name: string): Promise<void> {
       await this.call('v1.roles.remove', { name })
       await this.refreshRoleTemplates()
+    },
+    /** 插件（2026-10-19 插件视图一期）：双清单 + 安装/卸载/启停 */
+    async refreshPlugins(): Promise<void> {
+      const [market, installed] = await Promise.all([
+        this.call<{ plugins: Array<{ id: string; name: string; description: string; version: string }> }>('v1.plugins.market'),
+        this.call<{ plugins: Array<{ id: string; name: string; description: string; version: string; enabled: boolean }> }>('v1.plugins.installed'),
+      ])
+      this.pluginMarket = market.plugins
+      this.installedPlugins = installed.plugins
+    },
+    async installPlugin(plugin: { id: string; name: string; description: string; version: string }): Promise<void> {
+      const r = await this.call<{ plugins: typeof this.installedPlugins }>('v1.plugins.install', plugin)
+      this.installedPlugins = r.plugins
+    },
+    async uninstallPlugin(id: string): Promise<void> {
+      await this.call('v1.plugins.uninstall', { id })
+      this.installedPlugins = this.installedPlugins.filter((p) => p.id !== id)
+    },
+    async setPluginEnabled(id: string, enabled: boolean): Promise<void> {
+      const r = await this.call<{ plugins: typeof this.installedPlugins }>('v1.plugins.setEnabled', { id, enabled })
+      this.installedPlugins = r.plugins
     },
     /** 建群（成员名册在位校验在内核）→ 刷新清单，返回 groupId（跳群会话用） */
     async createGroup(name: string, memberAgentIds: string[]): Promise<string> {

@@ -1149,6 +1149,57 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await settings.removeRoleTemplate(nameSchema.parse(payload).name)
       return { ok: true }
     }, nameSchema)
+    // ---- 插件（2026-10-19 插件视图一期：UI 壳 + 安装态管理——运行时后续接）----
+    // 市场源：内核内置清单（将来接真实源/远端）；本期两个「示例」条目（用户裁定 A：全链可用可测）
+    .register('v1.plugins.market', async () => ({
+      plugins: [
+        {
+          id: 'sample-notes',
+          name: '示例 · 会话笔记',
+          description: '演示插件形态的示例条目——安装后可在「我的插件」禁用/卸载（运行时能力后续接入）',
+          version: '0.1.0',
+        },
+        {
+          id: 'sample-export',
+          name: '示例 · 会话导出',
+          description: '演示插件形态的示例条目——安装后可在「我的插件」禁用/卸载（运行时能力后续接入）',
+          version: '0.1.0',
+        },
+      ],
+    }))
+    .register('v1.plugins.installed', async () => ({ plugins: await settings.getInstalledPlugins() }))
+    .register(
+      'v1.plugins.install',
+      async (payload) => {
+        const input = z
+          .object({
+            id: z.string().trim().min(1).max(64),
+            name: z.string().trim().min(1).max(24),
+            description: z.string().trim().max(200),
+            version: z.string().trim().min(1).max(16),
+          })
+          .parse(payload)
+        return { plugins: await settings.installPlugin(input) }
+      },
+      z.object({
+        id: z.string().trim().min(1).max(64),
+        name: z.string().trim().min(1).max(24),
+        description: z.string().trim().max(200),
+        version: z.string().trim().min(1).max(16),
+      }),
+    )
+    .register('v1.plugins.uninstall', async (payload) => {
+      await settings.uninstallPlugin(z.object({ id: z.string().trim().min(1).max(64) }).parse(payload).id)
+      return { ok: true }
+    }, z.object({ id: z.string().trim().min(1).max(64) }))
+    .register(
+      'v1.plugins.setEnabled',
+      async (payload) => {
+        const { id, enabled } = z.object({ id: z.string().trim().min(1).max(64), enabled: z.boolean() }).parse(payload)
+        return { plugins: await settings.setPluginEnabled(id, enabled) }
+      },
+      z.object({ id: z.string().trim().min(1).max(64), enabled: z.boolean() }),
+    )
     // 供应商重排（左栏拖拽排序）：names 全量清单须与既有档案同集合（settings 层校验）；顺序不影响 provider 实例，无需热切换
     .register('v1.settings.reorderProviders', async (payload) => {
       await settings.reorder(reorderProvidersSchema.parse(payload).names)

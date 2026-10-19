@@ -2523,3 +2523,71 @@ test('自定义角色（2026-10-18）：向导建档位 → 选中建 Agent → 
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('插件视图（2026-10-19 一期）：拼图入口 → 双 Tab → 市场安装 → 我的插件启停/卸载全链', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-plugins-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // —— 侧栏拼图入口：位于 Box 与图谱之间 ——
+    const navTitles = await page.locator('.nav-item').evaluateAll((els) => els.map((e) => (e as HTMLElement).title))
+    expect(navTitles.indexOf('插件')).toBeGreaterThan(navTitles.indexOf('Box'))
+    expect(navTitles.indexOf('插件')).toBeLessThan(navTitles.indexOf('图谱'))
+    await page.locator('.nav-item[title="插件"]').click()
+    await expect(page.locator('.view-title')).toHaveText('插件')
+
+    // —— 市场 Tab（默认）：两张示例卡；空态不在场 ——
+    await expect(page.locator('.plugins-tabs button.is-sel')).toHaveText('插件市场')
+    await expect(page.locator('.plugin-card')).toHaveCount(2)
+    await expect(page.locator('.plugins-empty')).toHaveCount(0)
+
+    // —— 安装：按钮翻「已安装」置灰 ——
+    const card = page.locator('.plugin-card', { hasText: '会话笔记' })
+    await card.locator('.pc-btn-primary', { hasText: '安装' }).click()
+    await expect(card.locator('.pc-btn', { hasText: '已安装' })).toBeDisabled()
+
+    // —— 我的插件：在场 + 已启用 → 禁用（chip/置灰）→ 启用 ——
+    await page.locator('.plugins-tabs button', { hasText: '我的插件' }).click()
+    const mine = page.locator('.plugin-card', { hasText: '会话笔记' })
+    await expect(mine.locator('.pc-state')).toHaveText('已启用')
+    await mine.locator('.pc-btn', { hasText: '禁用' }).click()
+    await expect(mine.locator('.pc-state')).toHaveText('已禁用')
+    await expect(mine).toHaveClass(/is-off/)
+    await mine.locator('.pc-btn', { hasText: '启用' }).click()
+    await expect(mine.locator('.pc-state')).toHaveText('已启用')
+
+    // —— 卸载：行内二次确认 → 空态 ——
+    await mine.locator('.pc-btn-danger', { hasText: '卸载' }).click()
+    await expect(mine.locator('.pc-btn-danger')).toHaveText('确认卸载？')
+    await mine.locator('.pc-btn-danger', { hasText: '确认卸载？' }).click()
+    await expect(page.locator('.plugin-card')).toHaveCount(0)
+    await expect(page.locator('.plugins-empty')).toContainText('暂无可用插件')
+    // 空态引导：直切市场 Tab（优化 C）
+    await page.locator('.pe-link').click()
+    await expect(page.locator('.plugins-tabs button.is-sel')).toHaveText('插件市场')
+
+    // —— 回市场：可重装（卸载非终点） ——
+    await page.locator('.plugins-tabs button', { hasText: '插件市场' }).click()
+    await expect(page.locator('.plugin-card', { hasText: '会话笔记' }).locator('.pc-btn-primary')).toHaveText('安装')
+
+    // —— 布局切换（2026-10-19）：宫格默认 → 列表单列 → 偏好 localStorage 记忆（重载后保持） ——
+    await expect(page.locator('.plugins-grid')).toHaveClass(/is-grid/)
+    await page.locator('.plugins-layout button[title="列表布局"]').click()
+    await expect(page.locator('.plugins-grid')).toHaveClass(/is-list/)
+    await page.reload()
+    await page.locator('.nav-item[title="插件"]').click()
+    await expect(page.locator('.plugins-grid')).toHaveClass(/is-list/) // 偏好持久
+    await page.locator('.plugins-layout button[title="宫格布局"]').click()
+    await expect(page.locator('.plugins-grid')).toHaveClass(/is-grid/)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

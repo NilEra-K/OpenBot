@@ -283,3 +283,34 @@ describe('自定义角色模板（2026-10-18：用户自建档位——小红书
     expect(list.map((r) => r.name)).toEqual(['小红书运维'])
   })
 })
+
+describe('已安装插件（2026-10-19 插件视图一期：安装态管理）', () => {
+  it('install 同 id 重装覆盖并恢复启用；setEnabled 切换；uninstall 幂等；旧文件读取=空清单', async () => {
+    const { store } = makeStore()
+    expect(await store.getInstalledPlugins()).toEqual([])
+    await store.installPlugin({ id: 'p1', name: '插件一', description: '描述', version: '0.1.0' })
+    await store.installPlugin({ id: 'p2', name: '插件二', description: '描述', version: '0.2.0' })
+    let list = await store.getInstalledPlugins()
+    expect(list.map((p) => [p.id, p.enabled])).toEqual([
+      ['p1', true],
+      ['p2', true],
+    ])
+    // 禁用/启用
+    list = await store.setPluginEnabled('p1', false)
+    expect(list.find((p) => p.id === 'p1')?.enabled).toBe(false)
+    await store.setPluginEnabled('p1', true)
+    expect((await store.getInstalledPlugins()).find((p) => p.id === 'p1')?.enabled).toBe(true)
+    // 未安装的启停拒绝（悬空引用显式失败）
+    await expect(store.setPluginEnabled('p-none', true)).rejects.toThrow('插件未安装')
+    // 重装覆盖（恢复启用 + 新元数据）
+    await store.setPluginEnabled('p2', false)
+    await store.installPlugin({ id: 'p2', name: '插件二改', description: '新描述', version: '0.3.0' })
+    list = await store.getInstalledPlugins()
+    expect(list.find((p) => p.id === 'p2')).toMatchObject({ name: '插件二改', version: '0.3.0', enabled: true })
+    expect(list).toHaveLength(2)
+    // 卸载（幂等）
+    await store.uninstallPlugin('p2')
+    await store.uninstallPlugin('p2')
+    expect((await store.getInstalledPlugins()).map((p) => p.id)).toEqual(['p1'])
+  })
+})

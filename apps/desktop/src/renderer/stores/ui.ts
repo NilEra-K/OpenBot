@@ -5,7 +5,7 @@
  */
 import { defineStore } from 'pinia'
 
-export type ViewName = 'console' | 'boxes' | 'tasks' | 'graph' | 'rooms' | 'settings'
+export type ViewName = 'console' | 'boxes' | 'tasks' | 'plugins' | 'graph' | 'rooms' | 'settings'
 export type ThemePref = 'auto' | 'dark' | 'light'
 
 const THEME_KEY = 'openbot.theme'

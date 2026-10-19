@@ -69,6 +69,17 @@ export interface RoleTemplate {
   persona: string
 }
 
+/** 已安装插件（2026-10-19 插件视图一期：UI 壳 + 安装态管理——运行时后续接） */
+export interface InstalledPlugin {
+  /** 插件 id（市场清单键） */
+  id: string
+  name: string
+  description: string
+  version: string
+  /** 禁用态（false=已禁用——保留安装但停用；运行时语义后续接） */
+  enabled: boolean
+}
+
 export interface AppSettings {
   version: 2
   defaultProvider?: string
@@ -85,6 +96,8 @@ export interface AppSettings {
   fallbackProvider?: string
   /** 自定义角色模板（2026-10-18）：可选字段（旧文件兼容）；内置四角色不落库（代码内建） */
   roleTemplates?: RoleTemplate[]
+  /** 已安装插件（2026-10-19 插件视图一期）：可选字段（旧文件兼容） */
+  installedPlugins?: InstalledPlugin[]
 }
 
 /** 展示形状：给 renderer/命令面，绝无 key 材料 */
@@ -405,6 +418,45 @@ export class SettingsStore {
     await this.#save({ ...settings, roleTemplates: templates })
   }
 
+  /** 已安装插件（2026-10-19 插件视图一期）：读取（旧文件缺席 = 空清单；坏条目过滤） */
+  async getInstalledPlugins(): Promise<InstalledPlugin[]> {
+    const settings = await this.load()
+    return (settings.installedPlugins ?? []).filter(
+      (p) =>
+        typeof p?.id === 'string' && p.id !== '' &&
+        typeof p?.name === 'string' &&
+        typeof p?.description === 'string' &&
+        typeof p?.version === 'string' &&
+        typeof p?.enabled === 'boolean',
+    )
+  }
+
+  /** 安装（同 id 覆盖重装——重装即恢复启用）；卸载（幂等）；启用/禁用切换（不存在拒绝） */
+  async installPlugin(input: Omit<InstalledPlugin, 'enabled'>): Promise<InstalledPlugin[]> {
+    const settings = await this.load()
+    const plugins = (settings.installedPlugins ?? []).filter((p) => p.id !== input.id)
+    plugins.push({ ...input, enabled: true })
+    await this.#save({ ...settings, installedPlugins: plugins })
+    return structuredClone(plugins)
+  }
+
+  async uninstallPlugin(id: string): Promise<void> {
+    const settings = await this.load()
+    const plugins = (settings.installedPlugins ?? []).filter((p) => p.id !== id)
+    await this.#save({ ...settings, installedPlugins: plugins })
+  }
+
+  async setPluginEnabled(id: string, enabled: boolean): Promise<InstalledPlugin[]> {
+    const settings = await this.load()
+    const target = (settings.installedPlugins ?? []).find((p) => p.id === id)
+    if (target === undefined) {
+      throw new KernelError('SETTINGS_PLUGIN_NOT_FOUND', `插件未安装：${id}`)
+    }
+    target.enabled = enabled
+    await this.#save({ ...settings, installedPlugins: settings.installedPlugins })
+    return structuredClone(settings.installedPlugins ?? [])
+  }
+
   async #save(settings: AppSettings): Promise<void> {
     this.#cache = structuredClone(settings)
     await this.#fs.write(this.#path, `${JSON.stringify(settings, null, 2)}\n`)
@@ -445,6 +497,7 @@ function parseLoose(raw: string | null): AppSettings {
       relays?: RelaySettings[]
       relay?: RelaySettings
       roleTemplates?: unknown
+      installedPlugins?: unknown
       providers?: Array<Record<string, unknown>>
     }
     if (parsed && (parsed.version === 1 || parsed.version === 2) && Array.isArray(parsed.providers)) {
@@ -479,6 +532,18 @@ function parseLoose(raw: string | null): AppSettings {
                 (r): r is RoleTemplate =>
                   typeof (r as { name?: unknown })?.name === 'string' && (r as { name: string }).name !== '' &&
                   typeof (r as { persona?: unknown })?.persona === 'string' && (r as { persona: string }).persona !== '',
+              ),
+            }
+          : {}),
+        ...(Array.isArray(parsed.installedPlugins)
+          ? {
+              installedPlugins: parsed.installedPlugins.filter(
+                (p): p is InstalledPlugin =>
+                  typeof (p as { id?: unknown })?.id === 'string' && (p as { id: string }).id !== '' &&
+                  typeof (p as { name?: unknown })?.name === 'string' &&
+                  typeof (p as { description?: unknown })?.description === 'string' &&
+                  typeof (p as { version?: unknown })?.version === 'string' &&
+                  typeof (p as { enabled?: unknown })?.enabled === 'boolean',
               ),
             }
           : {}),
