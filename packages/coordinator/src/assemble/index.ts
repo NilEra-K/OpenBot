@@ -228,6 +228,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     },
     // 汇总人管家优先（2026-10-18 #汇总）：agentMeta 角色注入
     roleOf: (agentId) => agentMeta.get(agentId)?.role,
+    // @提及双命中面（2026-10-19）：@agentId 与 @显示名 都路由——agentMeta 名注入
+    nameOf: (agentId) => agentMeta.get(agentId)?.name,
   })
   void groups.load().catch(() => {}) // 启动恢复群清单（fire-and-forget：失败=空清单如实）
 

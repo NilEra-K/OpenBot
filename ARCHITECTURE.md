@@ -1,8 +1,9 @@
 # OpenBot 架构总纲
 
-> **版本** v1.2 · 2026-08-18 · 状态：已与作者对齐
+> **版本** v1.3 · 2026-10-19 · 状态：已与作者对齐
 > **v1.1 变更**：新增 §3.5 主从模型（一主多从，唯一管家 Steward），联动 §3.2 / §5 / §8 / ADR #11
 > **v1.2 变更**：新增 §8「解耦纪律」七条硬规则（UI 与逻辑边界从结构性保证升级为显式条款），§5 补「协议只含领域事实」
+> **v1.3 变更**（2026-10-18/19 语义入档）：§3.5 群聊发言模式体系（#前缀注册表）与身份分层（persona）；§3.6/§7 群轮过程记录归群流；§7 会话段栈语义与 settings/profile additive 字段清单
 > **上游文档**：[PRODUCT.md](PRODUCT.md)（产品定位）· [DESIGN.md](DESIGN.md)（视觉基调）· `prototype.html`（视觉母版）
 > **本文地位**：架构唯一权威。与代码冲突时，两者必须同步修改，不允许文档与实现长期分叉。
 
@@ -191,7 +192,12 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - **继任**：steward 被删除或休眠 → 空缺态，用户任命新 steward 后恢复默认路由；transcript 与委派边历史保留。
 
 - A2A 私聊：fire-and-forget + 对称唤醒；priority 消息可中断接收方非用户工作（steer）；DM 抢占后 at-least-once 重驱（isRedriven 防环）；双侧 transcript 镜像 + 社交图谱数据。
-- 群聊编排：有界轮转（消息上限/轮次上限/全员 pass 收敛/用户消息 supersede）、@提及路由、每成员独立会话状态。
+- 群聊编排：有界轮转（消息上限/轮次上限/全员 pass 收敛/用户消息 supersede）、@提及路由（**双命中面**：`@agentId` 与 `@显示名` 都路由——用户不知道 agentId，渲染层补全插的是显示名）、每成员独立会话状态。
+- **发言模式体系**（2026-10-18/19）：`#xxx ` 前缀触发，内核 `GROUP_MODE_PREFIXES` 注册表解析（前缀剥离 + group-user 记录留 mode 痕），协议 schema 零改动——新模式同位追加。已注册：
+  - `#讨论`/`#独立`（independent）：全员并发入队、context 恒空（互不可见各抒己见）、settle 不推进、全员结算收敛；
+  - `#汇总`（summary）：阶段一盲答（同 independent）→ 阶段二汇总人交叉总结（**管家优先**，GroupDeps.roleOf 装配注入；带全量观点 context）→ settle 收敛；
+  - `#点名`（mention）：门控——仅被 @ 的成员应答（轮转语义保留）；空点名回退轮转并注记。
+- **身份分层**（2026-10-18）：`AgentProfile.persona`（人设一句话，ctx 档案可编辑、即时生效）+ `roleName`（角色档位名——呈现留档，权限语义恒在 role）。系统提示词按 agent 分流：worker 以「你是「名字」（人设）……不是管家」开场（全局一句「你是管家」致 worker 集体自认管家是已被实证修复的缺陷）。**自定义角色模板**（`settings.roleTemplates`：name + persona，v1.roles.* 命令族，上限 20）：小红书运维/微商运营等用户自建档位，建 Agent 时选用复用；内置四角色（管家/研究员/工程师/观察员）代码内建不落库。群轮 prompt 注入成员身份行与同伴名单（经 agentMeta——装配层档案真相缓存，任命事务经 roster 事件随动）。
 - 广播：→全员单向扇出，顺序调度、并发执行、无环（发起方：用户与 steward，见上）。
 - subagent：父 agent 派生后台 run，lineage 世系、steer、abort。
 - `CrossUserRelay`（跨用户房间）：turn-request/result、10 分钟窗口 30 turn 预算、不可达退避、nonce 幂等——**已实现（P7；协议与自托管指南 [docs/relay-protocol.md](docs/relay-protocol.md)，本地优先/P2P 优先措辞见其 §0）**。
@@ -201,6 +207,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 ### 3.6 `runner` —— turn 执行与工具层
 
 - turn 执行、SendMessage 解析、SessionRuntime / GroupMemberRunner 装配。
+- **群轮过程记录归群流**（2026-10-18 裁定）：群成员 turn 的 thinking/exec 过程记录落**群 transcript**（键 = groupId——「会话键 = 呈现归属」，成员私聊档案零群痕迹）；ToolContext 携带 sessionKey 落盘键。群视图无过程卡（呈现裁定），过程数据随群流留档。
 - **工具层为 OpenBot 重写**：
   - *in-box 工具族*（默认）：exec / fs 读写 / 构建 / snapshot，全部经 boxes 在沙箱内执行，Box 内自由。
   - *host 最小工具集*：仅限进程自身状态（读 transcript、消息收发、**记忆 save/recall**——backlog ①：agent 自己的工作集，不出 Box 概念面），**出 Box（宿主文件/网络）一律过闸门**。
@@ -335,6 +342,8 @@ interface BoxBackend {
 - **源头真相**：transcript 永远 JSONL（append-only、崩溃安全、可 grep、可人工检查）。
 - 每 agent 一目录（§3.2），agent 目录、memory、automations 平铺 JSON。
 - **幂等账本**贯穿三条链路：消息发送（重试零双发）、任务提交、**闸门审批**。
+- **会话段栈语义**（2026-10-18 对齐）：session-start 压栈 / session-resume 弹栈或带目标回溯（目标之后时间线失效）——`sessionView`（组装解释器）、`sessionSegments`（清单/清扫/标题触发共用段扫描）、`extractSession`（quote 注入）三处同构。`session-title` 记录（首答后异步生成 ≤20 字标题，fire-and-forget 失败静默）；空会话不落边界（v1.session.clear 当前段无消息时 no-op）。
+- **settings/profile 的 additive 字段**（版本号 + 读取端兼容，零破坏迁移）：`settings.json` —— providers/relays 之外新增 `roleTemplates`（自定义角色）与 `installedPlugins`（插件安装态，v1.plugins.*）；`profile.json` —— `persona` / `roleName`。均为可选字段，旧文件读取 = 缺席语义。
 - box 目录（实例/快照/模板）走同一套 JSONL/JSON 约定。
 - 禁止原生依赖进 state（better-sqlite3 等）——保持 electron-builder 零 rebuild、Electron 升级零成本。
 - API key 用 Electron `safeStorage`（Windows 即 DPAPI）加密落盘，不明文。

@@ -1490,15 +1490,17 @@ test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→
     await page.getByRole('button', { name: '＋ 新建', exact: true }).click()
     await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('新建自动化')
     await page.locator('.wiz-overlay input.mono').fill('* * * * *')
-    await expect(page.locator('.cron-preview')).toContainText('下次触发', { timeout: 10_000 })
+    await expect(page.locator('.cron-preview')).toContainText('下次触发', { timeout: 20_000 })
     await page.locator('.wiz-overlay input').first().fill('每分钟汇报')
     await page.locator('.wiz-overlay textarea').fill('汇报昨天的任务')
     await page.getByRole('button', { name: '保存', exact: true }).click()
-    await expect(page.locator('.setrow', { hasText: '每分钟汇报' })).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('.setrow', { hasText: '每分钟汇报' })).toBeVisible({ timeout: 20_000 })
 
-    // 到点触发（1s 扫描 + 最长 70s 等下一个分钟边界）：管家会话收到委托并回复
+    // 到点触发：1s 扫描 + 最长 60s 等下一个分钟边界 + turn 耗时——断言窗必须 ≥ 三者之和。
+    // 2026-10-19 稳定化：满载下（单跑曾拉至 55s、全程 2-3x 拉伸）75s 数学上不够（四次满载
+    // 抖动的根因）——放宽至 150s（两倍边界余量）；cron 预览/清单等待同步翻倍防御
     await page.getByRole('button', { name: '控制台', exact: true }).click()
-    await expect(page.locator('.m-text', { hasText: '自动化完成：昨日无事发生' })).toBeVisible({ timeout: 75_000 })
+    await expect(page.locator('.m-text', { hasText: '自动化完成：昨日无事发生' })).toBeVisible({ timeout: 150_000 })
     // 委托文本在管家会话内（user 消息形态）
     await expect(page.locator('.m.user .m-text', { hasText: '汇报昨天的任务' })).toBeVisible()
 
@@ -2351,7 +2353,7 @@ test('群聊身份与独立作答（2026-10-18）：persona 自称正确 + #讨�
     // #汇总：管家（steward）汇总轮
     { match: (l) => l.content.includes('本轮汇总') && l.content.includes('你是本群成员「管家」'), text: '汇总结论：两人一致' },
     // #点名：仅被 @ 的欧米茄应答（点名行带冒号——与轮转注解的「点名你时」区分）
-    { match: (l) => l.content.includes('你是本群成员「欧米茄」') && l.content.includes('（点名：agent-1）'), text: '欧米茄被点名发言' },
+    { match: (l) => l.content.includes('你是本群成员「欧米茄」') && l.content.includes('（点名：欧米茄）'), text: '欧米茄被点名发言' },
   ])
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-groupid-'))
   const app = await _electron.launch({
@@ -2446,7 +2448,7 @@ test('群聊身份与独立作答（2026-10-18）：persona 自称正确 + #讨�
     await expect(page.locator('.gm-mode').last()).toHaveText('汇总')
 
     // —— #点名：仅 @欧米茄 应答（管家零请求）；「点名」徽标 ——
-    await input.fill('#点名 @agent-1 说说看') // @提及一期命中面=agentId（显示名匹配记档后续）
+    await input.fill('#点名 @欧米茄 说说看') // 双命中面（2026-10-19）：显示名直达——真实用户路径
     await input.press('Escape')
     await input.press('Enter')
     await expect(page.locator('.m-text', { hasText: '欧米茄被点名发言' })).toBeVisible({ timeout: 15_000 })

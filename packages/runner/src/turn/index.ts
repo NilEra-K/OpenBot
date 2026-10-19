@@ -127,7 +127,9 @@ export class TurnRunner {
           : ''
       const peers = payload.memberIds !== undefined ? `本群成员：${payload.memberIds.map(nameOfPeer).join('、')}。` : ''
       const ctx = payload.context.length > 0 ? `本轮已发言：\n${payload.context.join('\n')}\n\n` : ''
-      const mentioned = payload.mentioned.length > 0 ? `（点名：${payload.mentioned.join('、')}）` : ''
+      // 点名显示名（2026-10-19）：经 agentMetaOf 解析——成员读到的是同伴名字而非 agentId
+      const mentioned =
+        payload.mentioned.length > 0 ? `（点名：${payload.mentioned.map(nameOfPeer).join('、')}）` : ''
       const modeNote =
         payload.mode === 'independent'
           ? `（独立作答：本轮各成员分别独立作答、互不可见——给出你自己的观点，不要试图猜测或引用他人）`

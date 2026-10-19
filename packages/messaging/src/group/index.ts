@@ -28,6 +28,11 @@ export const GroupErrorCodes = {
 /** 群消息上限（含 sysnote——transcript 记录数判据，天然持久） */
 export const MAX_GROUP_RECORDS = 200
 
+/** 正则字面量转义（@提及名字命中用——名字可含正则元字符） */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 /** [pass] 约定：群成员轮转中无话可说的标准回复（turn prompt 告知） */
 export const GROUP_PASS_TOKEN = '[pass]'
 
@@ -98,6 +103,8 @@ export interface GroupDeps {
   ledger: IdempotencyLedger
   /** 角色查询（2026-10-18 #汇总）：汇总人管家优先——装配注入 agentMeta 角色；缺省首位发言成员 */
   roleOf?: (agentId: string) => 'steward' | 'worker' | undefined
+  /** 显示名查询（2026-10-19 @提及双命中面）：@agentId 与 @显示名 都路由——装配注入 agentMeta 名 */
+  nameOf?: (agentId: string) => string | undefined
   fs: FsAdapter
   root: string
   schedulerOf: (agentId: string) => AgentScheduler
@@ -255,9 +262,14 @@ export class GroupService {
     return { messageId }
   }
 
-  /** 文本中被 @ 的群成员（一期命中面 = @agentId——显示名匹配需名册事实注入，记档后续） */
+  /** 文本中被 @ 的群成员（2026-10-19 双命中面）：@agentId 与 @显示名 都命中（用户不知道
+   *  agentId——渲染层补全菜单插的就是显示名，此前内核只认 id 致 #点名/提及优先形同虚设）。
+   *  边界正则与渲染层 mentionedAgents 同款：前置非名字字符 + 后视断言（防「@欧米茄们」/
+   *  子串误命中）；名字做正则转义 */
   #mentionedOf(text: string, group: GroupRecord): string[] {
-    return group.members.filter((m) => text.includes(`@${m}`))
+    const hit = (token: string): boolean =>
+      token !== '' && new RegExp(`(?:^|[^一-龥A-Za-z0-9])@${escapeRe(token)}(?![一-龥A-Za-z0-9])`).test(text)
+    return group.members.filter((m) => hit(m) || hit(this.#deps.nameOf?.(m) ?? ''))
   }
 
   /**

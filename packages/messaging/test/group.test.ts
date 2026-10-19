@@ -10,7 +10,7 @@ interface Gate {
   resolve: (result?: unknown) => void
 }
 
-function makeHarness() {
+function makeHarness(nameOf?: (agentId: string) => string | undefined) {
   let t = 0
   let msgCounter = 0
   let runCounter = 0
@@ -47,6 +47,7 @@ function makeHarness() {
       if (!s) throw new KernelError('STATE_AGENT_NOT_FOUND', `未注册 agent：${agentId}`)
       return s
     },
+    ...(nameOf !== undefined ? { nameOf } : {}),
   })
   return {
     service,
@@ -231,6 +232,30 @@ describe('GroupService 有界轮转', () => {
     const records = await h.transcript.readAll('group-1')
     expect(records.some((r) => (r.payload as { text?: string }).text === 'a2 本轮 pass')).toBe(true)
     expect(records.some((r) => (r.payload as { text?: string }).text?.includes('全员 pass'))).toBe(false)
+  })
+
+  it('@提及双命中面（2026-10-19）：@显示名 与 @agentId 都命中；边界防误（@欧米茄们不命中）', async () => {
+    const h = makeHarness((id) => (id === 'a1' ? '欧米茄' : undefined))
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    // 显示名命中 → 提及优先（首 gate 即 a1 且 mentioned 标注）
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '@欧米茄 说说', nonce: 'm1' })
+    expect((h.gates[0]!.run.payload as { mentioned: string[] }).mentioned).toEqual(['a1'])
+    h.gates[0]!.resolve({ text: '到' }) // a1 发言 → 轮转推进 a2
+    await h.flush()
+    h.gates[1]!.resolve({ text: '到' }) // a2 结算 → 本轮收敛
+    await h.flush()
+    // id 命中（原路径不回归）：@a2 提及优先
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '@a2 说说', nonce: 'm2' })
+    expect((h.gates[2]!.run.payload as { mentioned: string[] }).mentioned).toEqual(['a2'])
+    h.gates[2]!.resolve({ text: '到' })
+    await h.flush()
+    h.gates[3]!.resolve({ text: '到' })
+    await h.flush()
+    // 边界防误：后缀续字不命中（轮转常态）
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '@欧米茄们 说说', nonce: 'm3' })
+    expect((h.gates[4]!.run.payload as { mentioned: string[] }).mentioned).toEqual([])
   })
 
   it('@提及优先：点名成员先发言', async () => {
