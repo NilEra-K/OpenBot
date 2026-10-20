@@ -20,12 +20,20 @@ const current = computed(
 const resolving = ref<'approved' | 'denied' | null>(null)
 const error = ref<string | null>(null)
 
+// 插件工具归属（2026-10-20 P2①）：弹窗呈现插件身份与权限声明
+const plugin = computed(() => kernel.pluginOfTool(current.value?.tool ?? ''))
+
 const resolve = async (decision: 'approved' | 'denied'): Promise<void> => {
   if (!current.value || resolving.value !== null) return
   resolving.value = decision
   error.value = null
+  // 先捕获（resolveApproval 成功后条目移除、current 即空——await 后 plugin computed 也随之为 null）
+  const { nonce, tool } = current.value
+  const isPluginTool = plugin.value !== null
   try {
-    await kernel.resolveApproval(current.value.nonce, decision)
+    await kernel.resolveApproval(nonce, decision)
+    // 插件工具批准 → 会话内记忆（同插件同工具不再询问——P2①）
+    if (decision === 'approved' && isPluginTool) kernel.rememberPluginTool(tool)
     // 成功/领域失败条目已收敛（弹窗关闭）；传输失败条目保留于此重试
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -62,9 +70,17 @@ watch(
           agent <b class="mono">{{ current.agentId }}</b>（run <span class="mono">{{ current.runId }}</span>）请求执行
         </p>
         <p class="am-tool mono">{{ current.tool }}</p>
+        <!-- 插件身份与权限声明（P2①）：用户须知道「是哪个插件、要什么权限」才谈得上信任 -->
+        <p v-if="plugin" class="am-plugin">
+          来自插件 <b>{{ plugin.name }}</b>
+          <span v-if="plugin.permissions && plugin.permissions.length > 0" class="am-perms">
+            <span v-for="pm in plugin.permissions" :key="pm" class="chip am-perm mono">{{ pm }}</span>
+          </span>
+          <span v-else class="am-perm-none">（未声明权限）</span>
+        </p>
         <p v-if="current.reason" class="am-reason">{{ current.reason }}</p>
         <p class="am-note">
-          批准后本次放行；拒绝则本次拒绝（执行按重试策略处理）。决定只对本次生效，不写入持久策略。
+          批准后本次放行；拒绝则本次拒绝（执行按重试策略处理）。决定只对本次生效，不写入持久策略<template v-if="plugin">；插件工具批准后<b>本会话内</b>同工具不再询问</template>。
         </p>
       </div>
       <p v-if="error" class="am-error">{{ error }}</p>
@@ -145,6 +161,26 @@ watch(
   color: var(--ink);
 }
 
+.am-plugin {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--ink2);
+}
+.am-perms {
+  display: inline-flex;
+  gap: 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.am-perm {
+  height: 17px;
+  font-size: 10.5px;
+  padding: 0 7px;
+}
+.am-perm-none {
+  color: var(--ink3);
+  font-size: 11.5px;
+}
 .am-tool {
   margin: 8px 0;
   padding: 8px 10px;

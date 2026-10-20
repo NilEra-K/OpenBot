@@ -2586,7 +2586,16 @@ test('插件视图（2026-10-19 一期 + 2026-10-20 P1 运行时）：拼图入�
     await expect(modal).toBeVisible({ timeout: 15_000 })
     await modal.getByRole('button', { name: '批准' }).click()
     await expect(page.locator('.m-text', { hasText: '事件已发出' })).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('.toast', { hasText: '插件事件' })).toContainText('屏幕变了', { timeout: 10_000 })
+    await expect(page.locator('.toast', { hasText: '屏幕变了' })).toBeVisible({ timeout: 10_000 })
+    // ②hooks 链：Agent 终答（v1.message.agent）→ openbot/hook 下行 → 插件回声上行事件 → toast
+    // （两条事件 toast 并存——按文本精确过滤避免 strict 冲突）
+    await expect(page.locator('.toast', { hasText: '插件看到 Agent 回复了' })).toBeVisible({ timeout: 10_000 })
+
+    // P2① 授权记忆：再次调用同插件同工具——不弹审批直接执行（会话内记住）
+    await input.fill('发个插件事件')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '事件已发出' })).toHaveCount(2, { timeout: 15_000 })
+    await expect(page.locator('.approval-modal')).toHaveCount(0)
 
     // 回插件视图继续启停链
     await page.locator('.nav-item[title="插件"]').click()

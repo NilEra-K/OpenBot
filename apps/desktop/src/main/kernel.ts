@@ -1195,7 +1195,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         if (content !== null) await fs.write(`${dataRoot}/plugins/${id}/${f}`, content)
       }
       const m = manifestSchema.parse(JSON.parse((await fs.read(`${dataRoot}/plugins/${id}/manifest.json`)) ?? '{}'))
-      await settings.installPlugin({ id: m.id, name: m.name, description: m.description, version: m.version })
+      await settings.installPlugin({ id: m.id, name: m.name, description: m.description, version: m.version, permissions: m.permissions })
       await kernel.plugins.enable(m.id)
       return { plugins: await installedWithRuntime() }
     }, z.object({ id: z.string().trim().min(1).max(64) }))

@@ -78,6 +78,8 @@ export interface InstalledPlugin {
   version: string
   /** 禁用态（false=已禁用——保留安装但停用；运行时语义后续接） */
   enabled: boolean
+  /** 权限声明（2026-10-20 P2①：审批弹窗呈现——安装时从 manifest 落档；additive 可选） */
+  permissions?: string[]
 }
 
 export interface AppSettings {
@@ -428,7 +430,10 @@ export class SettingsStore {
         typeof p?.description === 'string' &&
         typeof p?.version === 'string' &&
         typeof p?.enabled === 'boolean',
-    )
+    ).map((p) => ({
+      ...p,
+      ...(Array.isArray(p.permissions) ? { permissions: p.permissions.filter((x) => typeof x === 'string') } : {}),
+    }))
   }
 
   /** 安装（同 id 覆盖重装——重装即恢复启用）；卸载（幂等）；启用/禁用切换（不存在拒绝） */
@@ -543,7 +548,8 @@ function parseLoose(raw: string | null): AppSettings {
                   typeof (p as { name?: unknown })?.name === 'string' &&
                   typeof (p as { description?: unknown })?.description === 'string' &&
                   typeof (p as { version?: unknown })?.version === 'string' &&
-                  typeof (p as { enabled?: unknown })?.enabled === 'boolean',
+                  typeof (p as { enabled?: unknown })?.enabled === 'boolean' &&
+                  (!('permissions' in (p as object)) || Array.isArray((p as { permissions?: unknown }).permissions)),
               ),
             }
           : {}),

@@ -32,6 +32,8 @@ export const manifestSchema = z.object({
   permissions: z.array(z.enum(['net', 'fs.host', 'screen.read', 'box'])).default([]),
   /** 事件源声明：非空 = 启用即常驻（推模型依赖进程在场） */
   events: z.array(z.object({ type: z.string().min(1).max(48) })).default([]),
+  /** hooks（P2② 2026-10-20）：订阅内核事件（白名单）——经 openbot/hook 下行给插件进程 */
+  hooks: z.array(z.object({ event: z.string().min(1).max(48) })).default([]),
   /** 事件唤醒的绑定 Agent（显示名；缺席 = 只通知用户） */
   agents: z.array(z.string().trim().min(1).max(24)).default([]),
 })
@@ -83,8 +85,11 @@ export interface PluginServiceDeps {
 
 /** 崩溃重启上限（每小时窗内的滑动计数——超过标记 faulted，禁用后可重试） */
 const MAX_CRASHES = 3
-/** 纯工具插件的空闲回收阈值（事件源插件常驻不回收） */
+/** 纯工具插件的空闲回收阈值（事件源/hooks 插件常驻不回收） */
 const IDLE_RECYCLE_MS = 5 * 60_000
+
+/** hooks 事件白名单（P2②）：只下行领域事实；新事件在此追加（协议纯度——不透传任意总线事件） */
+const PLUGIN_HOOK_EVENTS = new Set(['v1.message.agent', 'v1.lifecycle.finished'])
 
 export class PluginService {
   readonly #deps: PluginServiceDeps
@@ -93,6 +98,20 @@ export class PluginService {
 
   constructor(deps: PluginServiceDeps) {
     this.#deps = deps
+    // P2② hooks：白名单事件 → 声明匹配的常驻插件下行（进程在场的才发——未启动的等常驻语义拉起）
+    deps.bus.on('*', (event) => {
+      if (!PLUGIN_HOOK_EVENTS.has(event.type as string)) return
+      for (const handle of this.#handles.values()) {
+        if (handle.client === null || !handle.client.running) continue
+        if (!handle.manifest.hooks.some((h) => h.event === event.type)) continue
+        handle.client.notify('openbot/hook', { event: event.type, payload: event.payload })
+      }
+    })
+  }
+
+  /** 常驻判据：事件源（推模型）或 hooks（下行接收）——启用即拉起、不空闲回收、崩溃自动重启 */
+  #resident(handle: PluginHandle): boolean {
+    return handle.manifest.events.length > 0 || handle.manifest.hooks.length > 0
   }
 
   /** 装载已启用插件（boot）——manifest 校验失败如实跳过并留痕（不炸启动） */
@@ -111,7 +130,7 @@ export class PluginService {
     let handle = this.#handles.get(pluginId)
     if (handle === undefined) handle = await this.#load(pluginId)
     handle.runtime = { state: 'stopped', crashes: 0 }
-    if (handle.manifest.events.length > 0) await this.#ensureProcess(handle)
+    if (this.#resident(handle)) await this.#ensureProcess(handle)
     this.#startRecycler()
   }
 
@@ -270,8 +289,8 @@ export class PluginService {
       return
     }
     handle.runtime = { state: 'stopped', crashes }
-    if (handle.manifest.events.length > 0) {
-      // 事件源插件自动重启（退避 3s）
+    if (this.#resident(handle)) {
+      // 常驻插件（事件源/hooks）自动重启（退避 3s）
       setTimeout(() => {
         void this.#ensureProcess(handle).catch((err) => {
           this.#deps.log(`[openbot] 插件重启失败：${err instanceof Error ? err.message : String(err)}`)
@@ -286,7 +305,7 @@ export class PluginService {
     this.#recycleTimer = setInterval(() => {
       const now = this.#deps.now()
       for (const handle of this.#handles.values()) {
-        if (handle.client === null || handle.manifest.events.length > 0) continue
+        if (handle.client === null || this.#resident(handle)) continue
         if (handle.lastUsedAt !== 0 && now - handle.lastUsedAt > IDLE_RECYCLE_MS) {
           this.#deps.log(`[openbot] 插件空闲回收：${handle.manifest.name}`)
           void handle.client.stop()

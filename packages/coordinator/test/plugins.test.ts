@@ -21,7 +21,8 @@ const MOCK_SERVER = [
   '    const line = buf.slice(0, nl); buf = buf.slice(nl + 1)',
   '    if (!line.trim()) continue',
   '    const { id, method, params } = JSON.parse(line)',
-  "    if (method === 'initialize') send({ jsonrpc: '2.0', id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'mock' } } })",
+  "    if (method === 'openbot/hook') { if (params.event === 'v1.message.agent') send({ jsonrpc: '2.0', method: 'openbot/event', params: { type: 'hook.echo', payload: { text: 'hook 收到' } } }); }",
+  "    else if (method === 'initialize') send({ jsonrpc: '2.0', id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'mock' } } })",
   "    else if (method === 'tools/list') send({ jsonrpc: '2.0', id, result: { tools: [{ name: 'ping', description: 'ping 工具' }] } })",
   "    else if (method === 'tools/call') {",
   "      if (params.name === 'ping') send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'pong' }] } })",
@@ -57,7 +58,7 @@ function makeHarness() {
     now: () => 0,
     log: () => {},
   })
-  return { service, tools, events, sent, fs, writePlugin: async (manifest: object, dir?: string) => {
+  return { service, tools, events, sent, fs, bus, writePlugin: async (manifest: object, dir?: string) => {
     const id = manifest['id'] as string
     await fs.write(`plugins/${id}/manifest.json`, JSON.stringify(manifest))
     if (dir !== undefined) dirs.set(id, dir)
@@ -82,6 +83,22 @@ describe('manifest 校验（PluginService 声明面）', () => {
     const m = manifestSchema.parse(VALID)
     expect(m.permissions).toEqual([])
     expect(m.events).toEqual([])
+  })
+})
+
+describe('PluginService hooks（P2②：内核事件白名单下行）', () => {
+  it('v1.message.agent → openbot/hook 下行 → 插件回声上行事件（总线捕获）', async () => {
+    const h = makeHarness()
+    const dir = await mkdtemp(join(tmpdir(), 'ob-plugin-'))
+    await writeFile(join(dir, 'server.mjs'), MOCK_SERVER)
+    await h.writePlugin({ ...VALID, entry: { command: 'node', args: [join(dir, 'server.mjs')] }, hooks: [{ event: 'v1.message.agent' }] }, dir)
+    await h.service.enable('test.mock')
+    // hooks 插件常驻（无 events 也拉起）
+    expect(h.service.states().find((s) => s.id === 'test.mock')?.state).toBe('running')
+    h.bus.emit('v1.message.agent', { messageId: 'm1', agentId: 'a1', text: 'hi', runId: 'r1' })
+    await new Promise((r) => setTimeout(r, 300)) // 下行+回声异步窗
+    const ev = h.events.find((e) => e.type === 'v1.plugin.event')
+    expect(ev?.payload).toMatchObject({ pluginId: 'test.mock', type: 'hook.echo' })
   })
 })
 

@@ -7,5 +7,6 @@
   "entry": { "command": "node", "args": ["server.mjs"] },
   "permissions": [],
   "events": [{ "type": "hello.fired" }],
+  "hooks": [{ "event": "v1.message.agent" }],
   "agents": []
 }

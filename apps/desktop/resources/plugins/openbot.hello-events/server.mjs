@@ -54,6 +54,14 @@ rl.on('line', (line) => {
     return
   }
   if (method === 'notifications/initialized') return
+  // P2② hooks 下行演示：内核把白名单事件（本插件声明订阅 v1.message.agent）转发到这——
+  // 插件响应式反应（此处回声一条上行事件；实际插件可做归档/外部联动等）
+  if (method === 'openbot/hook') {
+    if (params?.event === 'v1.message.agent') {
+      send({ jsonrpc: '2.0', method: 'openbot/event', params: { type: 'hello.saw-reply', payload: { text: '插件看到 Agent 回复了' } } })
+    }
+    return
+  }
   if (method === 'tools/list') {
     send({ jsonrpc: '2.0', id, result: { tools: TOOLS } })
     return

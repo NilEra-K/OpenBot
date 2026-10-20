@@ -4,7 +4,8 @@
  * 并接收服务端上行 notification（`openbot/event`——插件事件源的推模型通道）。
  * 协议为开放规范（Model Context Protocol）——净室：零参考实现代码，按 wire 形状自写。
  */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { promisify } from 'node:util'
 import { EventEmitter } from 'node:events'
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18'
@@ -34,6 +35,24 @@ export interface McpClientOptions {
   onStderr?: (line: string) => void
   /** 单请求超时 ms（tools/call 挂起等待合法——长工具取宽；缺省 120s） */
   requestTimeoutMs?: number
+}
+
+/** Windows 裸命令 PATH 解析缓存（P2④：spawn 无 shell 找不到 python/uvx 等——where 式解析） */
+const winCommandCache = new Map<string, string>()
+const execFileAsync = promisify(execFile)
+
+async function resolveWindowsCommand(command: string): Promise<string> {
+  const cached = winCommandCache.get(command)
+  if (cached !== undefined) return cached
+  try {
+    const { stdout } = await execFileAsync('where', [command])
+    const first = stdout.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? command
+    winCommandCache.set(command, first)
+    return first
+  } catch {
+    winCommandCache.set(command, command) // 解析失败照原样（spawn error 事件会如实上报）
+    return command
+  }
 }
 
 interface PendingRequest {
@@ -72,7 +91,12 @@ export class McpClient extends EventEmitter {
     //    （被单实例锁吃掉，stdio 无人应答）——须 ELECTRON_RUN_AS_NODE=1 令其以纯 node 行为执行
     //    （单测在 vitest 真 node 下不触发，E2E/真机才暴露）
     const isNode = this.#options.command === 'node'
-    const command = isNode ? process.execPath : this.#options.command
+    // P2④：Windows 裸命令（无路径分隔符）先经 where 解析——spawn 无 shell 不吃 PATH 垫片
+    const command = isNode
+      ? process.execPath
+      : process.platform === 'win32' && !this.#options.command.includes('/') && !this.#options.command.includes('\\')
+        ? await resolveWindowsCommand(this.#options.command)
+        : this.#options.command
     const proc = spawn(command, this.#options.args ?? [], {
       cwd: this.#options.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -209,6 +233,11 @@ export class McpClient extends EventEmitter {
       signal?.addEventListener('abort', abort, { once: true })
       this.#send({ jsonrpc: '2.0', id, method, params })
     })
+  }
+
+  /** 下行通知（2026-10-20 P2② hooks）：内核事件转发给插件进程 */
+  notify(method: string, params: unknown): void {
+    this.#notify(method, params)
   }
 
   #notify(method: string, params: unknown): void {

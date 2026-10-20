@@ -377,6 +377,8 @@ export const useKernelStore = defineStore('kernel', {
     groups: [] as GroupEntry[],
     /** 自定义角色模板（2026-10-18）：boot 拉取 + 向导保存/删除后刷新（内置四角色在渲染层内建） */
     roleTemplates: [] as Array<{ name: string; persona: string }>,
+    /** 插件工具授权记忆（2026-10-20 P2①：会话内同插件同工具不再弹审批——批一次记住） */
+    rememberedPluginTools: [] as string[],
     /** 插件市场清单（2026-10-19 插件视图一期）：v1.plugins.market（内核内置源，将来接真实源） */
     pluginMarket: [] as Array<{ id: string; name: string; description: string; version: string }>,
     /** 已安装插件（2026-10-19；2026-10-20 增运行态）：boot 拉取 + 安装/卸载/启停后随命令返回刷新 */
@@ -721,6 +723,18 @@ export const useKernelStore = defineStore('kernel', {
         if (!(err instanceof GatewayCommandError)) throw err
       }
       this.pendingApprovals = this.pendingApprovals.filter((a) => a.nonce !== nonce)
+    },
+    /** 工具名 → 所属插件（P2①：前缀= id 尾段_——桥接注册同款命名） */
+    pluginOfTool(tool: string): { id: string; name: string; permissions?: string[] } | null {
+      for (const p of this.installedPlugins) {
+        const prefix = `${(p.id.split('.').at(-1) ?? p.id).replace(/[^a-zA-Z0-9_-]/g, '_')}_`
+        if (tool.startsWith(prefix)) return { id: p.id, name: p.name, permissions: (p as { permissions?: string[] }).permissions }
+      }
+      return null
+    },
+    /** 会话内记住该插件工具的批准（P2①） */
+    rememberPluginTool(tool: string): void {
+      if (!this.rememberedPluginTools.includes(tool)) this.rememberedPluginTools.push(tool)
     },
     /** Box 快照（按钮按 caps.snapshot 渲染；返回快照 id 供视图反馈） */
     async snapshotBox(boxId: string): Promise<string> {
@@ -1262,6 +1276,11 @@ export const useKernelStore = defineStore('kernel', {
         case 'v1.approval.requested': {
           // nonce 幂等：重放/重试不双弹窗
           if (this.pendingApprovals.some((a) => a.nonce === event.payload.nonce)) return
+          // 插件工具授权记忆（P2①）：本会话批过 → 自动放行不弹窗（内核账本照落——审计不缺）
+          if (this.rememberedPluginTools.includes(event.payload.tool)) {
+            void this.resolveApproval(event.payload.nonce, 'approved').catch(() => {})
+            return
+          }
           this.pendingApprovals.push({
             approvalId: event.payload.approvalId,
             nonce: event.payload.nonce,

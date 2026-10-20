@@ -249,6 +249,7 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - **进程管理**：懒启动（纯工具插件）或启用即启（事件源插件）→ 空闲回收（纯工具插件）→ 崩溃限次重启（超限标记故障态如实呈现）——插件挂了内核无感。
 - **分发（本地优先）**：市场 = 静态索引（内置官方目录，P2 远端 URL）+ 安装 = 拷贝到 `<root>/plugins/<id>/`（`installedPlugins` 台账续用）——无后端、无账号，纯客户端底色。
 - **mock 对称**：MockMcpServer 测试桩（单测 spawn 真实 stdio 握手）+ 示例插件 `hello-events`（E2E 全链：安装 → Agent 调工具 → 事件上行通知）。
+- **P2（2026-10-20）**：审批弹窗呈现插件身份+权限，插件工具批准后**会话内**同工具免重复弹窗（渲染层记忆自动放行，内核账本照落）；**hooks**——manifest 声明订阅内核事件白名单（`v1.message.agent`/`v1.lifecycle.finished`），经 `openbot/hook` notification 下行给常驻插件（hooks/事件源插件均启用即常驻）；Windows 非 node 命令 where 式 PATH 解析。远端市场索引待 v0.2.0 后。
 
 ## 4. 壳（apps/）
 

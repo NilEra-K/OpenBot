@@ -152,7 +152,11 @@ OpenBot 当前是纯本地单机架构（transport 是进程间边界的实现�
 - [ ] 7. 测试：MockMcpServer 桩（mock 对称铁律）+ 单测（握手/工具桥/事件路由/崩溃恢复）+ E2E（装示例插件 → Agent 调工具 → 事件上行通知全链）
 - [ ] 8. typecheck + 全量回归 + 真机目验
 
-**P2（记档不实施）**：hooks（内核事件向插件下行订阅）、权限审批 UI 整合、远端市场索引 + hash 校验。
+**P2（2026-10-20 实施完成，③推迟——作者裁定远端索引待 v0.2.0 后）**：
+- ✅ 权限审批整合：审批弹窗呈现插件身份 + manifest 权限 chips；插件工具批准后**会话内同工具不再询问**（渲染层记忆自动放行——内核账本照落，审计不缺）；installedPlugins 台账落 permissions。
+- ✅ hooks：manifest 声明 `hooks: [{event}]`（白名单 v1.message.agent / v1.lifecycle.finished）→ `openbot/hook` notification 下行；hooks/事件源插件均常驻。
+- ✅ Windows 非 node 命令 PATH 解析（where 式解析 + 缓存）。
+- ⏸ 远端市场索引 + hash 校验（作者裁定 2026-10-20：v0.2.0 之后）。
 **P3（记档）**：声明式技能包、`openbot plugin init` 脚手架、插件进 Box 跑。
 
 ---
