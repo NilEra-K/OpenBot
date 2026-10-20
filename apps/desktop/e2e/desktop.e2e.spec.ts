@@ -2526,7 +2526,12 @@ test('自定义角色（2026-10-18）：向导建档位 → 选中建 Agent → 
   }
 })
 
-test('插件视图（2026-10-19 一期）：拼图入口 → 双 Tab → 市场安装 → 我的插件启停/卸载全链', async () => {
+test('插件视图（2026-10-19 一期 + 2026-10-20 P1 运行时）：拼图入口 → 市场安装（真实拷贝+启用）→ 运行态 → 启停/卸载全链', async () => {
+  const mock = await startMockOpenAi([
+    // Agent 调插件 notify 工具（推模型全链：审批 → MCP 转发 → 上行事件 → toast）
+    { match: (l) => l.role === 'user' && l.content.includes('发个插件事件'), toolCalls: [{ id: 'pc1', name: 'hello-events_notify', args: { text: '屏幕变了' } }] },
+    { match: (_l, t) => t === 'hello-events_notify', text: '事件已发出' },
+  ])
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-plugins-'))
   const app = await _electron.launch({
     args: ['.'],
@@ -2538,6 +2543,17 @@ test('插件视图（2026-10-19 一期）：拼图入口 → 双 Tab → 市场�
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
 
+    // 配 provider（事件链需要 Agent 真实走一轮工具调用）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+
     // —— 侧栏拼图入口：位于 Box 与图谱之间 ——
     const navTitles = await page.locator('.nav-item').evaluateAll((els) => els.map((e) => (e as HTMLElement).title))
     expect(navTitles.indexOf('插件')).toBeGreaterThan(navTitles.indexOf('Box'))
@@ -2545,20 +2561,36 @@ test('插件视图（2026-10-19 一期）：拼图入口 → 双 Tab → 市场�
     await page.locator('.nav-item[title="插件"]').click()
     await expect(page.locator('.view-title')).toHaveText('插件')
 
-    // —— 市场 Tab（默认）：两张示例卡；空态不在场 ——
+    // —— 市场 Tab（默认）：官方示例 hello-events 在场；空态不在场 ——
     await expect(page.locator('.plugins-tabs button.is-sel')).toHaveText('插件市场')
-    await expect(page.locator('.plugin-card')).toHaveCount(2)
+    await expect(page.locator('.plugin-card', { hasText: 'Hello 事件' })).toBeVisible()
     await expect(page.locator('.plugins-empty')).toHaveCount(0)
 
-    // —— 安装：按钮翻「已安装」置灰 ——
-    const card = page.locator('.plugin-card', { hasText: '会话笔记' })
+    // —— 安装（真实拷贝 + 启用）：按钮翻「已安装」置灰 ——
+    const card = page.locator('.plugin-card', { hasText: 'Hello 事件' })
     await card.locator('.pc-btn-primary', { hasText: '安装' }).click()
     await expect(card.locator('.pc-btn', { hasText: '已安装' })).toBeDisabled()
 
-    // —— 我的插件：在场 + 已启用 → 禁用（chip/置灰）→ 启用 ——
+    // —— 我的插件：在场 + 已启用 + 运行中（事件源插件启用即常驻）→ 禁用 → 启用 ——
     await page.locator('.plugins-tabs button', { hasText: '我的插件' }).click()
-    const mine = page.locator('.plugin-card', { hasText: '会话笔记' })
+    const mine = page.locator('.plugin-card', { hasText: 'Hello 事件' })
     await expect(mine.locator('.pc-state')).toHaveText('已启用')
+    await expect(mine.locator('.pc-rt')).toHaveText('运行中')
+
+    // —— 推模型全链：Agent 调 notify 工具 → 审批（插件工具全量过闸）→ MCP 转发 → 上行事件 → toast ——
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    const input = page.locator('.composer-box input')
+    await input.fill('发个插件事件')
+    await input.press('Enter')
+    const modal = page.locator('.approval-modal', { hasText: 'hello-events_notify' })
+    await expect(modal).toBeVisible({ timeout: 15_000 })
+    await modal.getByRole('button', { name: '批准' }).click()
+    await expect(page.locator('.m-text', { hasText: '事件已发出' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.toast', { hasText: '插件事件' })).toContainText('屏幕变了', { timeout: 10_000 })
+
+    // 回插件视图继续启停链
+    await page.locator('.nav-item[title="插件"]').click()
+    await page.locator('.plugins-tabs button', { hasText: '我的插件' }).click()
     await mine.locator('.pc-btn', { hasText: '禁用' }).click()
     await expect(mine.locator('.pc-state')).toHaveText('已禁用')
     await expect(mine).toHaveClass(/is-off/)
@@ -2577,7 +2609,7 @@ test('插件视图（2026-10-19 一期）：拼图入口 → 双 Tab → 市场�
 
     // —— 回市场：可重装（卸载非终点） ——
     await page.locator('.plugins-tabs button', { hasText: '插件市场' }).click()
-    await expect(page.locator('.plugin-card', { hasText: '会话笔记' }).locator('.pc-btn-primary')).toHaveText('安装')
+    await expect(page.locator('.plugin-card', { hasText: 'Hello 事件' }).locator('.pc-btn-primary')).toHaveText('安装')
 
     // —— 布局切换（2026-10-19）：宫格默认 → 列表单列 → 偏好 localStorage 记忆（重载后保持） ——
     await expect(page.locator('.plugins-grid')).toHaveClass(/is-grid/)
@@ -2590,6 +2622,7 @@ test('插件视图（2026-10-19 一期）：拼图入口 → 双 Tab → 市场�
     await expect(page.locator('.plugins-grid')).toHaveClass(/is-grid/)
   } finally {
     await app.close()
+    await mock.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })

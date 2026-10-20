@@ -23,6 +23,7 @@ import { GuiStreamService } from '../gui-stream/index.js'
 import { StatsService } from '../stats-service/index.js'
 import type { DiskProbe } from '../stats-service/index.js'
 import { sessionSegments } from './session-segments.js'
+import { PluginService } from '../plugins/index.js'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 
@@ -118,6 +119,8 @@ export interface AssembledKernel {
   readonly transcript: TranscriptStore
   /** 工具注册表（壳侧后置注册 computer 工具族——P8-2 生产门探测需要 Box 先在场） */
   readonly tools: ToolRegistry
+  /** 插件运行时（P1）：装载/启停/工具桥接/事件路由（docs/plan-plugins.md） */
+  readonly plugins: PluginService
   /** 幂等账本（审批恢复扫描等观察面） */
   readonly ledger: IdempotencyLedger
   /** 实际装配的出 Box 闸门（Manual 时壳侧可拿引用注册 resolve 命令） */
@@ -329,6 +332,25 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
           const section = formatMemoryPrompt(memory.listSync(agentId))
           return section === '' ? base : `${base}\n\n${section}`
         }
+
+  // 插件运行时（2026-10-20 P1，docs/plan-plugins.md）：manifest 装载 + MCP 桥接 + 上行事件
+  // 路由。唤醒绑定 Agent 复用 messaging.sendUserMessage（幂等 nonce 同 automation 范式）
+  const plugins = new PluginService({
+    bus,
+    tools,
+    gate,
+    sendUserMessage: (input) => messaging.sendUserMessage(input),
+    agentIdOfName: (name) => {
+      for (const [id, meta] of agentMeta) {
+        if (meta.name === name) return id
+      }
+      return undefined
+    },
+    readManifest: async (pluginId) => fs.read(`${root}/plugins/${pluginId}/manifest.json`),
+    pluginDirOf: (pluginId) => `${root}/plugins/${pluginId}`,
+    now,
+    log: (msg) => console.log(msg),
+  })
 
   const runner = new TurnRunner({
     bus,
@@ -680,6 +702,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     broadcast,
     groups,
     tools,
+    plugins,
     streamHub,
     shellService,
     guiStream,

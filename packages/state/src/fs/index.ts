@@ -78,7 +78,8 @@ export class NodeFs implements FsAdapter {
   }
 
   async remove(path: string): Promise<void> {
-    await rm(path, { force: true })
+    // recursive（2026-10-20 插件卸载）：目录整体删除（文件场景 recursive 无副作用）
+    await rm(path, { force: true, recursive: true })
   }
 
   async list(path: string): Promise<string[]> {

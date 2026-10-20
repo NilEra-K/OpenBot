@@ -379,8 +379,15 @@ export const useKernelStore = defineStore('kernel', {
     roleTemplates: [] as Array<{ name: string; persona: string }>,
     /** 插件市场清单（2026-10-19 插件视图一期）：v1.plugins.market（内核内置源，将来接真实源） */
     pluginMarket: [] as Array<{ id: string; name: string; description: string; version: string }>,
-    /** 已安装插件（2026-10-19）：boot 拉取 + 安装/卸载/启停动作后随命令返回刷新 */
-    installedPlugins: [] as Array<{ id: string; name: string; description: string; version: string; enabled: boolean }>,
+    /** 已安装插件（2026-10-19；2026-10-20 增运行态）：boot 拉取 + 安装/卸载/启停后随命令返回刷新 */
+    installedPlugins: [] as Array<{
+      id: string
+      name: string
+      description: string
+      version: string
+      enabled: boolean
+      runtime?: { state: 'stopped' | 'running' | 'faulted'; crashes: number; faultReason?: string }
+    }>,
     /** 群终答 runId 集合（群轮过程私聊隔离的判据）：群流装载（group-agent 记录）与
      *  v1.group.message 实况收集——识别「成员档案里的遗留群轮过程记录」（新数据已落群流） */
     groupRunIds: [] as string[],
@@ -619,7 +626,7 @@ export const useKernelStore = defineStore('kernel', {
     async refreshPlugins(): Promise<void> {
       const [market, installed] = await Promise.all([
         this.call<{ plugins: Array<{ id: string; name: string; description: string; version: string }> }>('v1.plugins.market'),
-        this.call<{ plugins: Array<{ id: string; name: string; description: string; version: string; enabled: boolean }> }>('v1.plugins.installed'),
+        this.call<{ plugins: typeof this.installedPlugins }>('v1.plugins.installed'),
       ])
       this.pluginMarket = market.plugins
       this.installedPlugins = installed.plugins
@@ -1165,6 +1172,17 @@ export const useKernelStore = defineStore('kernel', {
             (b) => !(b.agentId === event.payload.agentId && b.stream === 'llm' && b.think !== true),
           )
           return
+        case 'v1.plugin.event': {
+          // 插件上行事件（2026-10-20 P1）：toast 用户通知面（唤醒 Agent 在内核侧已走消息通道）
+          const p = event.payload
+          const name = this.installedPlugins.find((i) => i.id === p.pluginId)?.name ?? p.pluginId
+          const text =
+            typeof p.payload === 'object' && p.payload !== null && typeof (p.payload as { text?: unknown }).text === 'string'
+              ? (p.payload as { text: string }).text
+              : p.type
+          useToastStore().push(`插件事件 · ${name}：${text}`, 'info')
+          return
+        }
         case 'v1.message.a2a':
           this.bumpEdge(event.payload.fromAgentId, event.payload.toAgentId)
           this.messages.push({

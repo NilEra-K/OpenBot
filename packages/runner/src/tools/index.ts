@@ -74,6 +74,13 @@ export class ToolRegistry {
     return this
   }
 
+  /** 注销（2026-10-20 插件运行时）：插件禁用/卸载时移除其桥接工具——缺席幂等 */
+  unregister(name: string): this {
+    this.#tools.delete(name)
+    this.#lastResults.delete(name)
+    return this
+  }
+
   specs(): ToolSpec[] {
     return [...this.#tools.values()].map((t) => ({ ...t.spec }))
   }

@@ -21,6 +21,7 @@ import { startGateway, RelayClient } from '@openbot/transport'
 import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
 import { NodeFs, SettingsStore, MemoryStore, AutomationStore, ImageStore, nextAfter } from '@openbot/state'
+import { manifestSchema } from '@openbot/coordinator'
 import type { SandboxPreference, RelaySettings, ImageEntry } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse, ProviderCapabilities } from '@openbot/llm'
@@ -952,6 +953,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // 定时自动化（backlog ②）：Scheduler 扫描到点 → 以用户身份发消息（复用 user lane 全管线）。
   // 错过跳过（裁定 B——nextAfter 从上次触发点向前找，应用关闭期间的自然跳过）；托盘常驻是运行前提
   const automationStore = new AutomationStore({ fs, root: dataRoot, now: Date.now })
+  /** 插件市场官方目录（内置索引——app 资源内；P2 接远端 URL 索引） */
+  const pluginsMarketDir = `${app.getAppPath()}/resources/plugins`
 
   // ---- computer-use 接管锁（plan-computer-use Step 5）：壳层内存态，不进内核协议 ----
   // 用户接管中：computer 动作工具的 waitTurn 挂起（形态同审批挂起）；「交还」放行。
@@ -1104,6 +1107,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   }
 
   // ---- 命令面扩展（壳装配职责：CLI/E2E 用 Auto 闸门时不需要这些命令） ----
+  /** 安装台账 + 运行态合并视图（installed/install/setEnabled 三处同款——2026-10-20 插件运行时） */
+  const installedWithRuntime = async (): Promise<Array<{ id: string; name: string; description: string; version: string; enabled: boolean; runtime: { state: 'stopped' | 'running' | 'faulted'; crashes: number; faultReason?: string } }>> => {
+    const installed = await settings.getInstalledPlugins()
+    const states = new Map(kernel.plugins.states().map((st) => [st.id, st]))
+    return installed.map((p) => ({
+      ...p,
+      runtime: states.get(p.id) ?? { state: 'stopped', crashes: 0 },
+    }))
+  }
+
   kernel.transport
     .register('v1.settings.list', async () => {
       // 展示清单（无 key 材料）+ 当前默认（供应商+模型）与回退（renderer 空缺态判断）
@@ -1149,54 +1162,62 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await settings.removeRoleTemplate(nameSchema.parse(payload).name)
       return { ok: true }
     }, nameSchema)
-    // ---- 插件（2026-10-19 插件视图一期：UI 壳 + 安装态管理——运行时后续接）----
-    // 市场源：内核内置清单（将来接真实源/远端）；本期两个「示例」条目（用户裁定 A：全链可用可测）
-    .register('v1.plugins.market', async () => ({
-      plugins: [
-        {
-          id: 'sample-notes',
-          name: '示例 · 会话笔记',
-          description: '演示插件形态的示例条目——安装后可在「我的插件」禁用/卸载（运行时能力后续接入）',
-          version: '0.1.0',
-        },
-        {
-          id: 'sample-export',
-          name: '示例 · 会话导出',
-          description: '演示插件形态的示例条目——安装后可在「我的插件」禁用/卸载（运行时能力后续接入）',
-          version: '0.1.0',
-        },
-      ],
-    }))
-    .register('v1.plugins.installed', async () => ({ plugins: await settings.getInstalledPlugins() }))
-    .register(
-      'v1.plugins.install',
-      async (payload) => {
-        const input = z
-          .object({
-            id: z.string().trim().min(1).max(64),
-            name: z.string().trim().min(1).max(24),
-            description: z.string().trim().max(200),
-            version: z.string().trim().min(1).max(16),
-          })
-          .parse(payload)
-        return { plugins: await settings.installPlugin(input) }
-      },
-      z.object({
-        id: z.string().trim().min(1).max(64),
-        name: z.string().trim().min(1).max(24),
-        description: z.string().trim().max(200),
-        version: z.string().trim().min(1).max(16),
-      }),
-    )
+    // ---- 插件运行时（2026-10-20 P1，docs/plan-plugins.md）：市场=resources 官方目录扫描，
+    //      安装=拷贝到 <dataRoot>/plugins/<id>/ + 台账 + 启用；启停接 PluginService 进程管理 ----
+    .register('v1.plugins.market', async () => {
+      const plugins = []
+      for (const id of await fs.list(pluginsMarketDir)) {
+        const raw = await fs.read(`${pluginsMarketDir}/${id}/manifest.json`)
+        if (raw === null) continue
+        try {
+          const m = manifestSchema.parse(JSON.parse(raw))
+          if (m.id !== id) {
+            console.warn(`[openbot] 市场插件目录名（${id}）与 manifest.id（${m.id}）不一致，跳过——目录名必须等于 id`)
+            continue
+          }
+          plugins.push({ id: m.id, name: m.name, description: m.description, version: m.version, permissions: m.permissions })
+        } catch {
+          console.warn(`[openbot] 市场插件 manifest 非法，跳过：${id}`)
+        }
+      }
+      return { plugins }
+    })
+    .register('v1.plugins.installed', async () => ({ plugins: await installedWithRuntime() }))
+    .register('v1.plugins.install', async (payload) => {
+      const { id } = z.object({ id: z.string().trim().min(1).max(64) }).parse(payload)
+      // 拷贝市场目录 → <dataRoot>/plugins/<id>/（文件级：manifest + 同目录全部文件）
+      const entries = await fs.list(`${pluginsMarketDir}/${id}`)
+      if (!entries.includes('manifest.json')) {
+        throw new KernelError('PLUGIN_NOT_INSTALLED', `市场插件不存在：${id}`)
+      }
+      for (const f of entries) {
+        const content = await fs.read(`${pluginsMarketDir}/${id}/${f}`)
+        if (content !== null) await fs.write(`${dataRoot}/plugins/${id}/${f}`, content)
+      }
+      const m = manifestSchema.parse(JSON.parse((await fs.read(`${dataRoot}/plugins/${id}/manifest.json`)) ?? '{}'))
+      await settings.installPlugin({ id: m.id, name: m.name, description: m.description, version: m.version })
+      await kernel.plugins.enable(m.id)
+      return { plugins: await installedWithRuntime() }
+    }, z.object({ id: z.string().trim().min(1).max(64) }))
     .register('v1.plugins.uninstall', async (payload) => {
-      await settings.uninstallPlugin(z.object({ id: z.string().trim().min(1).max(64) }).parse(payload).id)
+      const { id } = z.object({ id: z.string().trim().min(1).max(64) }).parse(payload)
+      await kernel.plugins.disable(id)
+      await settings.uninstallPlugin(id)
+      // 目录清理（文件级遍历 + 目录兜底）
+      for (const f of await fs.list(`${dataRoot}/plugins/${id}`)) {
+        await fs.remove(`${dataRoot}/plugins/${id}/${f}`)
+      }
+      await fs.remove(`${dataRoot}/plugins/${id}`)
       return { ok: true }
     }, z.object({ id: z.string().trim().min(1).max(64) }))
     .register(
       'v1.plugins.setEnabled',
       async (payload) => {
         const { id, enabled } = z.object({ id: z.string().trim().min(1).max(64), enabled: z.boolean() }).parse(payload)
-        return { plugins: await settings.setPluginEnabled(id, enabled) }
+        await settings.setPluginEnabled(id, enabled)
+        if (enabled) await kernel.plugins.enable(id)
+        else await kernel.plugins.disable(id)
+        return { plugins: await installedWithRuntime() }
       },
       z.object({ id: z.string().trim().min(1).max(64), enabled: z.boolean() }),
     )
@@ -1770,6 +1791,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     onStreamPause: (session, streamId, paused) => kernel.guiStream.onRemotePause(session, streamId, paused),
   })
   const replayed = await approvalGate.replayPending()
+  // 插件运行时装载（boot）：已启用插件装载 manifest；事件源即常驻（docs/plan-plugins.md §5）
+  await kernel.plugins
+    .loadInstalled((await settings.getInstalledPlugins()).filter((p) => p.enabled))
+    .catch(() => {})
   kernel.startWatchdog()
   kernel.statsService.start() // Box 遥测 + 宿主磁盘压力轮询（Step 6）
 

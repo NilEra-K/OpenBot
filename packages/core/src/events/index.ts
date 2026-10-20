@@ -202,6 +202,14 @@ export interface GroupMessagePayload {
   mode?: 'independent' | 'summary' | 'mention'
 }
 
+/** 插件上行事件（2026-10-20 插件运行时 P1）：插件进程 → 内核 → 路由（用户通知 / 唤醒绑定 Agent）。
+ *  payload 是领域事实（插件声明的 type + 任意 JSON）——呈现文案归渲染层 */
+export interface PluginEventPayload {
+  pluginId: string
+  type: string
+  payload: unknown
+}
+
 /** 群清单变更（P5 Step 3）：群档案增删——renderer 拉取 v1.group.list 的时机信号 */
 export interface GroupStatePayload {
   groupId: string
@@ -226,6 +234,7 @@ export interface KernelEventMap {
   'v1.message.agent': MessageAgentPayload
   'v1.message.a2a': MessageA2aPayload
   'v1.group.message': GroupMessagePayload
+  'v1.plugin.event': PluginEventPayload
   'v1.group.state': GroupStatePayload
   'v1.group.cleared': GroupClearedPayload
   'v1.box.state': BoxStatePayload

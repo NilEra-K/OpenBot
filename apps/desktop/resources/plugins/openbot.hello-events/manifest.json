@@ -1,0 +1,11 @@
+{
+  "manifestVersion": 1,
+  "id": "openbot.hello-events",
+  "name": "示例 · Hello 事件",
+  "version": "0.1.0",
+  "description": "最小可抄模板（docs/plan-plugins.md §3）：一个 echo 工具 + 一个会发上行事件的 notify 工具——照抄改就是你的插件",
+  "entry": { "command": "node", "args": ["server.mjs"] },
+  "permissions": [],
+  "events": [{ "type": "hello.fired" }],
+  "agents": []
+}

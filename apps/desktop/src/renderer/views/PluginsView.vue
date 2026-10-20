@@ -140,6 +140,9 @@ const initialOf = (name: string): string => name.replace('示例 · ', '').trim(
           </div>
           <div class="pc-foot">
             <span class="chip pc-state" :class="p.enabled ? 'pc-on' : 'pc-off'">{{ p.enabled ? '已启用' : '已禁用' }}</span>
+            <!-- 运行态（2026-10-20 P1）：事件源常驻运行中；崩溃超限如实标故障（禁用后可重试） -->
+            <span v-if="p.runtime?.state === 'running'" class="pc-rt">运行中</span>
+            <span v-else-if="p.runtime?.state === 'faulted'" class="pc-rt pc-rt-fault" :title="p.runtime.faultReason ?? ''">故障</span>
             <span class="pc-version mono">v{{ p.version }}</span>
             <button type="button" class="pc-btn" @click="toggle(p)">{{ p.enabled ? '禁用' : '启用' }}</button>
             <button type="button" class="pc-btn pc-btn-danger" @click="uninstall(p)">

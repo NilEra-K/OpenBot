@@ -243,6 +243,14 @@
   padding-top: 2px;
 }
 
+.pc-rt {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--ink3);
+}
+.pc-rt-fault {
+  color: var(--danger);
+}
 .pc-version {
   margin-right: auto;
   font-size: 10.5px;

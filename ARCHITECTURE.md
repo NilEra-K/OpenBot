@@ -1,9 +1,10 @@
 # OpenBot 架构总纲
 
-> **版本** v1.3 · 2026-10-19 · 状态：已与作者对齐
+> **版本** v1.4 · 2026-10-20 · 状态：已与作者对齐
 > **v1.1 变更**：新增 §3.5 主从模型（一主多从，唯一管家 Steward），联动 §3.2 / §5 / §8 / ADR #11
 > **v1.2 变更**：新增 §8「解耦纪律」七条硬规则（UI 与逻辑边界从结构性保证升级为显式条款），§5 补「协议只含领域事实」
 > **v1.3 变更**（2026-10-18/19 语义入档）：§3.5 群聊发言模式体系（#前缀注册表）与身份分层（persona）；§3.6/§7 群轮过程记录归群流；§7 会话段栈语义与 settings/profile additive 字段清单
+> **v1.4 变更**：新增 §3.9 插件运行时（MCP client + manifest 声明面 + tools/上行事件双能力面——设计全案 [docs/plan-plugins.md](docs/plan-plugins.md)）
 > **上游文档**：[PRODUCT.md](PRODUCT.md)（产品定位）· [DESIGN.md](DESIGN.md)（视觉基调）· `prototype.html`（视觉母版）
 > **本文地位**：架构唯一权威。与代码冲突时，两者必须同步修改，不允许文档与实现长期分叉。
 
@@ -236,6 +237,18 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - 删除原版双载体（parent-port/fork-ipc）的多路复用细节——那是进程边界才需要的复杂度。
 
 ---
+
+### 3.9 `plugins` —— 插件运行时（coordinator 服务模块，P1 已实施）
+
+**设计全案见 [docs/plan-plugins.md](docs/plan-plugins.md)（作者裁定记录在内）。要点：**
+
+- **形态**：协议进程（stdio MCP）为主、声明式包为辅；进程内模块**永久否决**（供应链/崩溃隔离/净室）。
+- **协议两层**：内核做 **MCP client**（工具面：initialize 握手 / tools/list / tools/call），OpenBot **manifest** 管声明面（id/entry/permissions/events/agents 绑定，manifestVersion 版本演进）。语言无关——任何语言的 MCP server + manifest.json 即插件。
+- **能力面（P1）**：`tools`（MCP 工具经装配门注册进 ToolRegistry，工具名前缀 = id 尾段；**全部过审批闸门**——第三方代码默认不信任）+ **上行事件**（插件 JSON-RPC notification `openbot/event` → `v1.plugin.event` 事件 → 按 manifest 路由：用户通知（toast）/ 唤醒绑定 Agent（复用 messaging.sendUserMessage + 幂等 nonce `plugin-event:<id>:<seq>`，事件风暴不双驱））。
+- **红线**：插件对 transcript 只读、不绕闸门、不发 UI 指令、不提权（一票否决项）。
+- **进程管理**：懒启动（纯工具插件）或启用即启（事件源插件）→ 空闲回收（纯工具插件）→ 崩溃限次重启（超限标记故障态如实呈现）——插件挂了内核无感。
+- **分发（本地优先）**：市场 = 静态索引（内置官方目录，P2 远端 URL）+ 安装 = 拷贝到 `<root>/plugins/<id>/`（`installedPlugins` 台账续用）——无后端、无账号，纯客户端底色。
+- **mock 对称**：MockMcpServer 测试桩（单测 spawn 真实 stdio 握手）+ 示例插件 `hello-events`（E2E 全链：安装 → Agent 调工具 → 事件上行通知）。
 
 ## 4. 壳（apps/）
 
