@@ -12,7 +12,7 @@ import {
   strategiesFor,
   STRATEGIES,
 } from '../strategies.js'
-import { runInstall } from '../index.js'
+import { runInstall, assembleLocationArgs, buildLaunchPlan } from '../index.js'
 import type { RuntimeStrategy } from '../strategies.js'
 
 describe('下载器（本地源——零外网）', () => {
@@ -133,6 +133,43 @@ describe('策略表（v0.2.0 安装矩阵）', () => {
     expect(strategiesFor(process.platform, true).some((s) => s.id === 'mock-runtime')).toBe(true)
     expect(strategiesFor(process.platform, false).some((s) => s.id === 'mock-runtime')).toBe(false)
   })
+
+  it('位置旗标矩阵（2026-10-21 三术语）：DD win 双旗标 / Podman win MSI INSTALLDIR / 其余无可选', () => {
+    const dd = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'docker-desktop')!
+    expect(dd.locationFlags).toEqual({ installDir: '--installation-dir=', dataDir: '--wsl-default-data-root=' })
+    const podWin = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'podman')!
+    expect(podWin.locationFlags).toEqual({ installDir: 'INSTALLDIR=' })
+    expect(podWin.source).toMatchObject({ launcher: 'msiexec' })
+    // v6 起官方只发 MSI（旧 setup.exe 资产已不存在——2026-10-21 核实 v6.1.4）
+    expect((podWin.source as { assetPattern: RegExp }).assetPattern.test('podman-installer-windows-amd64.msi')).toBe(true)
+    expect((podWin.source as { assetPattern: RegExp }).assetPattern.test('podman-6.1.4-setup.exe')).toBe(false)
+    for (const s of STRATEGIES.filter((x) => x.platform !== 'win32')) {
+      expect(s.locationFlags).toBeUndefined()
+    }
+  })
+
+  it('位置参数组装：声明且传值 → 单参 <flag><值>；未传 → 空参；未声明而传值 → 拒绝', () => {
+    const dd = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'docker-desktop')!
+    expect(assembleLocationArgs(dd, { installDir: 'D:\\Docker', dataDir: 'E:\\DockerData' })).toEqual([
+      '--installation-dir=D:\\Docker',
+      '--wsl-default-data-root=E:\\DockerData',
+    ])
+    expect(assembleLocationArgs(dd, {})).toEqual([])
+    // wsl2 未声明任何位置旗标——传安装位置必须拒（不静默装到默认位置）
+    const wsl2 = STRATEGIES.find((s) => s.id === 'wsl2')!
+    expect(() => assembleLocationArgs(wsl2, { installDir: 'D:\\W' })).toThrow(/RUNTIME_LOCATION_NOT_SUPPORTED/)
+  })
+
+  it('拉起形态：launcher=msiexec → msiexec.exe /package 前置；缺省 → 直接执行安装包', () => {
+    expect(buildLaunchPlan({ launcher: 'msiexec' }, 'C:\\t\\p.msi', ['/quiet', 'ALLUSERS=1'])).toEqual({
+      command: 'msiexec.exe',
+      args: ['/package', 'C:\\t\\p.msi', '/quiet', 'ALLUSERS=1'],
+    })
+    expect(buildLaunchPlan({}, 'C:\\t\\setup.exe', ['install', '--quiet'])).toEqual({
+      command: 'C:\\t\\setup.exe',
+      args: ['install', '--quiet'],
+    })
+  })
 })
 
 describe('执行器', () => {
@@ -143,13 +180,28 @@ describe('执行器', () => {
       platform: process.platform,
       source: { kind: 'builtin', command: [process.execPath, '-e', 'process.exit(0)'], args: [] },
       elevation: 'none',
-      locationSelectable: false,
       locationNote: '-',
       notes: [],
     }
     const phases: string[] = []
     await runInstall(strategy, { onEvent: (e) => phases.push(e.phase) })
     expect(phases.at(-1)).toBe('done')
+  })
+
+  it('builtin 位置旗标链（2026-10-21）：installDir 追加为尾参 → 执行 detail 含旗标值', async () => {
+    const strategy: RuntimeStrategy = {
+      id: 'test',
+      runtime: 'Test',
+      platform: process.platform,
+      source: { kind: 'builtin', command: [process.execPath, '-e', 'process.exit(0)'], args: [] },
+      elevation: 'none',
+      locationFlags: { installDir: 'MOCK_INSTALL_DIR=' },
+      locationNote: '-',
+      notes: [],
+    }
+    const details: string[] = []
+    await runInstall(strategy, { onEvent: (e) => { if (e.detail !== undefined) details.push(e.detail) } }, { installDir: 'D:\\e2e' })
+    expect(details.some((d) => d.includes('MOCK_INSTALL_DIR=D:\\e2e'))).toBe(true)
   })
 
   it('darwin 无 brew（本测试环境必然缺席）→ fallback 事件带命令全文 + 抛 Homebrew 未安装', async () => {

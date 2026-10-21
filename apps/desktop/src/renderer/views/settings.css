@@ -1630,6 +1630,18 @@
   gap: 8px;
   margin-top: 14px;
 }
+/* 模态内字段（2026-10-21 位置输入/Box 目录改版）：field-label 类名全局同款；
+ * field-pick 内 wiz-input 补 flex 收缩（.field-pick 只配了 .field-input 的 flex） */
+.approval-modal .am-field {
+  margin-top: 10px;
+}
+.approval-modal .am-spacer {
+  flex: 1;
+}
+.approval-modal .field-pick .wiz-input {
+  flex: 1;
+  min-width: 0;
+}
 /* 模态内输入（借 wiz-input 类名同理无样式——settings 侧同款） */
 .approval-modal .wiz-input {
   width: 100%;

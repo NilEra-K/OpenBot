@@ -377,7 +377,8 @@ export const useKernelStore = defineStore('kernel', {
     groups: [] as GroupEntry[],
     /** 自定义角色模板（2026-10-18）：boot 拉取 + 向导保存/删除后刷新（内置四角色在渲染层内建） */
     roleTemplates: [] as Array<{ name: string; persona: string }>,
-    /** 运行时安装器清单（2026-10-20 v0.2.0；同日矩阵化——全平台返回）：boot/安装完成后刷新 */
+    /** 运行时安装器清单（2026-10-20 v0.2.0；同日矩阵化——全平台返回；2026-10-21 位置可选布尔细分）：
+     *  boot/安装完成后刷新 */
     runtimeInstallers: [] as Array<{
       id: string
       runtime: string
@@ -385,7 +386,8 @@ export const useKernelStore = defineStore('kernel', {
       supported: boolean
       sourceKind: string
       elevation: string
-      locationSelectable: boolean
+      installDirSelectable: boolean
+      dataDirSelectable: boolean
       locationNote: string
       notes: string[]
       available: boolean | null
@@ -864,8 +866,19 @@ export const useKernelStore = defineStore('kernel', {
       const r = await this.call<{ installers: typeof this.runtimeInstallers }>('v1.runtime.list')
       this.runtimeInstallers = r.installers
     },
-    async installRuntime(runtimeId: string): Promise<void> {
-      await this.call('v1.runtime.install', { runtimeId })
+    /** 运行时一键安装（2026-10-20 v0.2.0）：受理即返——进度走 v1.runtime.progress 事件；
+     *  位置参数（2026-10-21）：空串省略（= 不传——留空用默认），非空经命令面旗标校验 */
+    async installRuntime(
+      runtimeId: string,
+      opts?: { installDir?: string; dataDir?: string },
+    ): Promise<void> {
+      const installDir = opts?.installDir?.trim()
+      const dataDir = opts?.dataDir?.trim()
+      await this.call('v1.runtime.install', {
+        runtimeId,
+        ...(installDir ? { installDir } : {}),
+        ...(dataDir ? { dataDir } : {}),
+      })
     },
     /** 取消在途安装（2026-10-20 流量敏感客户）：下载中止清临时文件、子进程即杀 */
     async cancelRuntimeInstall(): Promise<void> {

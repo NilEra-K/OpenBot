@@ -1540,7 +1540,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
           supported: st.platform === process.platform,
           sourceKind: st.source.kind,
           elevation: st.elevation,
-          locationSelectable: st.locationSelectable,
+          // 位置可选事实（2026-10-21 位置旗标）：只透传布尔——旗标字面量属执行器实现细节不进协议
+          installDirSelectable: st.locationFlags?.installDir !== undefined,
+          dataDirSelectable: st.locationFlags?.dataDir !== undefined,
           locationNote: st.locationNote,
           notes: st.notes,
           // 探测映射（仅本平台有意义；他平台 null）：wsl2→wsl；docker-desktop(非 mac)/docker→docker；
@@ -1567,7 +1569,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       }
     })
     .register('v1.runtime.install', async (payload) => {
-      const { runtimeId } = z.object({ runtimeId: z.string().trim().min(1).max(32) }).parse(payload)
+      const { runtimeId, installDir, dataDir } = z
+        .object({
+          runtimeId: z.string().trim().min(1).max(32),
+          installDir: z.string().trim().min(1).max(300).optional(),
+          dataDir: z.string().trim().min(1).max(300).optional(),
+        })
+        .parse(payload)
       if (runtimeInstallBusy) {
         throw new KernelError('RUNTIME_INSTALL_BUSY', '已有安装进行中——等它完成再试')
       }
@@ -1575,6 +1583,13 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       const strategy = strategiesFor(process.platform, e2e).find((st) => st.id === runtimeId)
       if (strategy === undefined) {
         throw new KernelError('RUNTIME_NOT_FOUND', `当前平台无此运行时安装器：${runtimeId}`)
+      }
+      // 位置旗标前置校验（2026-10-21）：上游不支持的位置不给「选了却装到别处」的静默假象
+      if (installDir !== undefined && strategy.locationFlags?.installDir === undefined) {
+        throw new KernelError('RUNTIME_LOCATION_NOT_SUPPORTED', '该运行时的安装位置不可自选')
+      }
+      if (dataDir !== undefined && strategy.locationFlags?.dataDir === undefined) {
+        throw new KernelError('RUNTIME_LOCATION_NOT_SUPPORTED', '该运行时的容器数据位置不可自选')
       }
       runtimeInstallBusy = true
       const abort = new AbortController()
@@ -1586,7 +1601,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
             onEvent: (ev) => {
               kernel.bus.emit('v1.runtime.progress', { runtimeId: strategy.id, ...ev })
             },
-          }, { signal: abort.signal })
+          }, {
+            signal: abort.signal,
+            ...(installDir !== undefined ? { installDir } : {}),
+            ...(dataDir !== undefined ? { dataDir } : {}),
+          })
         } catch (err) {
           kernel.bus.emit('v1.runtime.progress', {
             runtimeId: strategy.id,
@@ -1599,7 +1618,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         }
       })()
       return { ok: true }
-    }, z.object({ runtimeId: z.string().trim().min(1).max(32) }))
+    }, z.object({
+      runtimeId: z.string().trim().min(1).max(32),
+      installDir: z.string().trim().min(1).max(300).optional(),
+      dataDir: z.string().trim().min(1).max(300).optional(),
+    }))
     // 取消安装（2026-10-20 用户报障：下载无法取消对流量敏感客户不友好）——abort 在途
     // 任务（下载清临时文件、子进程即杀）；非在途幂等通过（无操作）
     .register('v1.runtime.cancel', async () => {

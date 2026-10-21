@@ -2660,13 +2660,21 @@ test('运行时一键安装（v0.2.0）：mock-runtime 全链——确认弹窗�
     const modal = page.locator('.approval-modal')
     await expect(modal).toBeVisible()
     await expect(modal).toContainText('安装 Mock 运行时')
+    // 位置自选输入（2026-10-21 位置旗标链）：mock 声明 installDir → 输入在场；dataDir 未声明 → 不放假输入
+    await expect(modal.locator('#rtInstallDir')).toBeVisible()
+    await expect(modal.locator('#rtDataDir')).toHaveCount(0)
+    await modal.locator('#rtInstallDir').fill('D:\\e2e-mock')
     await modal.getByRole('button', { name: '开始安装' }).click()
 
     // 进度在模态内（2026-10-20 用户裁定：说明内容收进模态——行上只剩「安装中…」chip）；
-    // builtin mock 秒级完成 → 模态转 done（结果行 + 关闭钮）。modal 变量已在上文确认弹窗段声明
+    // builtin mock 1.5s 停留（2026-10-21 改）→ installing 窗口可断言：
+    // 执行 detail 含组装后的位置旗标值（输入 → 命令面 → 执行器全链透传实证）
     const installModal = page.locator('.approval-modal')
     await expect(installModal.locator('.ri-progress')).toBeVisible({ timeout: 15_000 })
-    // 行内迷你进度条（2026-10-20 用户裁定）在场：builtin 秒级——安装窗口内抢断言，过则跳过
+    await expect(installModal.locator('.ri-detail').first()).toContainText('MOCK_INSTALL_DIR=D:\\e2e-mock', {
+      timeout: 5_000,
+    })
+    // 行内迷你进度条（2026-10-20 用户裁定）在场：1.5s 窗口内抢断言，过则跳过
     await expect(page.locator('.rt-mini').first()).toBeVisible({ timeout: 2_000 }).catch(() => {})
     await expect(installModal).toContainText('安装完成', { timeout: 15_000 })
     await installModal.getByRole('button', { name: '关闭' }).click()
@@ -2690,6 +2698,18 @@ test('运行时一键安装（v0.2.0）：mock-runtime 全链——确认弹窗�
     if ((await modalBtn.count()) > 0) await modalBtn.click().catch(() => {})
     await expect(installModal).toHaveCount(0, { timeout: 10_000 })
     await expect(row.getByRole('button', { name: '一键安装' })).toBeEnabled({ timeout: 10_000 })
+
+    // —— ⚙ Box 数据目录模态改版（2026-10-21）：同页目录模态同规格——标签/浏览/恢复默认在场 + Esc 关闭 ——
+    const wslRow = page.locator('.rt-row', { hasText: 'WSL2' })
+    await wslRow.locator('.rt-gear').click()
+    const dirModal = page.locator('.approval-modal')
+    await expect(dirModal).toContainText('「WSL2」Box 数据目录')
+    await expect(dirModal.locator('.field-label')).toContainText('Box 数据目录（绝对路径）')
+    await expect(dirModal.getByRole('button', { name: '浏览…' })).toBeVisible()
+    await expect(dirModal.getByRole('button', { name: '恢复默认' })).toBeVisible()
+    // Esc 关闭（改版新增——原版无键盘/外点关闭）
+    await dirModal.locator('#rtBoxDir').press('Escape')
+    await expect(dirModal).toHaveCount(0)
   } finally {
     await app.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})

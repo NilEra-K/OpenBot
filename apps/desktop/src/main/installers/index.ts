@@ -72,6 +72,43 @@ export interface InstallDeps {
   fetchImpl?: typeof fetch
   /** 取消信号（2026-10-20：下载/子进程全链可中止——流量敏感客户） */
   signal?: AbortSignal
+  /** 安装位置（2026-10-21 位置旗标链）：策略须声明 locationFlags.installDir 才有效 */
+  installDir?: string
+  /** 容器数据位置：策略须声明 locationFlags.dataDir 才有效 */
+  dataDir?: string
+}
+
+/** 位置旗标组装（2026-10-21）：用户给了值且策略声明了旗标 → 追加单个参数 `<flag><值>`。
+ *  未声明而传值 → 抛错（不静默装到默认位置——用户明确要的位置必须生效） */
+export function assembleLocationArgs(
+  strategy: RuntimeStrategy,
+  opts: { installDir?: string; dataDir?: string },
+): string[] {
+  const flags = strategy.locationFlags
+  const pairs: Array<[string | undefined, string | undefined, string]> = [
+    [opts.installDir, flags?.installDir, '安装位置'],
+    [opts.dataDir, flags?.dataDir, '容器数据位置'],
+  ]
+  const args: string[] = []
+  for (const [value, flag, label] of pairs) {
+    if (value === undefined) continue
+    if (flag === undefined) {
+      throw new Error(`RUNTIME_LOCATION_NOT_SUPPORTED：该运行时的${label}不可自选`)
+    }
+    args.push(flag + value)
+  }
+  return args
+}
+
+/** 拉起计划（纯函数——单测免子进程覆盖 MSI 形态）：缺省直接执行下载的安装包；
+ *  launcher=msiexec → msiexec.exe /package <文件>（Podman v6 起官方只发 MSI） */
+export function buildLaunchPlan(
+  source: { launcher?: 'msiexec' },
+  filePath: string,
+  args: string[],
+): { command: string; args: string[] } {
+  if (source.launcher === 'msiexec') return { command: 'msiexec.exe', args: ['/package', filePath, ...args] }
+  return { command: filePath, args }
 }
 
 /** exec 选项工厂：signal 在场即挂（Node execFile 原生支持——中止杀子进程） */
@@ -104,14 +141,17 @@ async function runInstallInner(
 ): Promise<void> {
   const signal = deps.signal
   const source = strategy.source
+  // 位置旗标（2026-10-21）：先组装——未声明而传值在下载前即失败（不浪费流量）
+  const locArgs = assembleLocationArgs(strategy, deps)
 
   if (source.kind === 'builtin') {
+    const args = [...source.args, ...locArgs]
     // WSL2 / mock：直接（按需提权）执行系统命令
     if (strategy.elevation === 'uac') {
-      await runElevatedWindows(source.command.join(' '), source.args, events, signal)
+      await runElevatedWindows(source.command.join(' '), args, events, signal)
     } else {
-      events.onEvent({ phase: 'install', detail: `执行：${source.command.join(' ')}` })
-      await execFileAsync(source.command[0]!, source.command.slice(1), {
+      events.onEvent({ phase: 'install', detail: `执行：${[...source.command, ...args].join(' ')}` })
+      await execFileAsync(source.command[0]!, source.command.slice(1).concat(args), {
         ...execOpts(signal, 30 * 60_000),
         ...(source.env !== undefined ? { env: { ...process.env, ...source.env } } : {}),
       })
@@ -153,7 +193,8 @@ async function runInstallInner(
       if (downloaded.verification === 'verified') {
         events.onEvent({ phase: 'verify', detail: `sha256 校验通过（${downloaded.sha256.slice(0, 12)}…）` })
       }
-      await runElevatedWindows(downloaded.filePath, source.installerArgs, events, signal)
+      const plan = buildLaunchPlan(source, downloaded.filePath, [...source.installerArgs, ...locArgs])
+      await runElevatedWindows(plan.command, plan.args, events, signal)
     } finally {
       await downloaded.cleanup().catch(() => {})
     }
