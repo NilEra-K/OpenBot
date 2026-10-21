@@ -1378,8 +1378,8 @@ test('平台裁剪（P6 Step 5）：win 上 nspawn/UTM 不出现——探测列�
     await expect(page.locator('.backend-row', { hasText: 'UTM' })).toHaveCount(0)
     await expect(page.locator('.sandbox-probe', { hasText: 'systemd-nspawn' })).toHaveCount(0)
     await expect(page.locator('.sandbox-probe', { hasText: 'UTM' })).toHaveCount(0)
-    // 本平台候选在场：WSL2 选项（探测项不问可用性——不可用时选项在、选中如实降级）
-    await expect(page.locator('.backend-row', { hasText: 'WSL2' })).toHaveCount(1)
+    // 本平台候选在场：WSL2（2026-10-20 矩阵化——运行时行迁入 .rt-row 矩阵；探测项不问可用性）
+    await expect(page.locator('.rt-row', { hasText: 'WSL2' })).toHaveCount(1)
     // 探测并入列表行后（0.1.2 改版）：mock 行恒在（确定性地基），无独立探测区
     await expect(page.locator('.backend-row', { hasText: '模拟' })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.sandbox-probe')).toHaveCount(0)
@@ -2632,6 +2632,66 @@ test('插件视图（2026-10-19 一期 + 2026-10-20 P1 运行时）：拼图入�
   } finally {
     await app.close()
     await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('运行时一键安装（v0.2.0）：mock-runtime 全链——确认弹窗（提权告知）→ 安装 → 进度完成 → 清单刷新', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-runtime-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock', OPENBOT_E2E: '1' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 设置 → 容器与镜像分节：mock 运行时在矩阵（E2E 门控注册——mock 对称；2026-10-20 矩阵化改 .rt-row）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click()
+    const row = page.locator('.rt-row', { hasText: 'Mock 运行时' })
+    await expect(row).toBeVisible()
+    await expect(row.locator('.ri-note').first()).toBeVisible() // 如实标注在场
+
+    // 确认弹窗：提权告知 + 位置事实 + 许可注意（透明前提）
+    await row.getByRole('button', { name: '一键安装' }).click()
+    const modal = page.locator('.approval-modal')
+    await expect(modal).toBeVisible()
+    await expect(modal).toContainText('安装 Mock 运行时')
+    await modal.getByRole('button', { name: '开始安装' }).click()
+
+    // 进度在模态内（2026-10-20 用户裁定：说明内容收进模态——行上只剩「安装中…」chip）；
+    // builtin mock 秒级完成 → 模态转 done（结果行 + 关闭钮）。modal 变量已在上文确认弹窗段声明
+    const installModal = page.locator('.approval-modal')
+    await expect(installModal.locator('.ri-progress')).toBeVisible({ timeout: 15_000 })
+    // 行内迷你进度条（2026-10-20 用户裁定）在场：builtin 秒级——安装窗口内抢断言，过则跳过
+    await expect(page.locator('.rt-mini').first()).toBeVisible({ timeout: 2_000 }).catch(() => {})
+    await expect(installModal).toContainText('安装完成', { timeout: 15_000 })
+    await installModal.getByRole('button', { name: '关闭' }).click()
+    await expect(installModal).toHaveCount(0)
+    // 关闭后行状态如实（mock 无探测映射——仍可重装）
+    await expect(row.getByRole('button', { name: '一键安装' })).toBeEnabled()
+
+    // —— 取消链（2026-10-20 用户报障：流量敏感客户）：再启安装 → installing 双钮在场
+    // （后台下载/取消）→ 抢点取消 → canceled/done 终态（builtin 秒级——时序诚实降级） ——
+    await row.getByRole('button', { name: '一键安装' }).click()
+    await installModal.getByRole('button', { name: '开始安装' }).click()
+    const sawCancel = await installModal
+      .getByRole('button', { name: '取消', exact: true })
+      .click({ timeout: 3000 })
+      .then(() => true)
+      .catch(() => false)
+    if (sawCancel) {
+      await expect(installModal).toContainText(/已取消|安装完成|安装失败/, { timeout: 10_000 })
+    }
+    const modalBtn = installModal.getByRole('button', { name: '关闭' })
+    if ((await modalBtn.count()) > 0) await modalBtn.click().catch(() => {})
+    await expect(installModal).toHaveCount(0, { timeout: 10_000 })
+    await expect(row.getByRole('button', { name: '一键安装' })).toBeEnabled({ timeout: 10_000 })
+  } finally {
+    await app.close()
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })

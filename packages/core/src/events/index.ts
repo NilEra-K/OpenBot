@@ -210,6 +210,16 @@ export interface PluginEventPayload {
   payload: unknown
 }
 
+/** 运行时安装进度（2026-10-20 v0.2.0 一键安装）：download(带 percent)/verify/install/probe/done/failed/fallback。
+ *  fallback 带 command 全文（Linux 无 polkit / macOS 无 brew 的如实降级——用户过目复制执行） */
+export interface RuntimeProgressPayload {
+  runtimeId: string
+  phase: 'download' | 'verify' | 'install' | 'probe' | 'done' | 'failed' | 'fallback' | 'canceled'
+  percent?: number
+  detail?: string
+  command?: string
+}
+
 /** 群清单变更（P5 Step 3）：群档案增删——renderer 拉取 v1.group.list 的时机信号 */
 export interface GroupStatePayload {
   groupId: string
@@ -235,6 +245,7 @@ export interface KernelEventMap {
   'v1.message.a2a': MessageA2aPayload
   'v1.group.message': GroupMessagePayload
   'v1.plugin.event': PluginEventPayload
+  'v1.runtime.progress': RuntimeProgressPayload
   'v1.group.state': GroupStatePayload
   'v1.group.cleared': GroupClearedPayload
   'v1.box.state': BoxStatePayload

@@ -81,6 +81,8 @@ const color = ref<string>(COLORS[3])
 const modelOverride = ref('')
 /** 镜像绑定（plan-image-firstclass P8-4）：空串=默认沙箱（装配选定的本机后端） */
 const imageBinding = ref('')
+/** Box 数据目录单盒覆盖（2026-10-20 v0.2.0）：空串=全局默认——目录型后端（WSL）落盘位置可选 */
+const boxDataDir = ref('')
 const error = ref('')
 const creating = ref(false)
 const nameEl = ref<HTMLInputElement | null>(null)
@@ -174,6 +176,7 @@ watch(
     roleMenu.open = false
     color.value = COLORS[3]
     imageBinding.value = ''
+    boxDataDir.value = ''
     error.value = ''
     void kernel.refreshImages() // 镜像清单现拉（设置页改动后向导不背旧账）
     void nextTick(() => nameEl.value?.focus())
@@ -218,6 +221,7 @@ const next = async (): Promise<void> => {
       role: isSteward.value ? 'steward' : 'worker',
       ...(modelOverride.value !== '' ? { modelProvider: modelOverride.value } : {}),
       ...(imageBinding.value !== '' ? { imageId: imageBinding.value } : {}),
+      ...(boxDataDir.value.trim() !== '' ? { dataDir: boxDataDir.value.trim() } : {}),
       persona: persona.value.trim() !== '' ? persona.value.trim() : rolePersona.value,
       roleName: roleKey.value,
     })
@@ -393,6 +397,18 @@ const onKeydown = (e: KeyboardEvent): void => {
             </select>
           </label>
           <p v-if="imageBinding !== ''" class="wiz-note">绑定后该 Agent 的专属 Box 落在所选镜像上——注册即真实连接（机器不可达会如实失败）；改绑重启生效。</p>
+        </div>
+        <div class="wiz-field">
+          <label class="wiz-label" for="wizBoxDir">Box 数据目录 · 可选（留空用全局默认）</label>
+          <input
+            id="wizBoxDir"
+            v-model="boxDataDir"
+            class="wiz-input mono"
+            placeholder="例：D:/OpenBotData/boxes（WSL 发行版落盘位置——仅目录型后端生效）"
+            autocomplete="off"
+            maxlength="300"
+          />
+          <p class="wiz-note">v0.2.0 位置参数化：目录型后端（WSL2）的发行版（VHDX）落盘位置——留空跟随设置页「沙箱数据目录」；其余载体如实忽略。</p>
         </div>
       </div>
 

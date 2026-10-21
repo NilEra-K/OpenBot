@@ -100,6 +100,12 @@ export interface AppSettings {
   roleTemplates?: RoleTemplate[]
   /** 已安装插件（2026-10-19 插件视图一期）：可选字段（旧文件兼容） */
   installedPlugins?: InstalledPlugin[]
+  /** 沙箱数据目录全局默认（2026-10-20 v0.2.0 Box 位置参数化）：目录型后端（wsl/nspawn）
+   *  的 Box 落盘根（wsl --import 安装目录的父目录）；缺席 = userData/boxes（现行为）。
+   *  同日行级化（用户裁定）：per-runtime 覆盖优先（sandboxDataDirs），本字段降为 wsl2 兼容回退 */
+  sandboxDataDir?: string
+  /** 每运行时数据目录（2026-10-20 行级设置）：runtimeId → 目录（目录型后端生效，其余如实不可设） */
+  sandboxDataDirs?: Record<string, string>
 }
 
 /** 展示形状：给 renderer/命令面，绝无 key 材料 */
@@ -356,6 +362,36 @@ export class SettingsStore {
   async setSandbox(pref: SandboxPreference): Promise<void> {
     const settings = await this.load()
     await this.#save({ ...settings, sandbox: pref })
+  }
+
+  /** 沙箱数据目录全局默认（v0.2.0）：null = 清除回 userData/boxes */
+  async getSandboxDataDir(): Promise<string | null> {
+    const settings = await this.load()
+    return settings.sandboxDataDir ?? null
+  }
+
+  async setSandboxDataDir(dir: string | null): Promise<void> {
+    const settings = await this.load()
+    if (dir === null || dir.trim() === '') {
+      const { sandboxDataDir: _drop, ...rest } = settings
+      await this.#save(rest)
+      return
+    }
+    await this.#save({ ...settings, sandboxDataDir: dir.trim() })
+  }
+
+  /** 每运行时数据目录（2026-10-20 行级化）：读取（缺席 null）；设置/清除（空串同清除） */
+  async getRuntimeDataDir(runtimeId: string): Promise<string | null> {
+    const settings = await this.load()
+    return settings.sandboxDataDirs?.[runtimeId] ?? null
+  }
+
+  async setRuntimeDataDir(runtimeId: string, dir: string | null): Promise<void> {
+    const settings = await this.load()
+    const dirs = { ...(settings.sandboxDataDirs ?? {}) }
+    if (dir === null || dir.trim() === '') delete dirs[runtimeId]
+    else dirs[runtimeId] = dir.trim()
+    await this.#save({ ...settings, sandboxDataDirs: dirs })
   }
 
   /** 跨用户房间接入（P7 多房间轮）：relays 数组为真相；旧文件的 relay 单字段读取时回退为

@@ -377,6 +377,21 @@ export const useKernelStore = defineStore('kernel', {
     groups: [] as GroupEntry[],
     /** 自定义角色模板（2026-10-18）：boot 拉取 + 向导保存/删除后刷新（内置四角色在渲染层内建） */
     roleTemplates: [] as Array<{ name: string; persona: string }>,
+    /** 运行时安装器清单（2026-10-20 v0.2.0；同日矩阵化——全平台返回）：boot/安装完成后刷新 */
+    runtimeInstallers: [] as Array<{
+      id: string
+      runtime: string
+      platform: string
+      supported: boolean
+      sourceKind: string
+      elevation: string
+      locationSelectable: boolean
+      locationNote: string
+      notes: string[]
+      available: boolean | null
+    }>,
+    /** 安装实况（事件驱动：runtimeId → 最新 phase/percent/detail/兜底命令） */
+    runtimeProgress: {} as Record<string, { phase: string; percent?: number; detail?: string; command?: string }>,
     /** 插件工具授权记忆（2026-10-20 P2①：会话内同插件同工具不再弹审批——批一次记住） */
     rememberedPluginTools: [] as string[],
     /** 插件市场清单（2026-10-19 插件视图一期）：v1.plugins.market（内核内置源，将来接真实源） */
@@ -501,6 +516,7 @@ export const useKernelStore = defineStore('kernel', {
         this.caps = await client.call<NonNullable<typeof this.caps>>('v1.boxes.caps')
         if (this.caps?.snapshot) await this.refreshSnapshots()
         await this.refreshSandbox()
+        await this.refreshRuntimeInstallers()
         await this.refreshGroups()
         await this.refreshRoleTemplates()
         await this.refreshPlugins()
@@ -543,7 +559,7 @@ export const useKernelStore = defineStore('kernel', {
       await this.refreshRoster()
     },
     /** 注册 agent（P4 Step 5）：命令面受理（name/color/role）→ 重拉名册 → 返回 agentId（向导跳会话用） */
-    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string; imageId?: string; persona?: string; roleName?: string }): Promise<string> {
+    async registerAgent(input: { name: string; color?: string; role?: 'steward' | 'worker'; modelProvider?: string; imageId?: string; persona?: string; roleName?: string; dataDir?: string }): Promise<string> {
       const created = await this.call<{ agentId: string }>('v1.system.registerAgent', input)
       await this.refreshRoster()
       return created.agentId
@@ -830,6 +846,30 @@ export const useKernelStore = defineStore('kernel', {
     async setSandbox(pref: SandboxPref): Promise<void> {
       await this.call('v1.sandbox.set', { preference: pref })
       await this.refreshSandbox()
+    },
+    /** 沙箱数据目录全局默认（2026-10-20 v0.2.0）：null=回 userData/boxes；重启生效 */
+    async setSandboxDataDir(dir: string | null): Promise<void> {
+      await this.call('v1.sandbox.setDataDir', { dir })
+    },
+    /** 行级数据目录（2026-10-20）：目录型运行时（wsl2/nspawn）各自设置；读取全部（呈现） */
+    async setRuntimeDataDir(runtimeId: 'wsl2' | 'nspawn', dir: string | null): Promise<void> {
+      await this.call('v1.sandbox.setRuntimeDir', { runtimeId, dir })
+    },
+    async getRuntimeDirs(): Promise<{ wsl2: string | null; nspawn: string | null }> {
+      const r = await this.call<{ dirs: { wsl2: string | null; nspawn: string | null } }>('v1.sandbox.getRuntimeDirs')
+      return r.dirs
+    },
+    /** 运行时一键安装（2026-10-20 v0.2.0）：受理即返——进度走 v1.runtime.progress 事件 */
+    async refreshRuntimeInstallers(): Promise<void> {
+      const r = await this.call<{ installers: typeof this.runtimeInstallers }>('v1.runtime.list')
+      this.runtimeInstallers = r.installers
+    },
+    async installRuntime(runtimeId: string): Promise<void> {
+      await this.call('v1.runtime.install', { runtimeId })
+    },
+    /** 取消在途安装（2026-10-20 流量敏感客户）：下载中止清临时文件、子进程即杀 */
+    async cancelRuntimeInstall(): Promise<void> {
+      await this.call('v1.runtime.cancel', {})
     },
     /** 数据目录设置（UI 优化 0.1.26）：切换自动迁移全家（v0.1.64——两阶段安全搬运）；
      *  返回迁移文件数；null = 恢复默认（同样自动迁回） */
@@ -1186,6 +1226,18 @@ export const useKernelStore = defineStore('kernel', {
             (b) => !(b.agentId === event.payload.agentId && b.stream === 'llm' && b.think !== true),
           )
           return
+        case 'v1.runtime.progress': {
+          // v0.2.0 一键安装实况：download %/提权等待/兜底命令；done/failed 后刷新探测+清单
+          const p = event.payload
+          this.runtimeProgress = { ...this.runtimeProgress, [p.runtimeId]: { phase: p.phase, ...(p.percent !== undefined ? { percent: p.percent } : {}), ...(p.detail !== undefined ? { detail: p.detail } : {}), ...(p.command !== undefined ? { command: p.command } : {}) } }
+          if (p.phase === 'done' || p.phase === 'failed') {
+            if (p.phase === 'failed') useToastStore().push(`运行时安装失败：${p.detail ?? '未知原因'}`, 'error')
+            // 刷新 fire-and-forget（onEvent 是同步投影——SSE 后续事件自然对齐）
+            void this.refreshSandbox().catch(() => {})
+            void this.refreshRuntimeInstallers().catch(() => {})
+          }
+          return
+        }
         case 'v1.plugin.event': {
           // 插件上行事件（2026-10-20 P1）：toast 用户通知面（唤醒 Agent 在内核侧已走消息通道）
           const p = event.payload

@@ -128,14 +128,17 @@ export class WslBoxBackend implements BoxBackend {
     // 安装位置必须先解析为物理路径（Node fs 自身走 junction 无碍，仅 wsl 侧需要）
     // realpath 输出统一正斜杠（Windows 解析返回反斜杠——wsl.exe 双形态皆收，测试形状稳定）
     const toFwd = (p: string): string => p.replaceAll('\\', '/')
-    const dirReal = await realpath(this.#dir).then(toFwd).catch(() => this.#dir)
+    // 落盘位置：单盒覆盖（spec.dir，v0.2.0 位置参数化）> 全局默认（构造期 dir）——
+    // 物理路径解析（junction 地雷同注释上）；mkdir 针对实际父目录
+    const dirBase = spec.dir ?? this.#dir
+    const dirReal = await realpath(dirBase).then(toFwd).catch(() => dirBase)
     const rootfsReal = await realpath(this.#rootfs).then(toFwd).catch(() => this.#rootfs)
     const boxDir = `${dirReal}/${name}`
     // 跨重启幂等：发行版已存在则复用（Box 持久化真相，与 list() 同源判定）——
     // 桌面每次启动都为名册 agent 重建 Box，无条件 --import 会在第二次启动时同名冲突
     if (!(await this.#listNames()).includes(name)) {
       // --import 不自建父目录（与 --export 同款地雷；实证 exit 4294967295 且 stderr 空）
-      await mkdir(this.#dir, { recursive: true })
+      await mkdir(dirBase, { recursive: true })
       const r = await this.#run({
         command: ['wsl', '--import', name, boxDir, rootfsReal, '--version', '2'],
         timeoutMs: 10 * 60_000,

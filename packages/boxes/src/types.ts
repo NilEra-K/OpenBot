@@ -52,6 +52,9 @@ export interface BoxSpec {
   /** 资源上限；caps.resourceLimits=false 的后端可如实忽略 */
   cpus?: number
   memoryMb?: number
+  /** 数据目录覆盖（2026-10-20 v0.2.0 Box 位置参数化）：单盒落盘位置（wsl --import 的
+   *  安装目录）；仅目录型后端（wsl/nspawn）尊重，其余如实忽略。全局默认走构造期 dir */
+  dir?: string
 }
 
 export interface ExecSpec {

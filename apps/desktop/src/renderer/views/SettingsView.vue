@@ -906,7 +906,7 @@ const backendRows = computed(() => {
   const sandbox = kernel.sandbox
   if (!sandbox) return []
   const probed = new Map(sandbox.probes.map((p) => [p.id as string, p]))
-  return BACKEND_ORDER.filter((id) => probed.has(id)).map((id) => {
+  return BACKEND_ORDER.filter((id) => probed.has(id) && !MATRIX_PROBE_IDS.has(id)).map((id) => {
     const probe = probed.get(id)!
     const caps = sandbox.backendCaps?.[id]
     const capChips = caps
@@ -931,6 +931,167 @@ const backendRows = computed(() => {
 
 /** 后端显示名 */
 const backendLabel = (id: string): string => BACKEND_LABELS[id] ?? id
+// ---- 行级数据目录（2026-10-20 用户裁定：⚙ 图标 → 模态；目录型可设，其余 toast）----
+const dirModal = reactive<{ open: boolean; runtimeId: 'wsl2' | 'nspawn'; name: string; current: string; value: string; busy: boolean }>({
+  open: false, runtimeId: 'wsl2', name: '', current: '', value: '', busy: false,
+})
+const openDirModal = async (runtimeId: 'wsl2' | 'nspawn', name: string): Promise<void> => {
+  try {
+    const dirs = await kernel.getRuntimeDirs()
+    dirModal.open = true
+    dirModal.runtimeId = runtimeId
+    dirModal.name = name
+    dirModal.current = dirs[runtimeId] ?? ''
+    dirModal.value = dirs[runtimeId] ?? ''
+    dirModal.busy = false
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+const saveDirModal = async (): Promise<void> => {
+  if (dirModal.busy) return
+  dirModal.busy = true
+  try {
+    await kernel.setRuntimeDataDir(dirModal.runtimeId, dirModal.value.trim() === '' ? null : dirModal.value.trim())
+    dirModal.open = false
+    toast.push(dirModal.value.trim() === '' ? '已恢复默认——重启生效' : `「${dirModal.name}」数据目录已保存——重启生效`, 'success')
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  } finally {
+    dirModal.busy = false
+  }
+}
+
+/** ⚙ 点击分流：目录型本系统运行时（wsl2 / nspawn 静态行）开模态；其余如实 toast。
+ *  判据用策略 id（row.key 是显示名——首版误判 'WSL2'≠'wsl2' 落空，目验实锤后修正） */
+const onDirIcon = (row: MatrixRow): void => {
+  if (row.local?.id === 'wsl2') {
+    void openDirModal('wsl2', row.runtime)
+    return
+  }
+  if (row.staticState === 'builtin' && row.platforms.includes('linux')) {
+    void openDirModal('nspawn', row.runtime)
+    return
+  }
+  toast.push('该运行时的数据目录由其自身管理（或非本系统）——不可在此设置', 'info')
+}
+
+// ---- 运行时一键安装（2026-10-20 v0.2.0，docs/plan-v020-runtime-install.md）----
+
+/** 安装弹窗状态机（2026-10-20 用户裁定：说明内容收进模态）：confirm（提权告知）→
+ *  installing（phase/进度条/detail/兜底命令——事件驱动）→ done/failed（关闭收敛） */
+const installModal = reactive<{
+  open: boolean
+  installer: typeof kernel.runtimeInstallers[number] | null
+  stage: 'confirm' | 'installing' | 'done' | 'failed' | 'canceled'
+}>({ open: false, installer: null, stage: 'confirm' })
+
+/** 安装实况（由 store 的 runtimeProgress 投影——模态内呈现；行上仅小签） */
+const installProgress = computed(() => {
+  const id = installModal.installer?.id
+  return id !== undefined ? kernel.runtimeProgress[id] : undefined
+})
+
+// 安装中事件到终态 → 弹窗转 done/failed（保留在屏——用户点关闭）
+watch(
+  () => (installModal.installer !== null ? kernel.runtimeProgress[installModal.installer.id]?.phase : undefined),
+  (phase) => {
+    if (installModal.stage !== 'installing') return
+    if (phase === 'done') installModal.stage = 'done'
+    else if (phase === 'failed') installModal.stage = 'failed'
+    else if (phase === 'canceled') installModal.stage = 'canceled'
+  },
+)
+
+/** 平台显示名（矩阵徽章/不支持文案）——hostPlatform 由 UA 判定（主进程 platform 不下发渲染层） */
+const PLATFORM_LABEL: Record<string, string> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
+const hostPlatform = navigator.platform.includes('Win') ? 'win32' : navigator.platform.includes('Mac') ? 'darwin' : 'linux'
+const thisPlatformLabel = computed(() => PLATFORM_LABEL[hostPlatform] ?? '本系统')
+
+/** 运行时矩阵行（2026-10-20 用户裁定：全量容器展示 × 按本系统针对性）：
+ *  按 runtime 分组（docker-desktop 双平台 / podman 三平台合一行）；platforms = 各平台策略在场即支持；
+ *  静态行：nspawn（Linux 自带）、UTM（macOS 载体——安装器后置）——探测事实从 probes 取 */
+interface MatrixRow {
+  key: string
+  runtime: string
+  platforms: string[]
+  /** 本平台策略（缺席=null：不支持本系统） */
+  local: typeof kernel.runtimeInstallers[number] | null
+  /** 静态行状态覆盖（nspawn=自带/UTM=后置） */
+  staticState?: 'builtin' | 'deferred'
+}
+
+const runtimeMatrix = computed<MatrixRow[]>(() => {
+  const groups = new Map<string, typeof kernel.runtimeInstallers>()
+  for (const inst of kernel.runtimeInstallers) {
+    const arr = groups.get(inst.runtime) ?? []
+    arr.push(inst)
+    groups.set(inst.runtime, arr)
+  }
+  const rows: MatrixRow[] = []
+  for (const [runtime, insts] of groups) {
+    const local = insts.find((i) => i.supported) ?? null
+    rows.push({ key: runtime, runtime, platforms: insts.map((i) => i.platform), local })
+  }
+  // nspawn：Linux 探测在场才显示（自带语义）；UTM：macOS 探测在场才显示（后置注记）
+  const probes = new Map((kernel.sandbox?.probes ?? []).map((p) => [p.id as string, p]))
+  if (probes.has('nspawn')) rows.push({ key: 'nspawn', runtime: 'nspawn', platforms: ['linux'], local: null, staticState: 'builtin' })
+  if (probes.has('utm')) rows.push({ key: 'utm', runtime: 'UTM', platforms: ['darwin'], local: null, staticState: 'deferred' })
+  // 本系统相关行在前（可装/已装），纯他平台行殿后
+  return rows.sort((a, b) => Number(b.local !== null || b.staticState !== undefined) - Number(a.local !== null || a.staticState !== undefined))
+})
+
+/** 探测卡过滤（其他载体）：已进矩阵的运行时行不再双列（wsl/docker/podman/nspawn/utm） */
+const MATRIX_PROBE_IDS = new Set(['wsl', 'docker', 'podman', 'nspawn', 'utm'])
+
+/** 进度条文案 */
+const phaseLabel: Record<string, string> = {
+  download: '下载中',
+  verify: '校验',
+  install: '安装中',
+  probe: '验证',
+  done: '完成',
+  failed: '失败',
+  fallback: '需手动执行',
+  canceled: '已取消',
+}
+
+const openInstallConfirm = (installer: typeof kernel.runtimeInstallers[number]): void => {
+  installModal.open = true
+  installModal.installer = installer
+  // 该运行时已在途（行上「安装中…」点开）→ 直接进进度态（不重复确认/不重复启动）
+  const phase = kernel.runtimeProgress[installer.id]?.phase
+  installModal.stage =
+    phase !== undefined && !['done', 'failed', 'fallback', 'canceled'].includes(phase) ? 'installing' : 'confirm'
+}
+
+/** 取消安装（2026-10-20 用户报障：下载无法取消——流量敏感客户）：
+ *  abort 在途任务（下载清临时文件、子进程即杀）→ canceled 终态（模态如实呈现） */
+const doCancelInstall = async (): Promise<void> => {
+  try {
+    await kernel.cancelRuntimeInstall()
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+
+const doInstall = async (): Promise<void> => {
+  const target = installModal.installer
+  if (target === null) return
+  try {
+    await kernel.installRuntime(target.id)
+    installModal.stage = 'installing' // 弹窗原位转进度模态（说明内容不再漏到行下）
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+
+/** 复制兜底命令到剪贴板（navigator.clipboard 在渲染层可用） */
+const copyFallback = async (text: string): Promise<void> => {
+  await navigator.clipboard.writeText(text).catch(() => {})
+  toast.push('命令已复制——请粘贴到终端执行', 'success')
+}
+
 /** 偏好涉及 WSL 且镜像未就绪时引导放置 */
 const wslRelevant = computed(
   () =>
@@ -938,12 +1099,8 @@ const wslRelevant = computed(
     (kernel.sandbox.preference === 'wsl' || kernel.sandbox.preference === 'auto') &&
     !kernel.sandbox.rootfsReady,
 )
-/** 一键配置降级引导（裁定 D）：WSL 探测不可用或镜像未就绪时给本地文档指引——不自动装系统级软件 */
-const wslHelpNeeded = computed(() => {
-  if (kernel.sandbox === null) return false
-  const wsl = kernel.sandbox.probes.find((p) => p.id === 'wsl')
-  return (wsl !== undefined && !wsl.available) || !kernel.sandbox.rootfsReady
-})
+/** 旧「一键安装暂不提供」引导（裁定 D 遗产）——2026-10-20 作者推翻旧裁定，一键安装已提供
+ *  （docs/plan-v020-runtime-install.md）；WSL 探测不可用现由安装器区接管（不可用即给安装入口） */
 </script>
 
 <template>
@@ -1175,12 +1332,132 @@ const wslHelpNeeded = computed(() => {
           WSL 基础镜像未就绪：请把 Ubuntu rootfs 压缩包（tar.gz）放到
           <span class="mono">{{ kernel.sandbox.rootfsPath }}</span>，或设环境变量 OPENBOT_WSL_ROOTFS 指向已有文件后重启。
         </p>
-        <p v-if="wslHelpNeeded" class="sandbox-warn">
-          一键安装暂不提供（自动安装系统级软件风险高于收益）：WSL2 启用与 rootfs 制作步骤见仓库文档
-          <span class="mono">docs/platforms.md</span>，完成后重启应用即可生效。
-        </p>
+        <!-- 旧裁定文案退役（2026-10-20 作者推翻：一键安装改为提供——提权全程透明） -->
 
-        <!-- 各后端可用性与能力（探测事实 × 每后端 caps 常量——P8-4 后全局偏好选择退役，Agent 经镜像绑定选载体） -->
+        <!-- 运行时矩阵（2026-10-20 用户裁定改版）：全量容器一行一个——平台徽章 + 本系统针对性；
+             一个运行时只出现一次（旧安装器区/可用折叠/探测行三块平行列表的重复即难看根源） -->
+        <div class="settings-card rt-matrix">
+          <div v-for="row in runtimeMatrix" :key="row.key" class="rt-row" :class="{ 'is-remote': row.local === null && row.staticState === undefined }">
+            <div class="appearance-main">
+              <div class="rt-name-line">
+                <span class="appearance-name">{{ row.runtime }}</span>
+                <span v-for="pf in row.platforms" :key="pf" class="rt-pf" :class="{ 'is-here': pf === hostPlatform }">{{ PLATFORM_LABEL[pf] }}</span>
+              </div>
+              <!-- 本平台行：位置事实 + 如实标注（安装实况收进模态——2026-10-20 用户裁定） -->
+              <div v-if="row.local !== null" class="appearance-desc">
+                {{ row.local.locationNote }}
+                <span v-for="n in row.local.notes" :key="n" class="ri-note">· {{ n }}</span>
+              </div>
+              <div v-else-if="row.staticState === 'builtin'" class="appearance-desc">systemd 原生轻量容器——系统自带，零安装</div>
+              <div v-else-if="row.staticState === 'deferred'" class="appearance-desc">macOS 虚拟机载体（GUI 沙箱路线）——安装器记档后置</div>
+              <div v-else class="appearance-desc">适用于 {{ row.platforms.map((pf) => PLATFORM_LABEL[pf]).join(' / ') }}——在{{ thisPlatformLabel }}上不支持</div>
+            </div>
+            <!-- 状态区：已可用绿签 / 安装中/一键安装 / 自带 / 后置 / 不支持；⚙ 行级数据目录 -->
+            <div class="rt-status">
+              <template v-if="row.staticState === 'builtin'">
+                <span class="chip chip-success">系统自带</span>
+              </template>
+              <template v-else-if="row.staticState === 'deferred'">
+                <span class="chip">暂缓</span>
+              </template>
+              <template v-else-if="row.local === null">
+                <span class="chip rt-unsupported">不支持</span>
+              </template>
+              <template v-else-if="row.local.available === true">
+                <span class="chip chip-success">已可用</span>
+              </template>
+              <template v-else-if="kernel.runtimeProgress[row.local.id] !== undefined && !['done', 'failed', 'fallback', 'canceled'].includes(kernel.runtimeProgress[row.local.id]!.phase)">
+                <!-- 行内迷你进度条（2026-10-20 用户裁定：后台下载后进度仍可见）：下载阶段
+                     百分比填充；其余阶段 phase 文案（含「等待系统授权（UAC）…」等待期反馈） -->
+                <button type="button" class="rt-mini" title="查看安装进度" @click="openInstallConfirm(row.local)">
+                  <span class="rt-mini-bar"><span class="rt-mini-fill" :style="{ width: `${kernel.runtimeProgress[row.local.id]!.percent ?? 0}%` }"></span></span>
+                  <span class="rt-mini-label">
+                    {{ kernel.runtimeProgress[row.local.id]!.phase === 'download'
+                      ? `${kernel.runtimeProgress[row.local.id]!.percent ?? 0}%`
+                      : (phaseLabel[kernel.runtimeProgress[row.local.id]!.phase] ?? '安装中') }}
+                  </span>
+                </button>
+              </template>
+              <template v-else>
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  @click="openInstallConfirm(row.local)"
+                >一键安装</button>
+              </template>
+              <!-- ⚙ 行级数据目录（目录型本系统行可设——模态；其余 toast 如实） -->
+              <button type="button" class="rt-gear" title="设置数据目录" aria-label="设置数据目录" @click="onDirIcon(row)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+                <!-- 安装模态（2026-10-20 用户裁定：说明内容收进模态）：confirm（提权告知）→
+             installing（进度/兜底命令）→ done/failed（结果 + 关闭） -->
+        <div v-if="installModal.open && installModal.installer" class="approval-scrim" role="presentation">
+          <div class="approval-modal" role="dialog" aria-modal="true" aria-label="运行时安装">
+            <div class="am-head">
+              <span class="am-title">
+                {{ installModal.stage === 'confirm' ? `安装 ${installModal.installer.runtime}` : installModal.installer.runtime }}
+              </span>
+            </div>
+            <!-- 阶段一：确认（提权透明 + 位置事实 + 许可注意） -->
+            <div v-if="installModal.stage === 'confirm'" class="am-body">
+              <p class="am-line">安装位置：{{ installModal.installer.locationNote }}</p>
+              <p v-for="n in installModal.installer.notes" :key="n" class="am-line am-note">· {{ n }}</p>
+              <p class="am-line am-note">下载体积可能较大（数百 MB）——安装中可随时「取消」或转「后台下载」。</p>
+              <p v-if="installModal.installer.elevation === 'uac'" class="am-line">⚠ 将弹出系统授权框（UAC）——由你确认后才安装。</p>
+              <p v-else-if="installModal.installer.elevation === 'polkit'" class="am-line">⚠ 将弹出系统授权框（polkit 密码框）——由你确认后才安装。</p>
+            </div>
+            <!-- 阶段二：安装进行中（phase/进度条/detail/兜底命令——原行内联内容收拢于此） -->
+            <div v-else-if="installModal.stage === 'installing'" class="am-body">
+              <div class="ri-progress is-modal">
+                <span class="ri-phase">{{ phaseLabel[installProgress?.phase ?? 'install'] ?? '…' }}</span>
+                <span v-if="installProgress?.detail" class="ri-detail">{{ installProgress.detail }}</span>
+                <div v-if="installProgress?.phase === 'download' && installProgress.percent !== undefined" class="ri-bar">
+                  <div class="ri-bar-fill" :style="{ width: `${installProgress.percent}%` }"></div>
+                </div>
+                <pre v-if="installProgress?.command" class="ri-cmd mono">{{ installProgress.command }}</pre>
+                <button v-if="installProgress?.command" type="button" class="btn btn-ghost" @click="copyFallback(installProgress.command!)">复制命令</button>
+              </div>
+            </div>
+            <!-- 阶段三：结果（完成/失败/取消——取消是用户主权不误报失败） -->
+            <div v-else class="am-body">
+              <p v-if="installModal.stage === 'done'" class="am-line am-ok">✓ 安装完成——如探测未即时生效，重启应用后即可。</p>
+              <p v-else-if="installModal.stage === 'canceled'" class="am-line">已取消——未做任何更改（临时文件已清理）。</p>
+              <p v-else class="am-line">✗ 安装失败：{{ installProgress?.detail ?? '未知原因' }}</p>
+            </div>
+            <div class="am-actions">
+              <button v-if="installModal.stage === 'confirm'" type="button" class="btn btn-primary" @click="doInstall">开始安装</button>
+              <!-- installing 双钮（2026-10-20 用户报障）：后台下载（关模态任务继续——行上
+                   「安装中…」可点重开）+ 取消（流量敏感客户随时中止） -->
+              <template v-if="installModal.stage === 'installing'">
+                <button type="button" class="btn btn-ghost" @click="installModal.open = false">后台下载</button>
+                <button type="button" class="btn btn-danger-ghost" @click="doCancelInstall">取消</button>
+              </template>
+              <button v-if="installModal.stage !== 'installing'" type="button" class="btn btn-ghost" @click="installModal.open = false">{{ installModal.stage === 'confirm' ? '取消' : '关闭' }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 行级数据目录模态（2026-10-20 用户裁定：⚙ → 模态；目录型运行时各自设置） -->
+        <div v-if="dirModal.open" class="approval-scrim" role="presentation">
+          <div class="approval-modal" role="dialog" aria-modal="true" aria-label="设置数据目录">
+            <div class="am-head"><span class="am-title">「{{ dirModal.name }}」数据目录</span></div>
+            <div class="am-body">
+              <p class="am-line">Box（发行版 VHDX / 快照）落盘根目录——留空用应用默认（userData/boxes）；单盒可在建 Agent 时另行指定。保存后重启生效。</p>
+              <p v-if="dirModal.current !== ''" class="am-line am-note">当前：{{ dirModal.current }}</p>
+              <input v-model="dirModal.value" class="wiz-input mono" placeholder="留空 = 应用默认" maxlength="300" @keydown.enter.prevent="saveDirModal" />
+            </div>
+            <div class="am-actions">
+              <button type="button" class="btn btn-primary" :disabled="dirModal.busy" @click="saveDirModal">保存</button>
+              <button type="button" class="btn btn-ghost" @click="dirModal.open = false">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 其他载体（SSH 主机/模拟——运行时已进上方矩阵，不再双列） -->
         <div class="settings-card">
           <div v-for="row in backendRows" :key="row.id" class="backend-row">
             <div class="appearance-main">

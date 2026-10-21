@@ -43,6 +43,18 @@ describe('WslBoxBackend（脚本化替身）', () => {
     expect(calls[2]?.command).toEqual(['wsl', '-d', `${WSL_BOX_PREFIX}box-1`, '--', 'mkdir', '-p', '/work'])
   })
 
+  it('create 单盒目录覆盖（v0.2.0 位置参数化）：spec.dir 优先于构造期全局 dir', async () => {
+    const { run, calls } = scripted((spec) => {
+      if (spec.command.includes('--list')) return { ...OK, stdout: 'Ubuntu\r\n' } // 无同名 Box（覆盖路径）
+      return OK
+    })
+    const backend = new WslBoxBackend({ rootfs: 'C:/r.tar.gz', dir: 'D:/WSL', run })
+    await backend.create({ image: 'default', dir: 'D:/WSL/ovr' })
+    expect(calls[1]?.command).toEqual([
+      'wsl', '--import', `${WSL_BOX_PREFIX}box-1`, `D:/WSL/ovr/${WSL_BOX_PREFIX}box-1`, 'C:/r.tar.gz', '--version', '2',
+    ])
+  })
+
   it('create 幂等：发行版已存在则跳过 import（桌面重启复用持久 Box）', async () => {
     const { run, calls } = scripted((spec) => {
       if (spec.command.includes('--list')) return { ...OK, stdout: `Ubuntu\r\n${WSL_BOX_PREFIX}box-1\r\n` }

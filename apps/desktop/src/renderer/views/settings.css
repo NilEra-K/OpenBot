@@ -1401,3 +1401,307 @@
   padding: 0 16px;
   text-align: center;
 }
+
+/* 运行时一键安装（2026-10-20 v0.2.0）：安装器行/进度条/兜底命令/折叠区 */
+.ri-note {
+  color: var(--ink3);
+  font-size: 11.5px;
+  margin-left: 6px;
+}
+.ri-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg1);
+  font-size: 12px;
+}
+.ri-phase {
+  font-weight: 600;
+  color: var(--ink);
+}
+.ri-detail {
+  color: var(--ink3);
+  font-size: 11.5px;
+}
+.ri-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg3);
+  overflow: hidden;
+}
+.ri-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--ink);
+  transition: width 240ms var(--ease);
+}
+.ri-cmd {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg0);
+  color: var(--ink2);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.ri-details {
+  margin-top: 10px;
+}
+.ri-details summary {
+  cursor: pointer;
+  color: var(--ink3);
+  font-size: 12px;
+}
+.ri-avail {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.sandbox-ok {
+  color: var(--ink3);
+  font-size: 12.5px;
+  margin: 6px 0 0;
+}
+
+/* 沙箱数据目录卡（v0.2.0 位置参数化） */
+.sandbox-dir-card {
+  margin-bottom: 10px;
+}
+.sdir-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 300px;
+}
+.sdir-form .wiz-input {
+  width: 240px;
+}
+
+/* 运行时矩阵（2026-10-20 用户裁定改版）：全量容器 × 平台徽章 × 本系统针对性 */
+/* 平板行（2026-10-20 用户裁定去「弯曲感」）：无行圆角无整块底色——细分隔线，卡内一体 */
+.rt-matrix {
+  display: flex;
+  flex-direction: column;
+}
+.rt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  /* 与 backend-row 同规格（2026-10-20 用户报障：11px 6px 对 13px 16px 突兀——统一节奏） */
+  padding: 13px 16px;
+  border-top: 1px solid var(--line);
+}
+.rt-row:first-child {
+  border-top: none;
+}
+.rt-row.is-remote {
+  opacity: 0.62;
+}
+.rt-name-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.rt-pf {
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink3);
+  background: var(--bg1);
+}
+.rt-pf.is-here {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--bg3);
+  font-weight: 600;
+}
+.rt-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+.rt-unsupported {
+  color: var(--ink3);
+  background: none;
+}
+
+/* ⚙ 行级数据目录入口（幽灵图标钮——hover 显色） */
+.rt-gear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+}
+.rt-gear:hover {
+  color: var(--ink);
+  background: var(--bg3);
+}
+/* 模态内安装实况（原行内联版收拢——上边距收紧） */
+.ri-progress.is-modal {
+  margin-top: 0;
+  padding: 0;
+  border: none;
+  background: none;
+}
+.am-ok {
+  color: var(--ink);
+}
+
+/* ---- 模态壳（2026-10-20 修复：类名借自 ApprovalModal 但其样式是 scoped——在设置页
+ *  无样式命中致直接铺在文档流里。此处落地同款全套（scrim/modal/am-*），settings 作用域内生效） ---- */
+.approval-scrim {
+  position: fixed;
+  inset: 0;
+  /* 高于操作台（80）——注意力捕获层 */
+  z-index: 90;
+  -webkit-app-region: no-drag;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: am-fade 160ms var(--ease);
+}
+@keyframes am-fade {
+  from {
+    opacity: 0;
+  }
+}
+.approval-modal {
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  background: var(--bg1);
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: 14px;
+  padding: 18px 20px 16px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+.am-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.am-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.am-body {
+  font-size: 13px;
+  color: var(--ink2);
+  line-height: 1.7;
+}
+.am-line {
+  margin: 0;
+}
+.am-line b {
+  color: var(--ink);
+}
+.am-note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink3);
+}
+.am-ok {
+  color: var(--ink);
+}
+.am-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+/* 模态内输入（借 wiz-input 类名同理无样式——settings 侧同款） */
+.approval-modal .wiz-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg1);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.approval-modal .wiz-input:focus {
+  border-color: var(--ink2);
+}
+
+.btn-danger-ghost {
+  background: transparent;
+  border-color: rgba(var(--danger-rgb), 0.35);
+  color: var(--danger);
+}
+.btn-danger-ghost:hover:not(:disabled) {
+  background: rgba(var(--danger-rgb), 0.1);
+}
+.rt-installing {
+  border: none;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.rt-installing:hover {
+  color: var(--ink);
+}
+
+/* 行内迷你进度条（2026-10-20 用户裁定：安装中态 = 进度条——后台下载可见） */
+.rt-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  padding: 4px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.rt-mini:hover {
+  background: var(--bg3);
+}
+.rt-mini-bar {
+  width: 72px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg3);
+  overflow: hidden;
+  flex: none;
+}
+.rt-mini-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--ink);
+  transition: width 240ms var(--ease);
+}
+.rt-mini-label {
+  font-size: 11.5px;
+  color: var(--ink3);
+  white-space: nowrap;
+}
+.rt-mini:hover .rt-mini-label {
+  color: var(--ink);
+}

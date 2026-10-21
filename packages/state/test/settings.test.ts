@@ -314,3 +314,33 @@ describe('已安装插件（2026-10-19 插件视图一期：安装态管理）',
     expect((await store.getInstalledPlugins()).map((p) => p.id)).toEqual(['p1'])
   })
 })
+
+describe('沙箱数据目录（2026-10-20 v0.2.0 Box 位置参数化）', () => {
+  it('缺省 null；set 后读取；清除回 null（旧文件无字段=缺席语义）', async () => {
+    const { store } = makeStore()
+    expect(await store.getSandboxDataDir()).toBeNull()
+    await store.setSandboxDataDir('D:/OpenBotData/boxes')
+    expect(await store.getSandboxDataDir()).toBe('D:/OpenBotData/boxes')
+    await store.setSandboxDataDir(null)
+    expect(await store.getSandboxDataDir()).toBeNull()
+    // 空串视同清除（表单清空保存路径）
+    await store.setSandboxDataDir('  ')
+    expect(await store.getSandboxDataDir()).toBeNull()
+  })
+
+  it('行级数据目录（2026-10-20 ⚙ 模态）：per-runtime 独立读写/清除；互不影响', async () => {
+    const { store } = makeStore()
+    expect(await store.getRuntimeDataDir('wsl2')).toBeNull()
+    await store.setRuntimeDataDir('wsl2', 'D:/WSL2-Boxes')
+    await store.setRuntimeDataDir('nspawn', 'E:/NSpawn')
+    expect(await store.getRuntimeDataDir('wsl2')).toBe('D:/WSL2-Boxes')
+    expect(await store.getRuntimeDataDir('nspawn')).toBe('E:/NSpawn')
+    // 清除单键不影响他键
+    await store.setRuntimeDataDir('wsl2', null)
+    expect(await store.getRuntimeDataDir('wsl2')).toBeNull()
+    expect(await store.getRuntimeDataDir('nspawn')).toBe('E:/NSpawn')
+    // 空串同清除
+    await store.setRuntimeDataDir('nspawn', ' ')
+    expect(await store.getRuntimeDataDir('nspawn')).toBeNull()
+  })
+})

@@ -103,6 +103,8 @@ export interface AgentRegistration {
   persona?: string
   /** 角色档位名（2026-10-18 自定义角色）：呈现留档（权限语义在 steward 标志） */
   roleName?: string
+  /** Box 数据目录单盒覆盖（2026-10-20 v0.2.0）：目录型后端落盘位置——全局默认见 settings.sandboxDataDir */
+  dataDir?: string
   /** 该 agent 的模型客户端；未提供时用空脚本 mock（首个 turn 即显式报脚本耗尽） */
   llm?: ChatProvider
   /** 注册后立即任命为管家（走标准任命事务：他人在位时如实拒绝） */
@@ -730,7 +732,12 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       // caps.resourceLimits=false 的后端（wsl）如实忽略；mock 忽略（但 spec 留档供 renderer 呈现上限）。
       // 镜像绑定（P8-4）：image = 绑定条目 id——RoutingBoxBackend 按它分发到对应后端实例；
       // 未绑定/悬空落 'default'（全局后端——悬空告警在装配方恢复循环）
-      const boxId = await backend.create({ image: registration.imageId ?? 'default', cpus: 2, memoryMb: 2048 })
+      const boxId = await backend.create({
+        image: registration.imageId ?? 'default',
+        cpus: 2,
+        memoryMb: 2048,
+        ...(registration.dataDir !== undefined && registration.dataDir !== '' ? { dir: registration.dataDir } : {}),
+      })
       boxes.set(registration.agentId, boxId)
       const scheduler = new AgentScheduler({
         agentId: registration.agentId,

@@ -22,6 +22,9 @@ import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
 import { NodeFs, SettingsStore, MemoryStore, AutomationStore, ImageStore, nextAfter } from '@openbot/state'
 import { manifestSchema } from '@openbot/coordinator'
+import { STRATEGIES, strategiesFor } from './installers/strategies.js'
+import { runInstall } from './installers/index.js'
+import type { RuntimeStrategy } from './installers/strategies.js'
 import type { SandboxPreference, RelaySettings, ImageEntry } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
 import type { ChatProvider, ChatRequest, ChatResponse, ProviderCapabilities } from '@openbot/llm'
@@ -279,6 +282,8 @@ const registerAgentSchema = z.object({
   persona: z.string().trim().min(1).max(500).optional(),
   /** 角色档位名（2026-10-18 自定义角色）：呈现留档 */
   roleName: z.string().trim().min(1).max(12).optional(),
+  /** Box 数据目录单盒覆盖（2026-10-20 v0.2.0）：目录型后端落盘位置 */
+  dataDir: z.string().trim().min(1).max(300).optional(),
   /** 模型覆盖档案名（backlog ③）：可选——引用 providers 档案；悬空显式拒绝（命令面） */
   modelProvider: z.string().trim().min(1).max(64).optional(),
   /** 镜像绑定（P8-4）：可选——引用镜像条目 id；悬空显式拒绝（命令面） */
@@ -306,6 +311,8 @@ const guiInputSchema = z.object({ boxId: z.string(), actions: z.array(screenActi
 
 /** 沙箱装配事实（status 命令与 UI 呈现的单一来源；main 内存态，重启随装配重算） */
 export interface SandboxStatus {
+  /** 沙箱数据目录全局默认（v0.2.0）：缺席 = userData/boxes */
+  sandboxDataDir?: string
   /** 生效偏好（env 覆盖后的值——装配决策用的就是它） */
   preference: SandboxPreference
   /** 持久化偏好（settings.json 里的值；与 preference 不等即存在 env 覆盖） */
@@ -571,9 +578,15 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   // ---- 装配期后端可用性预检（v0.1.51 用户裁定：沙箱故障绝不炸启动——生产事故级防线）----
   // 探测（probes）只验 CLI 在场；create 才暴露真实故障（vhdx 挂载失败/守护进程僵死/权限）。
   // 真实 create+teardown 探测：失败 → 告警 + 全局后端降级 mock（应用照常起，状态栏如实「模拟」）。
+  // 沙箱数据目录（2026-10-20 v0.2.0；同日行级化）：per-runtime 优先（wsl2/nspawn），
+  // legacy 全局 sandboxDataDir 降为 wsl2 兼容回退——缺席 userData/boxes
+  const wslDataDir =
+    (await settings.getRuntimeDataDir('wsl2')) ?? (await settings.getSandboxDataDir()) ?? `${userDataRoot}/boxes`
+  const nspawnDataDir = (await settings.getRuntimeDataDir('nspawn')) ?? `${userDataRoot}/boxes`
+  const sandboxDataDir = wslDataDir // nspawn 快照单独取（下行），此名保留给快照表达式引用处
   let backend: BoxBackend =
     chosen.backendId === 'wsl'
-      ? new WslBoxBackend({ rootfs: rootfsPath, dir: `${userDataRoot}/boxes`, now: Date.now })
+      ? new WslBoxBackend({ rootfs: rootfsPath, dir: wslDataDir, now: Date.now })
       : chosen.backendId === 'docker'
         ? new DockerBoxBackend({ image: dockerImage, now: Date.now })
         : chosen.backendId === 'podman'
@@ -581,7 +594,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
           : chosen.backendId === 'nspawn'
             ? new NspawnBoxBackend({
                 rootfs: nspawnRootfsPath,
-                snapshotDir: `${userDataRoot}/boxes/nspawn-snapshots`,
+                snapshotDir: `${nspawnDataDir}/nspawn-snapshots`,
                 // 特权前缀默认无（polkit/sudo NOPASSWD 是部署策略——platforms.md 记档，真机调优后置）
                 now: Date.now,
               })
@@ -925,6 +938,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const routedBackend: BoxBackend = routingBackend
   // stored 初值现读；status 命令每次现读（set 后无需改内存——重启才生效，呈现以 settings 为真相）
   // 每后端 caps 表（P8-4 后 UI 优化）：per-backend 呈现的事实源（常量即声明，零构造开销）
+  /** 运行时安装单并发守卫（v0.2.0 一键安装）+ 取消控制器（2026-10-20 流量敏感客户） */
+  let runtimeInstallBusy = false
+  let runtimeInstallAbort: AbortController | null = null
   const sandboxStatus: SandboxStatus = {
     preference,
     stored: await settings.getSandbox(),
@@ -1470,6 +1486,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 按需触发（设置页按钮），只报告事实不自动入库；装配期已就绪的 platform 从作用域注入
     .register('v1.images.scan', async () => ({ sources: await scanEnvImages({ run: runProcess, platform }) }))
     .register('v1.sandbox.status', async () => ({
+      ...(await settings.getSandboxDataDir()) !== null ? { sandboxDataDir: await settings.getSandboxDataDir() } : {},
       preference: sandboxStatus.preference,
       stored: await settings.getSandbox(),
       backendId: sandboxStatus.chosen.backendId,
@@ -1485,6 +1502,110 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await settings.setSandbox(pref)
       return { ok: true, restartRequired: true }
     }, sandboxSetSchema)
+    // ---- 运行时一键安装（2026-10-20 v0.2.0，docs/plan-v020-runtime-install.md）----
+    // 安装器属壳层职责（装宿主系统软件不进内核域）；单并发；进度走 v1.runtime.progress
+    // 可用性映射：探测 id → 运行时（wsl/docker/podman；colima 归 docker 探测面）
+    // 沙箱数据目录全局默认（2026-10-20 v0.2.0）：null=回 userData/boxes；重启生效（构造期事实）
+    .register('v1.sandbox.setDataDir', async (payload) => {
+      const { dir } = z.object({ dir: z.string().trim().min(1).max(300).nullable() }).parse(payload)
+      await settings.setSandboxDataDir(dir)
+      return { ok: true, restartRequired: true }
+    }, z.object({ dir: z.string().trim().min(1).max(300).nullable() }))
+    // 行级数据目录（2026-10-20 用户裁定：每运行时各自的目录）：runtimeId 白名单（目录型）；
+    // 其余运行时稳定码拒绝（UI 点击 ⚙ 已分流，此处兜底）
+    .register('v1.sandbox.setRuntimeDir', async (payload) => {
+      const { runtimeId, dir } = z
+        .object({ runtimeId: z.enum(['wsl2', 'nspawn']), dir: z.string().trim().min(1).max(300).nullable() })
+        .parse(payload)
+      await settings.setRuntimeDataDir(runtimeId, dir)
+      return { ok: true, restartRequired: true }
+    }, z.object({ runtimeId: z.enum(['wsl2', 'nspawn']), dir: z.string().trim().min(1).max(300).nullable() }))
+    .register('v1.sandbox.getRuntimeDirs', async () => ({
+      dirs: {
+        wsl2: (await settings.getRuntimeDataDir('wsl2')) ?? (await settings.getSandboxDataDir()),
+        nspawn: await settings.getRuntimeDataDir('nspawn'),
+      },
+    }))
+    .register('v1.runtime.list', async () => {
+      // 2026-10-20 矩阵化（用户裁定）：返回**全部平台**策略——渲染层按运行时分组拼矩阵，
+      // 本系统能装的高亮给按钮、其他系统如实标「不支持」。探测只在策略平台=本平台时有意义。
+      const e2e = process.env.OPENBOT_E2E === '1'
+      const strategies = [...strategiesFor(process.platform, e2e), ...STRATEGIES.filter((st) => st.platform !== process.platform)]
+      const probeById = new Map(sandboxStatus.probes.map((p) => [p.id, p.available]))
+      return {
+        installers: strategies.map((st) => ({
+          id: st.id,
+          runtime: st.runtime,
+          platform: st.platform,
+          supported: st.platform === process.platform,
+          sourceKind: st.source.kind,
+          elevation: st.elevation,
+          locationSelectable: st.locationSelectable,
+          locationNote: st.locationNote,
+          notes: st.notes,
+          // 探测映射（仅本平台有意义；他平台 null）：wsl2→wsl；docker-desktop(非 mac)/docker→docker；
+          // podman→podman；colima→docker；mock→false（E2E 可见可点）
+          available:
+            st.platform !== process.platform
+              ? null
+              : st.id === 'wsl2'
+                ? (probeById.get('wsl') ?? null)
+                : st.id === 'docker-desktop'
+                  ? st.platform === 'darwin'
+                    ? null // brew 面不映射探测（如实在 UI 标未知）
+                    : (probeById.get('docker') ?? null)
+                  : st.id === 'docker'
+                    ? (probeById.get('docker') ?? null)
+                    : st.id === 'podman'
+                      ? (probeById.get('podman') ?? null)
+                      : st.id === 'colima'
+                        ? (probeById.get('docker') ?? null)
+                        : st.id === 'mock-runtime'
+                          ? false
+                          : null,
+        })),
+      }
+    })
+    .register('v1.runtime.install', async (payload) => {
+      const { runtimeId } = z.object({ runtimeId: z.string().trim().min(1).max(32) }).parse(payload)
+      if (runtimeInstallBusy) {
+        throw new KernelError('RUNTIME_INSTALL_BUSY', '已有安装进行中——等它完成再试')
+      }
+      const e2e = process.env.OPENBOT_E2E === '1'
+      const strategy = strategiesFor(process.platform, e2e).find((st) => st.id === runtimeId)
+      if (strategy === undefined) {
+        throw new KernelError('RUNTIME_NOT_FOUND', `当前平台无此运行时安装器：${runtimeId}`)
+      }
+      runtimeInstallBusy = true
+      const abort = new AbortController()
+      runtimeInstallAbort = abort
+      // fire-and-forget：命令即返受理，链路进度/终态走事件（下载分钟级不该占命令通道）
+      void (async () => {
+        try {
+          await runInstall(strategy, {
+            onEvent: (ev) => {
+              kernel.bus.emit('v1.runtime.progress', { runtimeId: strategy.id, ...ev })
+            },
+          }, { signal: abort.signal })
+        } catch (err) {
+          kernel.bus.emit('v1.runtime.progress', {
+            runtimeId: strategy.id,
+            phase: 'failed',
+            detail: err instanceof Error ? err.message : String(err),
+          })
+        } finally {
+          runtimeInstallBusy = false
+          runtimeInstallAbort = null
+        }
+      })()
+      return { ok: true }
+    }, z.object({ runtimeId: z.string().trim().min(1).max(32) }))
+    // 取消安装（2026-10-20 用户报障：下载无法取消对流量敏感客户不友好）——abort 在途
+    // 任务（下载清临时文件、子进程即杀）；非在途幂等通过（无操作）
+    .register('v1.runtime.cancel', async () => {
+      runtimeInstallAbort?.abort()
+      return { ok: true }
+    })
     // 跨用户房间（P7 多房间轮）：状态呈现（settings 全量 + env 叠加路的连接态）+ 配置全量写入
     .register('v1.relay.status', async () => {
       const stored = await settings.getRelays()
@@ -1507,7 +1628,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // 注册 agent（P4 Step 5）：经装配 addAgent（名册+调度器+专属 Box+turn 接线）；
     // llm 共享 SwitchableChatProvider——主力模型切换对全部 agent 生效（与启动装配同语义）
     .register('v1.system.registerAgent', async (payload) => {
-      const { name, color, role, modelProvider, imageId, persona, roleName } = registerAgentSchema.parse(payload)
+      const { name, color, role, modelProvider, imageId, persona, roleName, dataDir } = registerAgentSchema.parse(payload)
       // 管家前置检查：在位时直接拒绝（不创建半成品 agent；任命事务由 addAgent 兜底不变量）
       if (role === 'steward' && (await kernel.agentStore.findSteward()) !== null) {
         throw new KernelError('STATE_STEWARD_EXISTS', '管家已在位（须先罢免或转移）')
@@ -1531,6 +1652,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         ...(imageId !== undefined ? { imageId } : {}),
         ...(persona !== undefined ? { persona } : {}),
         ...(roleName !== undefined ? { roleName } : {}),
+        ...(dataDir !== undefined ? { dataDir } : {}),
         llm: await providerOfAgent(modelProvider, false),
         steward: role === 'steward',
       })
