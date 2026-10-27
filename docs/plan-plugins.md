@@ -70,6 +70,7 @@ my-plugin/
 - manifest 各字段：`entry` 拉起命令；`permissions` 权限声明（`net`/`fs`/`box`/`screen.read`…）；`events` 本插件会发的事件类型；`agents` 事件唤醒的绑定 Agent（显示名，缺席=只通知用户）。
 - **版本演进**：`manifestVersion` + 读取端兼容（项目持久化铁律同款）。
 - **开发门槛**：会写任意语言的标准 MCP server + 填一个 JSON。P1 的官方示例插件即「最小可抄模板」（单文件、注释齐全）；脚手架 `openbot plugin init` 记 backlog。
+- **Python 模板已实证（2026-10-27 v0.1.92）**：官方示例 `openbot.hello-python`（resources/plugins）——零依赖纯标准库单文件；Windows 裸命令 `python` 经 where 解析拉起（P2④ 落地面）；两个管道坑记档：stdout 须 `reconfigure(line_buffering=True)`（缺省全缓冲对端收不到行级应答）、管道编码缺省随 locale（中文 Windows 是 GBK）——中文 JSON 必须显式 UTF-8 `reconfigure(encoding='utf-8')`。单测引用**真实随包模板**验握手（非副本），E2E 全链（安装→运行→工具调用→上行事件）已过。
 
 ---
 

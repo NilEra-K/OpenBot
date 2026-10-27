@@ -7,6 +7,7 @@
 import { test, expect, _electron } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockOpenAi } from './mock-openai'
@@ -2629,6 +2630,70 @@ test('插件视图（2026-10-19 一期 + 2026-10-20 P1 运行时）：拼图入�
     await expect(page.locator('.plugins-grid')).toHaveClass(/is-list/) // 偏好持久
     await page.locator('.plugins-layout button[title="宫格布局"]').click()
     await expect(page.locator('.plugins-grid')).toHaveClass(/is-grid/)
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('插件 Python 实跑（v0.1.92 首个非 node 模板）：安装 → 运行中（where 解析 + 真实 stdio 握手）→ Agent 调工具 → 审批 → 上行事件 toast（UTF-8 中文实证）', async () => {
+  // 语言面已由 hello-events（node）覆盖——此测只证非 node 形态：Windows where 解析、
+  // 真实 python initialize/tools 握手、管道编码（缺省 GBK 必炸——server.py 显式 UTF-8）
+  const pythonOk = await new Promise<boolean>((res) => {
+    execFile('python', ['--version'], (err) => res(err === null))
+  })
+  test.skip(!pythonOk, '本机无 python——hello-python 链路跳过')
+
+  const mock = await startMockOpenAi([
+    { match: (l) => l.role === 'user' && l.content.includes('发个 Python 事件'), toolCalls: [{ id: 'pyc1', name: 'hello-python_pynotify', args: { text: 'Python 事件来了' } }] },
+    { match: (_l, t) => t === 'hello-python_pynotify', text: '事件已发出' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-pyplugin-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider（事件链需要 Agent 真实走一轮工具调用）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+
+    // 市场：Hello Python 在场（resources 官方目录扫描——新模板自动入列）→ 安装（真实拷贝）
+    await page.locator('.nav-item[title="插件"]').click()
+    const card = page.locator('.plugin-card', { hasText: 'Hello Python' })
+    await expect(card).toBeVisible()
+    await card.locator('.pc-btn-primary', { hasText: '安装' }).click()
+    await expect(card.locator('.pc-btn', { hasText: '已安装' })).toBeDisabled()
+
+    // 事件源插件启用即常驻——「运行中」= 真实 python 进程在场（where 解析 + initialize 握手已过）
+    await page.locator('.plugins-tabs button', { hasText: '我的插件' }).click()
+    const mine = page.locator('.plugin-card', { hasText: 'Hello Python' })
+    await expect(mine.locator('.pc-rt')).toHaveText('运行中', { timeout: 15_000 })
+
+    // 全链：Agent 调 pynotify → 审批（插件工具全量过闸）→ MCP 转发（真 python 执行）→
+    // 上行事件 → toast——中文经 python stdout（UTF-8 reconfigure 实证）
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    const input = page.locator('.composer-box input')
+    await input.fill('发个 Python 事件')
+    await input.press('Enter')
+    const modal = page.locator('.approval-modal', { hasText: 'hello-python_pynotify' })
+    await expect(modal).toBeVisible({ timeout: 15_000 })
+    await modal.getByRole('button', { name: '批准' }).click()
+    await expect(page.locator('.m-text', { hasText: '事件已发出' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.toast', { hasText: 'Python 事件来了' })).toBeVisible({ timeout: 10_000 })
   } finally {
     await app.close()
     await mock.close()

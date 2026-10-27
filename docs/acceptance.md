@@ -19,7 +19,7 @@
 
 ## 插件
 
-- [ ] 首个 Python 插件实跑（v0.1.92 交付 `openbot.hello-python`——单测/E2E 已覆盖真实 python 握手；**真机目验**：市场安装 → Agent 调用工具 → 上行事件 toast，确认 PATH 解析在你机器的 anaconda python 上生效）
+- [x] **首个 Python 插件实跑**（2026-10-27 v0.1.92 闭账，`openbot.hello-python`）：单测真实 python 握手 + E2E 全链（安装→运行中→Agent 调工具→审批→上行事件 toast——UTF-8 中文实证）已过；本机 anaconda python 3.14.6 上 where 解析生效（自动化即真机——此链不需另手动验）。
 
 ## 历史遗留（裁定维持，不修）
 

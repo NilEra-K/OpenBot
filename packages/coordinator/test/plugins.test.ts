@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { EventBus } from '@openbot/core'
 import { AgentScheduler, ManualApprovalGate, ToolRegistry } from '@openbot/runner'
 import { IdempotencyLedger, InMemoryFs, TranscriptStore } from '@openbot/state'
@@ -73,6 +75,38 @@ const VALID = {
   description: '测试',
   entry: { command: 'node', args: ['server.mjs'] },
 }
+
+/** Python 模板在场性（v0.1.92 首个非 node 插件实跑）：引用**真实随包模板**——单测即验发布物
+ *  （不是副本）；无 python 环境跳过（CI 容错——开发机 anaconda python 3.14 实证） */
+const PYTHON_TEMPLATE_DIR = fileURLToPath(
+  new URL('../../../apps/desktop/resources/plugins/openbot.hello-python/', import.meta.url),
+)
+const pythonOk = await new Promise<boolean>((resolve) => {
+  execFile('python', ['--version'], (err) => resolve(err === null))
+})
+
+describe('PluginService（Python 插件——v0.1.92 首个非 node 实跑：where 解析 + 真实 stdio 握手）', () => {
+  it.skipIf(!pythonOk)('启用即常驻运行 + 双工具桥接注册（前缀 = id 尾段 hello-python）', async () => {
+    const h = makeHarness()
+    await h.writePlugin(
+      {
+        ...VALID,
+        id: 'openbot.hello-python',
+        name: 'Hello Python',
+        entry: { command: 'python', args: ['server.py'] },
+        events: [{ type: 'hello-python.fired' }],
+      },
+      PYTHON_TEMPLATE_DIR,
+    )
+    await h.service.enable('openbot.hello-python')
+    // 事件源：启用即运行——运行态 = 真实 python 进程 + initialize 握手 + tools/list 已成
+    expect(h.service.states().find((s) => s.id === 'openbot.hello-python')?.state).toBe('running')
+    expect(h.tools.has('hello-python_pyhello')).toBe(true)
+    expect(h.tools.has('hello-python_pynotify')).toBe(true)
+    await h.service.disable('openbot.hello-python')
+    expect(h.tools.has('hello-python_pyhello')).toBe(false)
+  })
+})
 
 describe('manifest 校验（PluginService 声明面）', () => {
   it('合法 manifest 通过；id 形状/版本字面量非法拒绝', () => {

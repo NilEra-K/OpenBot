@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "openbot.hello-python",
+  "name": "示例 · Hello Python",
+  "version": "0.1.0",
+  "description": "最小可抄模板（Python 版，v0.1.92 首个非 node 实证）：一个工具 + 一个会发上行事件的工具——零依赖纯标准库",
+  "entry": { "command": "python", "args": ["server.py"] },
+  "permissions": [],
+  "events": [{ "type": "hello-python.fired" }],
+  "hooks": [],
+  "agents": []
+}
