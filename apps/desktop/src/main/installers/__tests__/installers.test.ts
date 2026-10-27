@@ -283,9 +283,22 @@ describe('状态分层探测（v0.1.89：装没装 × 跑没跑）', () => {
     expect(await probePodmanLayered(reply({}), 'podman', 'linux')).toEqual({ installState: 'installed', engineState: 'running' })
   })
 
-  it('wsl：--status 过 → installed/running（按需内核特性无独立引擎）；不过 → absent', async () => {
+  it('wsl（v0.1.91 细分）：--status 过 → installed/running；不过但 wsl.exe 在场 → feature-off（组件未启用）；CLI 缺席 → absent', async () => {
     expect(await probeWslLayered(reply({ 'wsl --status': R() }))).toEqual({ installState: 'installed', engineState: 'running' })
-    expect(await probeWslLayered(reply({ 'wsl --status': R({ exitCode: 1, stderr: '未安装' }) }))).toEqual({
+    expect(
+      await probeWslLayered(
+        reply({
+          'wsl --status': R({ exitCode: 1, stderr: '未启用' }),
+          'where wsl': R({ stdout: 'C:\\Windows\\System32\\wsl.exe\r\n' }),
+        }),
+      ),
+    ).toEqual({ installState: 'installed', engineState: 'stopped', note: 'feature-off' })
+    // --status spawn 失败（CLI 缺席形态）与 where 不中 → 真未装
+    expect(await probeWslLayered(reply({ 'wsl --status': spawnMissing('wsl'), 'where wsl': R({ exitCode: 1 }) }))).toEqual({
+      installState: 'absent',
+      engineState: 'unknown',
+    })
+    expect(await probeWslLayered(reply({ 'wsl --status': R({ exitCode: 1, stderr: 'x' }), 'where wsl': R({ exitCode: 1 }) }))).toEqual({
       installState: 'absent',
       engineState: 'unknown',
     })

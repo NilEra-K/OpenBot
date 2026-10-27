@@ -393,8 +393,9 @@ export const useKernelStore = defineStore('kernel', {
       notes: string[]
       installState: 'absent' | 'installed' | 'unknown' | null
       engineState: 'running' | 'stopped' | 'unknown' | null
-      /** 引擎未跑细分事实（machine-missing = podman 无 machine——start 必败，UI 分流「需初始化」） */
-      note?: 'machine-missing'
+      /** 引擎未跑细分事实（machine-missing = podman 无 machine——start 必败，UI 分流「需初始化」；
+       *  feature-off = wsl.exe 在场但组件未启用——一键安装即修复（v0.1.91） */
+      note?: 'machine-missing' | 'feature-off'
       launchSupported: boolean
       /** 启动提权面（2026-10-27 v0.1.90）：polkit → UI 先弹启动确认模态（提权透明红线）；none 一键直启 */
       launchElevation: 'none' | 'polkit'

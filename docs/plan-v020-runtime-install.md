@@ -104,6 +104,12 @@ apps/desktop/src/main/installers/
 - **linux podman daemonless 修正（v0.1.89 遗留 bug）**：linux podman 无 machine 概念、CLI 在场即恒可用——machine list 探测会误报「需初始化」；`probePodmanLayered` 增平台参数（linux 短路 installed+running）。
 - **如实记档**：mac/linux 启动链真机验收待作者手动（Windows 开发机不可验——单测 fake runner 覆盖形状与结算，与 v0.1.86 安装器同纪律）。
 
+## 5e. 第六批（2026-10-27 v0.1.91：状态一致性——探测卡活探测 + wsl2 细分 + 验收清单）
+
+- **探测卡一致性**：`v1.sandbox.status` 的 probes 改**调用时活探测**（`probeAll` 现探现返回——其他载体行/imageForm 默认判定与运行时矩阵同鲜度）；内部 `sandboxStatus.probes` 保留 boot 装配事实（chooseBackend 构造期判定——两套语义各司其职）。设置页分节进入时 status 与 list 双刷。
+- **wsl2「未装 vs 未启用」细分**：`probeWslLayered`——`where wsl` 命中而 `wsl --status` 失败 = 组件未启用（installed + stopped + 新稳定码 `feature-off`；一键安装即修复 `wsl --install`）；wsl.exe 缺席才是 absent。UI：feature-off 行显示一键安装钮（修复路径）+ desc 说明——不与「未装」混淆，也不给无动作的「已安装」签。
+- **验收清单模板化**：`docs/acceptance.md`——散落各提交信息的「待作者手动」收成滚动总账（本批起维护）。
+
 ## 6. 验证策略
 
 - 单测：策略表形状/发行版命令分支/下载器（本地 http 源：进度+sha256 通过与拒绝）/目录解析；2026-10-27 增：分层探测矩阵（docker/podman/wsl 装跑两维 + linux podman daemonless）、启动器（bin 上两级推导/exe 与 CLI 多默认位解析/engineReadyOf 三态/轮询 ready·timeout·canceled 收敛/app·open-app·cli·polkit·mock 拉起与结算形态）、launch 声明矩阵（全平台）、看门狗跃迁（掉线→恢复各一次、unknown 不误报）；

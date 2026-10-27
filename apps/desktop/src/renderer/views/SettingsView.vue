@@ -1183,6 +1183,7 @@ const launchTipLines = (inst: typeof kernel.runtimeInstallers[number]): string[]
 /** 已装未跑一行提示（2026-10-27 裁定：一行一职）：DD 引导去官方设置勾开机自启（应用不代改）；
  *  podman 无 machine 给 init 指引；未声明启动（linux/mac backlog）如实说明 */
 const stoppedDesc = (inst: typeof kernel.runtimeInstallers[number]): string => {
+  if (inst.note === 'feature-off') return 'WSL 组件未启用——一键安装将启用系统组件（可能需重启完成）'
   if (inst.note === 'machine-missing') return '已安装，尚无 podman machine——需先在终端执行 podman machine init 初始化'
   if (inst.id === 'docker-desktop' && inst.platform === 'win32') {
     return '引擎未运行——启动后即可用；开机自启可在 Docker Desktop 设置（General）中勾选，应用不代改'
@@ -1192,10 +1193,13 @@ const stoppedDesc = (inst: typeof kernel.runtimeInstallers[number]): string => {
   return '已安装，引擎未运行——启动器暂缓（后续批次提供），请先在应用外启动'
 }
 
-// 分节进入刷新（v0.1.90）：运行时矩阵是活探测事实——切进本节拉新（外部启停引擎后旧态不残留；
-// 探测幂等秒级，v1.sandbox.status 不刷——probes 是构造期快照，刷了也不动）
+// 分节进入刷新（v0.1.90 起；v0.1.91 起 status 也活探测——其他载体行同享鲜度）：运行时矩阵与
+// 探测事实切进本节拉新（外部启停引擎后旧态不残留；探测幂等秒级）
 watch(activeSection, (s) => {
-  if (s === 'runtime') void kernel.refreshRuntimeInstallers().catch(() => {})
+  if (s === 'runtime') {
+    void kernel.refreshSandbox().catch(() => {})
+    void kernel.refreshRuntimeInstallers().catch(() => {})
+  }
 })
 
 const doInstall = async (): Promise<void> => {
@@ -1523,6 +1527,11 @@ const wslRelevant = computed(
               <!-- 需初始化（podman 无 machine：start 必败不给启动钮——init 指引在行说明） -->
               <template v-else-if="row.local.note === 'machine-missing'">
                 <span class="chip">需初始化</span>
+              </template>
+              <!-- 组件未启用（v0.1.91 wsl2 细分）：wsl.exe 在场但 WSL 未启用——一键安装即修复路径
+                   （wsl --install；desc 说明），不与「未装」混淆也不给无动作的「已安装」签 -->
+              <template v-else-if="row.local.note === 'feature-off'">
+                <button type="button" class="btn btn-primary" @click="openInstallConfirm(row.local)">一键安装</button>
               </template>
               <!-- 三态之二：已装·未跑——声明启动策略才有启动钮（旁 ⓘ 首启条款；polkit 型点击先过确认模态） -->
               <template v-else-if="row.local.installState === 'installed' && row.local.launchSupported">

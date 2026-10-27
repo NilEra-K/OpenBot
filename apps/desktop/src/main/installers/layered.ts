@@ -11,8 +11,9 @@ import type { ProcRunner } from '@openbot/boxes'
 
 export type InstallState = 'absent' | 'installed' | 'unknown'
 export type EngineState = 'running' | 'stopped' | 'unknown'
-/** 引擎未跑的细分事实（渲染层映射文案）：machine-missing = podman 已装但尚无 machine（start 必败） */
-export type EngineNote = 'machine-missing'
+/** 引擎未跑的细分事实（渲染层映射文案）：machine-missing = podman 已装但尚无 machine（start 必败）；
+ *  feature-off = wsl.exe 在场但 WSL 组件未启用（一键安装即修复——v0.1.91 细分「未装 vs 未启用」） */
+export type EngineNote = 'machine-missing' | 'feature-off'
 
 export interface LayeredProbeResult {
   installState: InstallState
@@ -72,14 +73,24 @@ export async function probePodmanLayered(
   }
 }
 
-/** WSL2 分层：wsl --status 过 = 组件可用（按需启动的内核特性，无独立引擎可启——直映射 running）；
- *  不过（未启用/未装）= absent（一键 wsl --install 即修复路径，与旧 available=false 同分流） */
+/**
+ * WSL2 分层（v0.1.91 细分「未装 vs 未启用」）：wsl --status 过 = 组件可用（按需启动的内核特性，
+ * 无独立引擎可启——直映射 running）；不过时按 CLI 在场性分列——wsl.exe 随 Windows 发行，
+ * `where wsl` 命中而 --status 失败 = 组件未启用（installed + stopped + feature-off——
+ * `wsl --install` 即修复，与未装同走一键安装钮但状态如实分列）；CLI 缺席才是真未装（absent）。
+ */
 export async function probeWslLayered(run: ProcRunner): Promise<LayeredProbeResult> {
   try {
     const r = await run({ command: ['wsl', '--status'], timeoutMs: 10_000, encoding: 'utf16le' })
     if (r.exitCode === 0) return { installState: 'installed', engineState: 'running' }
-    return { installState: 'absent', engineState: 'unknown' }
   } catch {
-    return { installState: 'absent', engineState: 'unknown' }
+    // --status spawn 失败（CLI 缺席形态）→ 落到 where 判定
   }
+  try {
+    const where = await run({ command: ['where', 'wsl'], timeoutMs: 10_000 })
+    if (where.exitCode === 0) return { installState: 'installed', engineState: 'stopped', note: 'feature-off' }
+  } catch {
+    // where 不可用——按未装收敛
+  }
+  return { installState: 'absent', engineState: 'unknown' }
 }

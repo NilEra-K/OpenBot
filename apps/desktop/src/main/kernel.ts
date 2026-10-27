@@ -1526,7 +1526,10 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       backendId: sandboxStatus.chosen.backendId,
       wanted: sandboxStatus.chosen.wanted,
       ...(sandboxStatus.chosen.reason !== undefined ? { reason: sandboxStatus.chosen.reason } : {}),
-      probes: sandboxStatus.probes,
+      // 探测卡一致性（2026-10-27 v0.1.91）：现探现返回（其他载体行/imageForm 拿到活事实——
+      // 与 v1.runtime.list 同鲜度）；内部 sandboxStatus.probes 保留 boot 装配事实不动
+      // （chooseBackend 是构造期判定，两套语义各司其职）。并行 ~6 探测秒级幂等
+      probes: await probeAll(runProcess, platform, sshOpts),
       rootfsPath: sandboxStatus.rootfsPath,
       rootfsReady: sandboxStatus.rootfsReady,
       backendCaps: sandboxStatus.backendCaps,
@@ -1606,7 +1609,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
               installState = mockRuntimeInstalled ? 'installed' : 'absent'
               engineState = mockRuntimeEngineRunning ? 'running' : 'stopped'
             } else if (st.id === 'wsl2') {
-              ;({ installState, engineState } = probeOf('wsl'))
+              const p = probeOf('wsl')
+              ;({ installState, engineState } = p)
+              note = p.note
             } else if (st.id === 'podman') {
               const p = probeOf('podman')
               ;({ installState, engineState } = p)
