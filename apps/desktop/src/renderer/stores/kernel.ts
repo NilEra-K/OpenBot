@@ -396,6 +396,8 @@ export const useKernelStore = defineStore('kernel', {
       /** 引擎未跑细分事实（machine-missing = podman 无 machine——start 必败，UI 分流「需初始化」） */
       note?: 'machine-missing'
       launchSupported: boolean
+      /** 启动提权面（2026-10-27 v0.1.90）：polkit → UI 先弹启动确认模态（提权透明红线）；none 一键直启 */
+      launchElevation: 'none' | 'polkit'
     }>,
     /** 安装实况（事件驱动：runtimeId → 最新 phase/percent/detail/兜底命令） */
     runtimeProgress: {} as Record<string, { phase: string; percent?: number; detail?: string; command?: string }>,
@@ -1264,10 +1266,26 @@ export const useKernelStore = defineStore('kernel', {
               const launchFail = (p.detail ?? '').startsWith('RUNTIME_LAUNCH')
               useToastStore().push(`${launchFail ? '运行时启动失败' : '运行时安装失败'}：${p.detail ?? '未知原因'}`, 'error')
             }
+            // 就绪成功面（v0.1.90）：后台等待转就绪也有感知（不只失败有 toast）
+            if (p.phase === 'ready') {
+              const name = this.runtimeInstallers.find((i) => i.id === p.runtimeId)?.runtime ?? p.runtimeId
+              useToastStore().push(`运行时已就绪：${name}`, 'success')
+            }
             // 刷新 fire-and-forget（onEvent 是同步投影——SSE 后续事件自然对齐）
             void this.refreshSandbox().catch(() => {})
             void this.refreshRuntimeInstallers().catch(() => {})
           }
+          return
+        }
+        case 'v1.runtime.engine': {
+          // 引擎看门狗跃迁（v0.1.90）：掉线警示/恢复告知 + 矩阵同步（超出设置页的鲜度兜底）
+          const p = event.payload
+          const label = p.engine === 'docker' ? 'Docker' : 'Podman'
+          useToastStore().push(
+            p.running ? `沙箱引擎已恢复：${label}` : `沙箱引擎已停止：${label}——容器操作将失败`,
+            p.running ? 'success' : 'error',
+          )
+          void this.refreshRuntimeInstallers().catch(() => {})
           return
         }
         case 'v1.plugin.event': {

@@ -1005,7 +1005,8 @@ const onDirIcon = (row: MatrixRow): void => {
 const installModal = reactive<{
   open: boolean
   installer: typeof kernel.runtimeInstallers[number] | null
-  stage: 'confirm' | 'installing' | 'done' | 'failed' | 'canceled'
+  /** launchConfirm（v0.1.90）：polkit 提权启动的确认段（提权透明红线——免提权运行时不经此段） */
+  stage: 'confirm' | 'launchConfirm' | 'installing' | 'done' | 'failed' | 'canceled'
   installDir: string
   dataDir: string
 }>({ open: false, installer: null, stage: 'confirm', installDir: '', dataDir: '' })
@@ -1118,21 +1119,45 @@ const doCancelInstall = async (): Promise<void> => {
 }
 
 /** 启动已装未跑的运行时（2026-10-27 v0.1.89）：受理即返——行转「启动中…」行内态
- *  （launch/ready 相位驱动；DD 默认位解析让装完即启免重启应用） */
-const doLaunchRuntime = async (id: string): Promise<void> => {
+ *  （launch/ready 相位驱动；DD 默认位解析让装完即启免重启应用）。
+ *  polkit 提权启动（v0.1.90 linux docker）先过确认模态——提权透明红线（安装确认同款告知） */
+const doLaunchRuntime = async (inst: typeof kernel.runtimeInstallers[number]): Promise<void> => {
+  if (inst.launchElevation === 'polkit') {
+    installModal.open = true
+    installModal.installer = inst
+    installModal.stage = 'launchConfirm'
+    return
+  }
   try {
-    await kernel.launchRuntime(id)
+    await kernel.launchRuntime(inst.id)
   } catch (err) {
     toast.push(err instanceof Error ? err.message : String(err), 'error')
   }
 }
 
-/** done 模态「立即启动」（2026-10-27 启动引导）：关模态转行内启动态 */
+/** done 模态「立即启动」（2026-10-27 启动引导）：免提权关模态转行内启动态；
+ *  polkit 提权（v0.1.90）模态原位转启动确认段（提权告知先行） */
 const doLaunchFromDone = async (): Promise<void> => {
   const target = installModal.installer
   if (target === null) return
+  if (target.launchElevation === 'polkit') {
+    installModal.stage = 'launchConfirm'
+    return
+  }
   installModal.open = false
-  await doLaunchRuntime(target.id)
+  await doLaunchRuntime(target)
+}
+
+/** launchConfirm 模态「开始启动」（v0.1.90 linux docker——polkit 确认后执行） */
+const doLaunchConfirmed = async (): Promise<void> => {
+  const target = installModal.installer
+  if (target === null) return
+  installModal.open = false
+  try {
+    await kernel.launchRuntime(target.id)
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
 }
 
 /** 取消启动等待（2026-10-27 裁定：停轮询——已拉起的程序不受影响） */
@@ -1144,11 +1169,14 @@ const doCancelLaunch = async (id: string): Promise<void> => {
   }
 }
 
-/** 启动钮旁 ⓘ 首启条款（2026-10-27 裁定：文案如实——首启需在上游应用内完成初始化） */
+/** 启动钮旁 ⓘ 首启条款（2026-10-27 裁定：文案如实——首启需在上游应用内完成初始化；
+ *  polkit 型如实说明授权与耗时形态） */
 const launchTipLines = (inst: typeof kernel.runtimeInstallers[number]): string[] => [
-  inst.id === 'docker-desktop'
-    ? '首次启动需在 Docker Desktop 内完成初始化，可能需数分钟'
-    : '首次启动需初始化虚拟机，可能需数分钟',
+  inst.launchElevation === 'polkit'
+    ? '启动经系统授权（polkit）执行 systemctl start docker——通常数秒完成'
+    : inst.id === 'docker-desktop'
+      ? '首次启动需在 Docker Desktop 内完成初始化，可能需数分钟'
+      : '首次启动需初始化虚拟机，可能需数分钟',
   '应用等待就绪最长 5 分钟，可随时「取消等待」——不影响已启动的程序',
 ]
 
@@ -1163,6 +1191,12 @@ const stoppedDesc = (inst: typeof kernel.runtimeInstallers[number]): string => {
   if (inst.launchSupported) return '已安装，引擎未运行——启动后即可用'
   return '已安装，引擎未运行——启动器暂缓（后续批次提供），请先在应用外启动'
 }
+
+// 分节进入刷新（v0.1.90）：运行时矩阵是活探测事实——切进本节拉新（外部启停引擎后旧态不残留；
+// 探测幂等秒级，v1.sandbox.status 不刷——probes 是构造期快照，刷了也不动）
+watch(activeSection, (s) => {
+  if (s === 'runtime') void kernel.refreshRuntimeInstallers().catch(() => {})
+})
 
 const doInstall = async (): Promise<void> => {
   const target = installModal.installer
@@ -1490,9 +1524,9 @@ const wslRelevant = computed(
               <template v-else-if="row.local.note === 'machine-missing'">
                 <span class="chip">需初始化</span>
               </template>
-              <!-- 三态之二：已装·未跑——声明启动策略才有启动钮（旁 ⓘ 首启条款；linux/mac backlog 不给假钮） -->
+              <!-- 三态之二：已装·未跑——声明启动策略才有启动钮（旁 ⓘ 首启条款；polkit 型点击先过确认模态） -->
               <template v-else-if="row.local.installState === 'installed' && row.local.launchSupported">
-                <button type="button" class="btn btn-primary" @click="doLaunchRuntime(row.local!.id)">启动</button>
+                <button type="button" class="btn btn-primary" @click="doLaunchRuntime(row.local)">启动</button>
                 <HelpTip :lines="launchTipLines(row.local!)" />
               </template>
               <!-- 已装未跑但未声明启动（backlog 行）：如实标注 -->
@@ -1522,7 +1556,13 @@ const wslRelevant = computed(
             <div class="am-head">
               <div class="am-head-left">
                 <span class="am-title">
-                  {{ installModal.stage === 'confirm' ? `安装 ${installModal.installer.runtime}` : installModal.installer.runtime }}
+                  {{
+                    installModal.stage === 'confirm'
+                      ? `安装 ${installModal.installer.runtime}`
+                      : installModal.stage === 'launchConfirm'
+                        ? `启动 ${installModal.installer.runtime}`
+                        : installModal.installer.runtime
+                  }}
                 </span>
                 <!-- 如实事注收纳（2026-10-26 用户裁定）：notes + 体积行收进标题右侧 ⓘ——
                      正文只留位置与提权告知（UAC/polkit 是安全透明，不收纳） -->
@@ -1551,6 +1591,11 @@ const wslRelevant = computed(
               <p v-if="installModal.installer.elevation === 'uac'" class="am-line">⚠ 将弹出系统授权框（UAC）——由你确认后才安装。</p>
               <p v-else-if="installModal.installer.elevation === 'polkit'" class="am-line">⚠ 将弹出系统授权框（polkit 密码框）——由你确认后才安装。</p>
             </div>
+            <!-- 阶段：启动确认（v0.1.90 linux docker——polkit 提权透明；免提权运行时不经此段一键直启） -->
+            <div v-else-if="installModal.stage === 'launchConfirm'" class="am-body">
+              <p class="am-line">{{ installModal.installer.runtime }} 已安装但引擎未运行——启动后即可用。</p>
+              <p class="am-line">⚠ 将弹出系统授权框（polkit 密码框）——由你确认后才启动（sudo systemctl start docker）。</p>
+            </div>
             <!-- 阶段二：安装进行中（phase/进度条/detail/兜底命令——原行内联内容收拢于此） -->
             <div v-else-if="installModal.stage === 'installing'" class="am-body">
               <div class="ri-progress is-modal">
@@ -1565,12 +1610,16 @@ const wslRelevant = computed(
             </div>
             <!-- 阶段三：结果（完成/失败/取消——取消是用户主权不误报失败） -->
             <div v-else class="am-body">
-              <p v-if="installModal.stage === 'done'" class="am-line am-ok">✓ 安装完成——如探测未即时生效，重启应用后即可。</p>
+              <p v-if="installModal.stage === 'done'" class="am-line am-ok">
+                {{ installModal.installer.launchSupported ? '✓ 安装完成——点「立即启动」即可就绪。' : '✓ 安装完成——状态已即时更新；用作沙箱后端需重启应用生效。' }}
+              </p>
               <p v-else-if="installModal.stage === 'canceled'" class="am-line">已取消——未做任何更改（临时文件已清理）。</p>
               <p v-else class="am-line">✗ 安装失败：{{ installProgress?.detail ?? '未知原因' }}</p>
             </div>
             <div class="am-actions">
               <button v-if="installModal.stage === 'confirm'" type="button" class="btn btn-primary" @click="doInstall">开始安装</button>
+              <!-- launchConfirm 主钮（v0.1.90 linux docker——polkit 确认后执行，行转「启动中…」） -->
+              <button v-if="installModal.stage === 'launchConfirm'" type="button" class="btn btn-primary" @click="doLaunchConfirmed">开始启动</button>
               <!-- done + 声明启动策略（2026-10-27 启动引导）：立即启动主钮——装完即启，
                    DD 默认位解析免重启应用（行转「启动中…」行内态） -->
               <button v-if="installModal.stage === 'done' && installModal.installer.launchSupported" type="button" class="btn btn-primary" @click="doLaunchFromDone">立即启动</button>
@@ -1581,7 +1630,7 @@ const wslRelevant = computed(
                 <button type="button" class="btn btn-ghost" @click="installModal.open = false">{{ installProgress?.phase === 'launch' ? '后台等待' : '后台下载' }}</button>
                 <button type="button" class="btn btn-danger-ghost" @click="doCancelInstall">{{ installProgress?.phase === 'launch' ? '取消等待' : '取消' }}</button>
               </template>
-              <button v-if="installModal.stage !== 'installing'" type="button" class="btn btn-ghost" @click="installModal.open = false">{{ installModal.stage === 'confirm' ? '取消' : '关闭' }}</button>
+              <button v-if="installModal.stage !== 'installing'" type="button" class="btn btn-ghost" @click="installModal.open = false">{{ ['confirm', 'launchConfirm'].includes(installModal.stage) ? '取消' : '关闭' }}</button>
             </div>
           </div>
         </div>

@@ -48,9 +48,16 @@ export async function probeDockerLayered(
  * Podman 分层：machine list 的 Running 字段判引擎态（probePodman 同判据——podman info 返回
  * client 侧信息探不出运行态）。空列表 → stopped + machine-missing（start 必败，UI 分流「需初始化」）；
  * 输出异常/无法解析 → unknown 如实。
+ * linux 例外（v0.1.90 修正 v0.1.89 遗留 bug）：linux podman 是 daemonless——无 machine 概念、
+ * 无守护进程可启，CLI 在场即恒可用；machine list 探测在 linux 会误报「需初始化」。
  */
-export async function probePodmanLayered(run: ProcRunner, cli: string | null): Promise<LayeredProbeResult> {
+export async function probePodmanLayered(
+  run: ProcRunner,
+  cli: string | null,
+  platform: NodeJS.Platform,
+): Promise<LayeredProbeResult> {
   if (cli === null) return { installState: 'absent', engineState: 'unknown' }
+  if (platform === 'linux') return { installState: 'installed', engineState: 'running' }
   try {
     const r = await run({ command: [cli, 'machine', 'list', '--format', 'json'], timeoutMs: 10_000 })
     if (r.exitCode !== 0) return { installState: 'installed', engineState: 'unknown' }

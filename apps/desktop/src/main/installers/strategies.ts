@@ -39,20 +39,35 @@ export interface LocationFlags {
   dataDir?: string
 }
 
-/** 启动策略（2026-10-27 v0.1.89 已装未跑分层）：声明制——未声明者不显示启动钮（linux/mac backlog）。
- *  - app：拉起桌面应用（win Docker Desktop——detached 免提权；exe 定位 = CLI 路径 bin 上两级推导，
- *    回退官方默认安装位——新装后本进程 PATH 未含 CLI 也能启动）
- *  - machine-start：CLI 子命令启动虚拟机（win podman machine start）
+/** 启动策略（2026-10-27 v0.1.89 已装未跑分层；同日 v0.1.90 跨平台补齐）：声明制——
+ *  未声明者不显示启动钮。提权透明（安装确认同款红线）：elevation=polkit 的启动 UI 先弹确认模态。
+ *  - app：拉起桌面应用（win DD——detached；exe 定位 = CLI bin 上两级推导 → 官方默认位回退）
+ *  - cli：CLI 子命令启动（podman machine start / colima start / systemctl start docker——
+ *    polkit 经 pkexec 包裹；就绪探测通道 readyCheck，探测 CLI 的回退路径表属启动器实现细节不进声明）
+ *  - open-app：macOS LaunchServices 拉起（open -a——GUI 进程 PATH 不含 brew 位时的可靠寻径）
  *  - mock：E2E 专用（内存等待不触真系统——mock 对称铁律） */
 export type LaunchStrategy =
-  | { kind: 'app'; exeName: string; defaultRoot: string }
-  | { kind: 'machine-start'; defaultCliPath: string }
-  | { kind: 'mock' }
+  | { kind: 'app'; exeName: string; defaultRoot: string; elevation?: 'none' | 'polkit' }
+  | {
+      kind: 'cli'
+      /** 启动命令的 CLI（解析：PATH → defaultCliPaths 按序回退） */
+      cli: string
+      startArgs: string[]
+      /** 默认安装位回退（win PATH 继承坑 / mac GUI PATH 不含 brew 位——同源坑） */
+      defaultCliPaths?: string[]
+      /** 就绪探测通道（docker info Server 段 / podman machine list Running / colima status） */
+      readyCheck: 'docker-info' | 'podman-machine' | 'colima-status'
+      elevation?: 'none' | 'polkit'
+    }
+  | { kind: 'open-app'; appName: string; readyCheck: 'docker-info'; elevation?: 'none' | 'polkit' }
+  | { kind: 'mock'; elevation?: 'none' | 'polkit' }
 
 /** 官方默认安装位（win，2026-10-27）：launch 声明与壳层 CLI/exe 解析回退共用——
  *  Windows 进程 PATH 启动时继承，新装运行时 CLI 不在本进程 PATH，默认位在场即判已装/可直接拉起 */
 export const DOCKER_DESKTOP_WIN_ROOT = 'C:\\Program Files\\Docker\\Docker'
 export const PODMAN_WIN_EXE = 'C:\\Program Files\\Podman\\podman.exe'
+/** macOS Docker Desktop 应用位（brew cask 默认——darwin 行 installState 探测用） */
+export const DOCKER_APP_MAC = '/Applications/Docker.app'
 
 export interface RuntimeStrategy {
   id: RuntimeId
@@ -125,8 +140,15 @@ export const STRATEGIES: RuntimeStrategy[] = [
     elevation: 'uac',
     // WiX INSTALLDIR 公开属性（contrib/win-installer/wix/podman-main.wxs Directory Id=INSTALLDIR）
     locationFlags: { installDir: 'INSTALLDIR=' },
-    // 启动引导（2026-10-27 win 先行）：podman machine start（用户级 VM 操作免提权）
-    launch: { kind: 'machine-start', defaultCliPath: PODMAN_WIN_EXE },
+    // 启动引导（v0.1.90 迁 cli 型）：podman machine start（用户级 VM 操作免提权）
+    launch: {
+      kind: 'cli',
+      cli: 'podman',
+      startArgs: ['machine', 'start'],
+      defaultCliPaths: [PODMAN_WIN_EXE],
+      readyCheck: 'podman-machine',
+      elevation: 'none',
+    },
     locationNote: '安装位置可自选（MSI INSTALLDIR 属性）。容器数据位置受上游限制（machine 目录 C 盘真实目录 bug）——不可选',
     notes: [
       'GitHub Releases latest（API digest sha256 强校验）',
@@ -141,6 +163,15 @@ export const STRATEGIES: RuntimeStrategy[] = [
     platform: 'linux',
     source: { kind: 'package-manager', package: 'docker' },
     elevation: 'polkit',
+    // 启动引导（v0.1.90 作者裁定含本批）：systemctl start docker 经 pkexec（polkit 提权——UI 先弹确认模态）
+    launch: {
+      kind: 'cli',
+      cli: 'systemctl',
+      startArgs: ['start', 'docker'],
+      defaultCliPaths: ['/usr/bin/systemctl'],
+      readyCheck: 'docker-info',
+      elevation: 'polkit',
+    },
     locationNote: '安装位置由包管理器决定；容器数据位置（--data-root）属 daemon 配置——装后另行设置',
     notes: ['按发行版经包管理器安装（apt/dnf/pacman）', 'polkit 缺席环境自动回退为命令生成'],
   },
@@ -160,6 +191,8 @@ export const STRATEGIES: RuntimeStrategy[] = [
     platform: 'darwin',
     source: { kind: 'package-manager', package: 'docker', cask: true },
     elevation: 'none',
+    // 启动引导（v0.1.90）：open -a Docker（LaunchServices——GUI 进程 PATH 不含 brew 位）
+    launch: { kind: 'open-app', appName: 'Docker', readyCheck: 'docker-info' },
     locationNote: '安装位置与容器数据位置由 Docker Desktop 决定（brew cask 不可选；装后应用内可调）',
     notes: ['经 Homebrew 安装（brew 缺席时给出官方安装引导）', '许可注意同 Windows 版'],
   },
@@ -169,6 +202,15 @@ export const STRATEGIES: RuntimeStrategy[] = [
     platform: 'darwin',
     source: { kind: 'package-manager', package: 'colima docker' },
     elevation: 'none',
+    // 启动引导（v0.1.90）：colima start（免提权；colima status 判就绪；brew 双位回退）
+    launch: {
+      kind: 'cli',
+      cli: 'colima',
+      startArgs: ['start'],
+      defaultCliPaths: ['/opt/homebrew/bin/colima', '/usr/local/bin/colima'],
+      readyCheck: 'colima-status',
+      elevation: 'none',
+    },
     locationNote: '安装位置由 brew 决定；虚拟机磁盘属装后配置（colima start --disk）——安装时不可选',
     notes: ['Docker Desktop 的免费开源替代（容器后端 + docker CLI）'],
   },
@@ -178,6 +220,15 @@ export const STRATEGIES: RuntimeStrategy[] = [
     platform: 'darwin',
     source: { kind: 'package-manager', package: 'podman' },
     elevation: 'none',
+    // 启动引导（v0.1.90）：podman machine start（同 win 形；brew 双位回退）
+    launch: {
+      kind: 'cli',
+      cli: 'podman',
+      startArgs: ['machine', 'start'],
+      defaultCliPaths: ['/opt/homebrew/bin/podman', '/usr/local/bin/podman'],
+      readyCheck: 'podman-machine',
+      elevation: 'none',
+    },
     locationNote: '安装位置由 brew 决定；machine 数据目录不可选',
     notes: ['经 Homebrew 安装'],
   },

@@ -22,9 +22,11 @@ import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
 import { NodeFs, SettingsStore, MemoryStore, AutomationStore, ImageStore, nextAfter } from '@openbot/state'
 import { manifestSchema } from '@openbot/coordinator'
-import { STRATEGIES, strategiesFor, DOCKER_DESKTOP_WIN_ROOT, PODMAN_WIN_EXE } from './installers/strategies.js'
+import { STRATEGIES, strategiesFor, DOCKER_DESKTOP_WIN_ROOT, DOCKER_APP_MAC } from './installers/strategies.js'
 import { runInstall } from './installers/index.js'
-import { runLaunch, resolveDockerCli, resolveDockerDesktopExe, resolvePodmanCli } from './installers/launcher.js'
+import { runLaunch, resolveDockerDesktopExe, resolveCli, READY_CLI_FALLBACKS } from './installers/launcher.js'
+import { createEngineWatchdog } from './installers/watchdog.js'
+import type { EngineWatchdogHandle } from './installers/watchdog.js'
 import { probeDockerLayered, probePodmanLayered, probeWslLayered } from './installers/layered.js'
 import type { LayeredProbeResult, InstallState, EngineState, EngineNote } from './installers/layered.js'
 import type { RuntimeStrategy } from './installers/strategies.js'
@@ -952,6 +954,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
    *  ——模拟 DD 完整生命周期；在事件回调内同步置位（早于渲染层刷新拉取，免竞态读到旧态） */
   let mockRuntimeInstalled = false
   let mockRuntimeEngineRunning = false
+  /** 引擎看门狗（2026-10-27 v0.1.90）：选定后端 docker/podman 时周期探测——外部掉线/恢复
+   *  经 v1.runtime.engine 跃迁通知；随应用退出 stop（孤儿定时器不留） */
+  let engineWatchdog: EngineWatchdogHandle | null = null
   const sandboxStatus: SandboxStatus = {
     preference,
     stored: await settings.getSandbox(),
@@ -1061,6 +1066,24 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       }
     })(),
   })
+
+  // 引擎看门狗（2026-10-27 v0.1.90）：选定后端 docker/podman 时周期探测——外部掉线/恢复经
+  // v1.runtime.engine 跃迁通知（toast + 矩阵刷新）；仅跃迁触发不刷屏，boot 基线 = 装配期可用。
+  // E2E（mock 后端）不装配——确定性不受真机引擎态影响
+  const backendEngine =
+    sandboxStatus.chosen.backendId === 'docker' || sandboxStatus.chosen.backendId === 'podman'
+      ? (sandboxStatus.chosen.backendId as 'docker' | 'podman')
+      : null
+  if (backendEngine !== null) {
+    engineWatchdog = createEngineWatchdog({
+      engine: backendEngine,
+      run: runProcess,
+      exists: existsSync,
+      onTransition: (running) => {
+        kernel.bus.emit('v1.runtime.engine', { engine: backendEngine, running })
+      },
+    })
+  }
 
   // GUI 注入常驻通道随 P8-2 接口化迁入 X11ScreenControl（kernel.screen.inputChannel）——
   // 惰性建立/随 Box 失效重建/进程退出自动除名/dispose 兜底杀（孤儿纪律）全部内聚适配器；
@@ -1561,12 +1584,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
           if (t === 'wsl') {
             layered.set('wsl', await probeWslLayered(runProcess))
           } else if (t === 'docker') {
-            const cli = await resolveDockerCli(runProcess, exists, DOCKER_DESKTOP_WIN_ROOT)
+            const cli = await resolveCli(runProcess, 'docker', READY_CLI_FALLBACKS.docker, exists)
             // DD exe 在场只对 win 有意义（CLI 不可寻时兜底 installed 判定）；他平台 docker 走 PATH 面
             const exe = process.platform === 'win32' ? await resolveDockerDesktopExe(runProcess, exists, DOCKER_DESKTOP_WIN_ROOT) : null
             layered.set('docker', await probeDockerLayered(runProcess, cli, exe))
           } else if (t === 'podman') {
-            layered.set('podman', await probePodmanLayered(runProcess, await resolvePodmanCli(runProcess, exists, PODMAN_WIN_EXE)))
+            layered.set('podman', await probePodmanLayered(runProcess, await resolveCli(runProcess, 'podman', READY_CLI_FALLBACKS.podman, exists), process.platform))
           }
         }),
       )
@@ -1588,7 +1611,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
               const p = probeOf('podman')
               ;({ installState, engineState } = p)
               note = p.note
-            } else if (st.id === 'docker' || st.id === 'colima' || (st.id === 'docker-desktop' && st.platform !== 'darwin')) {
+            } else if (st.id === 'docker-desktop' && st.platform === 'darwin') {
+              // mac DD（v0.1.90）：应用在场（brew cask 默认位）即 installed——brew 面无法经 CLI
+              // 判装没装；引擎态如实用 docker 探测面（DD/colima 共用 docker CLI——同一引擎事实）
+              installState = exists(DOCKER_APP_MAC) ? 'installed' : 'unknown'
+              ;({ engineState } = probeOf('docker'))
+            } else if (st.id === 'docker' || st.id === 'colima' || st.id === 'docker-desktop') {
               ;({ installState, engineState } = probeOf('docker'))
             } else {
               installState = 'unknown'
@@ -1612,8 +1640,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
             installState,
             engineState,
             ...(note !== undefined ? { note } : {}),
-            // 启动声明制（未声明不显示启动钮——linux/mac backlog）：同样只透传布尔
+            // 启动声明制（未声明不显示启动钮）：透传布尔 + 提权面（polkit → UI 先弹启动确认模态）
             launchSupported: st.launch !== undefined,
+            launchElevation: st.launch?.elevation === 'polkit' ? 'polkit' : 'none',
           }
         }),
       }
@@ -2256,6 +2285,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       windowProbe?.dispose() // 窗口清单探测通道（v1.hostscreen.windows 单例）
       kernel.statsService.stop()
       kernel.stopWatchdog()
+      engineWatchdog?.stop() // 引擎看门狗定时器（v0.1.90——孤儿不留）
       clearInterval(automationTimer) // Scheduler 孤儿定时器不留
       for (const { client } of relays) await client.stop() // 断全部房间连接（清重连定时器——孤儿不留）
       await gateway.close()

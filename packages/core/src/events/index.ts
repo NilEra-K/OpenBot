@@ -232,6 +232,13 @@ export interface RuntimeProgressPayload {
   command?: string
 }
 
+/** 沙箱引擎态跃迁（2026-10-27 v0.1.90 看门狗）：选定后端 docker/podman 的引擎 运行↔停止 变化——
+ *  多 agent 长任务中引擎外部掉线的用户感知面（toast 警示/恢复告知 + 矩阵刷新）；仅跃迁触发不刷屏 */
+export interface RuntimeEnginePayload {
+  engine: 'docker' | 'podman'
+  running: boolean
+}
+
 /** 群清单变更（P5 Step 3）：群档案增删——renderer 拉取 v1.group.list 的时机信号 */
 export interface GroupStatePayload {
   groupId: string
@@ -258,6 +265,7 @@ export interface KernelEventMap {
   'v1.group.message': GroupMessagePayload
   'v1.plugin.event': PluginEventPayload
   'v1.runtime.progress': RuntimeProgressPayload
+  'v1.runtime.engine': RuntimeEnginePayload
   'v1.group.state': GroupStatePayload
   'v1.group.cleared': GroupClearedPayload
   'v1.box.state': BoxStatePayload

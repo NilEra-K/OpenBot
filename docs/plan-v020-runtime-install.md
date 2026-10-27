@@ -89,8 +89,23 @@ apps/desktop/src/main/installers/
 - **补位稳定码**（裁定清单外必要项）：`RUNTIME_LAUNCH_BUSY`（单飞防双击）；`engineNote: 'machine-missing'`（podman init 前置事实）。
 - **mock 对称**：mock-runtime 生命周期台账（装完 installed / launch ready 后 running——事件回调内同步置位防竞态）+ `launch: {kind:'mock'}`（内存等待 3s 不触真系统）；安装 builtin 停留 1.5s→3s（取消链断言窗口）。
 
+## 5d. 第五批（2026-10-27 v0.1.90：状态面打磨——分节刷新/看门狗/启动全平台补齐）
+
+**四件套（v0.1.89 余波收尾）+ linux docker 启动（作者当日裁定含本批）+ linux podman 语义修正：**
+
+- **分节刷新**：设置页切到「容器与镜像」时重拉 `v1.runtime.list`（活探测幂等秒级）——外部启停引擎后旧态不残留。`v1.sandbox.status` 不刷（probes 是构造期快照，刷了也不动——探测卡一致性另议）。
+- **done 模态文案两态**：launchSupported → 「点『立即启动』即可就绪」；其余 → 「状态已即时更新；用作沙箱后端需重启应用生效」（重启的真语义=装配是构造期事实——替换 v0.1.86「如探测未即时生效」错位文案）。
+- **引擎看门狗**（`installers/watchdog.ts`，注入可测）：选定后端 docker/podman 时 60s 周期探测（launcher.engineReadyOf 同判据三态：ready/stopped/**unknown**），仅跃迁触发新事件 `v1.runtime.engine {engine, running}` → 渲染层 toast（掉线警示/恢复告知）+ 矩阵刷新；unknown（通道异常）不误报掉线；E2E mock 后端不装配；随应用退出 stop。ready 相位补 success toast（后台等待转就绪有感知）。
+- **launch 全平台补齐**（作者裁定 linux docker 含本批；类型重构无协议影响——协议仍只传布尔+提权面）：
+  - 型扩：`cli`（startArgs + readyCheck 枚举 + defaultCliPaths 多默认位回退 + elevation）替换 v0.1.89 machine-start；`open-app`（mac `open -a`——LaunchServices 寻径）；
+  - 声明：win DD=app（不变）/ win·mac Podman=cli machine start / mac colima=cli start（colima status 判据）/ **mac DD=open-app + installState 探测（/Applications/Docker.app 在场）** / **linux docker=cli `systemctl start docker` + polkit**；
+  - **提权透明（安装确认同款红线）**：协议加 `launchElevation: 'none'|'polkit'`；polkit 启动先弹启动确认模态（launchConfirm 段——polkit 告知 + 命令全文），免提权仍一键直启；pkexec 126/127（无 agent）→ 稳定失败带 `sudo` 手动指引；授权取消 → canceled 如实收敛；
+  - resolveCli 泛化（PATH → 多默认位按序）：win PATH 继承坑 + **mac GUI 进程 PATH 不含 brew 位**（launchd PATH=/usr/bin:/bin——/opt/homebrew 与 /usr/local 双位回退）。
+- **linux podman daemonless 修正（v0.1.89 遗留 bug）**：linux podman 无 machine 概念、CLI 在场即恒可用——machine list 探测会误报「需初始化」；`probePodmanLayered` 增平台参数（linux 短路 installed+running）。
+- **如实记档**：mac/linux 启动链真机验收待作者手动（Windows 开发机不可验——单测 fake runner 覆盖形状与结算，与 v0.1.86 安装器同纪律）。
+
 ## 6. 验证策略
 
-- 单测：策略表形状/发行版命令分支/下载器（本地 http 源：进度+sha256 通过与拒绝）/目录解析；2026-10-27 增：分层探测矩阵（docker/podman/wsl 装跑两维）、启动器（bin 上两级推导/exe 与 CLI 三通道解析/轮询 ready·timeout·canceled 收敛/app·machine-start·mock 拉起形态）、launch 声明矩阵；
+- 单测：策略表形状/发行版命令分支/下载器（本地 http 源：进度+sha256 通过与拒绝）/目录解析；2026-10-27 增：分层探测矩阵（docker/podman/wsl 装跑两维 + linux podman daemonless）、启动器（bin 上两级推导/exe 与 CLI 多默认位解析/engineReadyOf 三态/轮询 ready·timeout·canceled 收敛/app·open-app·cli·polkit·mock 拉起与结算形态）、launch 声明矩阵（全平台）、看门狗跃迁（掉线→恢复各一次、unknown 不误报）；
 - E2E：mock-runtime 全生命周期（取消安装→正装→done 模态立即启动→取消等待→再启动→已可用）+ 分层反转断言（装后不再现一键安装）+ 未知 id 稳定码拒绝；
 - **真机实装验收由作者手动执行一次**（自动化不碰真系统安装）；2026-10-27 起真机补验「已装 DD 引擎未跑 → 行显示启动而非一键安装」与「立即启动→等待就绪→已可用」两链。
