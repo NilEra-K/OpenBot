@@ -1068,7 +1068,7 @@ const runtimeMatrix = computed<MatrixRow[]>(() => {
 /** 探测卡过滤（其他载体）：已进矩阵的运行时行不再双列（wsl/docker/podman/nspawn/utm） */
 const MATRIX_PROBE_IDS = new Set(['wsl', 'docker', 'podman', 'nspawn', 'utm'])
 
-/** 进度条文案 */
+/** 进度条文案（launch/ready 为 2026-10-27 启动链相位——与安装链同通道） */
 const phaseLabel: Record<string, string> = {
   download: '下载中',
   verify: '校验',
@@ -1078,7 +1078,13 @@ const phaseLabel: Record<string, string> = {
   failed: '失败',
   fallback: '需手动执行',
   canceled: '已取消',
+  launch: '启动中',
+  ready: '已就绪',
 }
+
+/** 相位终态集（行内在途判定与模态转段共用，2026-10-27 增 ready——启动链终态） */
+const TERMINAL_PHASES = new Set(['done', 'failed', 'fallback', 'canceled', 'ready'])
+const isTerminalPhase = (p: string | undefined): boolean => p !== undefined && TERMINAL_PHASES.has(p)
 
 /** ⓘ 收纳内容（2026-10-26 用户裁定）：per-runtime 如实标注 + 通用体积行——正文只留位置与提权告知 */
 const installTipLines = computed<string[]>(() => {
@@ -1091,20 +1097,71 @@ const openInstallConfirm = (installer: typeof kernel.runtimeInstallers[number]):
   installModal.installer = installer
   installModal.installDir = ''
   installModal.dataDir = ''
-  // 该运行时已在途（行上「安装中…」点开）→ 直接进进度态（不重复确认/不重复启动）
+  // 该运行时已在途（行上「安装中…/启动中…」点开）→ 直接进进度态（不重复确认/不重复启动）
   const phase = kernel.runtimeProgress[installer.id]?.phase
-  installModal.stage =
-    phase !== undefined && !['done', 'failed', 'fallback', 'canceled'].includes(phase) ? 'installing' : 'confirm'
+  installModal.stage = phase !== undefined && !isTerminalPhase(phase) ? 'installing' : 'confirm'
 }
 
 /** 取消安装（2026-10-20 用户报障：下载无法取消——流量敏感客户）：
- *  abort 在途任务（下载清临时文件、子进程即杀）→ canceled 终态（模态如实呈现） */
+ *  abort 在途任务（下载清临时文件、子进程即杀）→ canceled 终态（模态如实呈现）。
+ *  2026-10-27 同一模态可回看启动实况——在途相位为 launch 时取消的是启动等待 */
 const doCancelInstall = async (): Promise<void> => {
   try {
+    if (installProgress?.phase === 'launch' && installModal.installer !== null) {
+      await kernel.cancelRuntimeLaunch(installModal.installer.id)
+      return
+    }
     await kernel.cancelRuntimeInstall()
   } catch (err) {
     toast.push(err instanceof Error ? err.message : String(err), 'error')
   }
+}
+
+/** 启动已装未跑的运行时（2026-10-27 v0.1.89）：受理即返——行转「启动中…」行内态
+ *  （launch/ready 相位驱动；DD 默认位解析让装完即启免重启应用） */
+const doLaunchRuntime = async (id: string): Promise<void> => {
+  try {
+    await kernel.launchRuntime(id)
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+
+/** done 模态「立即启动」（2026-10-27 启动引导）：关模态转行内启动态 */
+const doLaunchFromDone = async (): Promise<void> => {
+  const target = installModal.installer
+  if (target === null) return
+  installModal.open = false
+  await doLaunchRuntime(target.id)
+}
+
+/** 取消启动等待（2026-10-27 裁定：停轮询——已拉起的程序不受影响） */
+const doCancelLaunch = async (id: string): Promise<void> => {
+  try {
+    await kernel.cancelRuntimeLaunch(id)
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  }
+}
+
+/** 启动钮旁 ⓘ 首启条款（2026-10-27 裁定：文案如实——首启需在上游应用内完成初始化） */
+const launchTipLines = (inst: typeof kernel.runtimeInstallers[number]): string[] => [
+  inst.id === 'docker-desktop'
+    ? '首次启动需在 Docker Desktop 内完成初始化，可能需数分钟'
+    : '首次启动需初始化虚拟机，可能需数分钟',
+  '应用等待就绪最长 5 分钟，可随时「取消等待」——不影响已启动的程序',
+]
+
+/** 已装未跑一行提示（2026-10-27 裁定：一行一职）：DD 引导去官方设置勾开机自启（应用不代改）；
+ *  podman 无 machine 给 init 指引；未声明启动（linux/mac backlog）如实说明 */
+const stoppedDesc = (inst: typeof kernel.runtimeInstallers[number]): string => {
+  if (inst.note === 'machine-missing') return '已安装，尚无 podman machine——需先在终端执行 podman machine init 初始化'
+  if (inst.id === 'docker-desktop' && inst.platform === 'win32') {
+    return '引擎未运行——启动后即可用；开机自启可在 Docker Desktop 设置（General）中勾选，应用不代改'
+  }
+  if (inst.id === 'podman' && inst.platform === 'win32') return '已安装，machine 未运行——启动后即可用'
+  if (inst.launchSupported) return '已安装，引擎未运行——启动后即可用'
+  return '已安装，引擎未运行——启动器暂缓（后续批次提供），请先在应用外启动'
 }
 
 const doInstall = async (): Promise<void> => {
@@ -1390,8 +1447,11 @@ const wslRelevant = computed(
               <div v-if="row.staticState === 'builtin'" class="appearance-desc">systemd 原生轻量容器——系统自带，零安装</div>
               <div v-else-if="row.staticState === 'deferred'" class="appearance-desc">macOS 虚拟机载体（GUI 沙箱路线）——安装器记档后置</div>
               <div v-else-if="row.local === null" class="appearance-desc">适用于 {{ row.platforms.map((pf) => PLATFORM_LABEL[pf]).join(' / ') }}——在{{ thisPlatformLabel }}上不支持</div>
+              <!-- 已装未跑一行提示（2026-10-27 裁定）：DD 自启引导（不代改）/ podman init 指引 / backlog 如实 -->
+              <div v-else-if="row.local.installState === 'installed' && row.local.engineState !== 'running'" class="appearance-desc">{{ stoppedDesc(row.local) }}</div>
             </div>
-            <!-- 状态区：已可用绿签 / 安装中/一键安装 / 自带 / 后置 / 不支持；⚙ 行级数据目录 -->
+            <!-- 状态区（2026-10-27 三态化）：运行中绿签 / 启动中行内态 / 安装中迷你进度 /
+                 需初始化 / 已装·未跑→启动（声明制）/ 一键安装；自带/后置/不支持；⚙ 行级数据目录 -->
             <div class="rt-status">
               <template v-if="row.staticState === 'builtin'">
                 <span class="chip chip-success">系统自带</span>
@@ -1402,10 +1462,19 @@ const wslRelevant = computed(
               <template v-else-if="row.local === null">
                 <span class="chip rt-unsupported">不支持</span>
               </template>
-              <template v-else-if="row.local.available === true">
+              <!-- 三态之三：运行中（engineState——旧 available===true 同位迁移） -->
+              <template v-else-if="row.local.installState === 'installed' && row.local.engineState === 'running'">
                 <span class="chip chip-success">已可用</span>
               </template>
-              <template v-else-if="kernel.runtimeProgress[row.local.id] !== undefined && !['done', 'failed', 'fallback', 'canceled'].includes(kernel.runtimeProgress[row.local.id]!.phase)">
+              <!-- 启动中行内态（2026-10-27）：mini 可点回看（模态呈等待实况）；取消等待 =
+                   停轮询（DD 已拉起程序不杀——裁定） -->
+              <template v-else-if="kernel.runtimeProgress[row.local.id]?.phase === 'launch'">
+                <button type="button" class="rt-mini" :title="kernel.runtimeProgress[row.local.id]!.detail ?? '查看启动进度'" @click="openInstallConfirm(row.local)">
+                  <span class="rt-mini-label">启动中…</span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="doCancelLaunch(row.local!.id)">取消等待</button>
+              </template>
+              <template v-else-if="kernel.runtimeProgress[row.local.id] !== undefined && !isTerminalPhase(kernel.runtimeProgress[row.local.id]!.phase)">
                 <!-- 行内迷你进度条（2026-10-20 用户裁定：后台下载后进度仍可见）：下载阶段
                      百分比填充；其余阶段 phase 文案（含「等待系统授权（UAC）…」等待期反馈） -->
                 <button type="button" class="rt-mini" title="查看安装进度" @click="openInstallConfirm(row.local)">
@@ -1417,6 +1486,20 @@ const wslRelevant = computed(
                   </span>
                 </button>
               </template>
+              <!-- 需初始化（podman 无 machine：start 必败不给启动钮——init 指引在行说明） -->
+              <template v-else-if="row.local.note === 'machine-missing'">
+                <span class="chip">需初始化</span>
+              </template>
+              <!-- 三态之二：已装·未跑——声明启动策略才有启动钮（旁 ⓘ 首启条款；linux/mac backlog 不给假钮） -->
+              <template v-else-if="row.local.installState === 'installed' && row.local.launchSupported">
+                <button type="button" class="btn btn-primary" @click="doLaunchRuntime(row.local!.id)">启动</button>
+                <HelpTip :lines="launchTipLines(row.local!)" />
+              </template>
+              <!-- 已装未跑但未声明启动（backlog 行）：如实标注 -->
+              <template v-else-if="row.local.installState === 'installed'">
+                <span class="chip">已安装·未运行</span>
+              </template>
+              <!-- 三态之一：未安装 → 一键安装 -->
               <template v-else>
                 <button
                   type="button"
@@ -1488,11 +1571,15 @@ const wslRelevant = computed(
             </div>
             <div class="am-actions">
               <button v-if="installModal.stage === 'confirm'" type="button" class="btn btn-primary" @click="doInstall">开始安装</button>
+              <!-- done + 声明启动策略（2026-10-27 启动引导）：立即启动主钮——装完即启，
+                   DD 默认位解析免重启应用（行转「启动中…」行内态） -->
+              <button v-if="installModal.stage === 'done' && installModal.installer.launchSupported" type="button" class="btn btn-primary" @click="doLaunchFromDone">立即启动</button>
               <!-- installing 双钮（2026-10-20 用户报障）：后台下载（关模态任务继续——行上
-                   「安装中…」可点重开）+ 取消（流量敏感客户随时中止） -->
+                   「安装中…」可点重开）+ 取消（流量敏感客户随时中止）。
+                   2026-10-27 同一模态可回看启动实况——launch 相位下措辞如实切换 -->
               <template v-if="installModal.stage === 'installing'">
-                <button type="button" class="btn btn-ghost" @click="installModal.open = false">后台下载</button>
-                <button type="button" class="btn btn-danger-ghost" @click="doCancelInstall">取消</button>
+                <button type="button" class="btn btn-ghost" @click="installModal.open = false">{{ installProgress?.phase === 'launch' ? '后台等待' : '后台下载' }}</button>
+                <button type="button" class="btn btn-danger-ghost" @click="doCancelInstall">{{ installProgress?.phase === 'launch' ? '取消等待' : '取消' }}</button>
               </template>
               <button v-if="installModal.stage !== 'installing'" type="button" class="btn btn-ghost" @click="installModal.open = false">{{ installModal.stage === 'confirm' ? '取消' : '关闭' }}</button>
             </div>

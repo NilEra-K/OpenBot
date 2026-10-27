@@ -377,8 +377,9 @@ export const useKernelStore = defineStore('kernel', {
     groups: [] as GroupEntry[],
     /** 自定义角色模板（2026-10-18）：boot 拉取 + 向导保存/删除后刷新（内置四角色在渲染层内建） */
     roleTemplates: [] as Array<{ name: string; persona: string }>,
-    /** 运行时安装器清单（2026-10-20 v0.2.0；同日矩阵化——全平台返回；2026-10-21 位置可选布尔细分）：
-     *  boot/安装完成后刷新 */
+    /** 运行时安装器清单（2026-10-20 v0.2.0；同日矩阵化——全平台返回；2026-10-21 位置可选布尔细分；
+     *  2026-10-27 v0.1.89 状态分层：available 布尔退役 → installState（装没装）× engineState（跑没跑）
+     *  + note 稳定码 + launchSupported 启动声明）：boot/安装完成/启动就绪后刷新（主进程调用时活探测） */
     runtimeInstallers: [] as Array<{
       id: string
       runtime: string
@@ -390,7 +391,11 @@ export const useKernelStore = defineStore('kernel', {
       dataDirSelectable: boolean
       locationNote: string
       notes: string[]
-      available: boolean | null
+      installState: 'absent' | 'installed' | 'unknown' | null
+      engineState: 'running' | 'stopped' | 'unknown' | null
+      /** 引擎未跑细分事实（machine-missing = podman 无 machine——start 必败，UI 分流「需初始化」） */
+      note?: 'machine-missing'
+      launchSupported: boolean
     }>,
     /** 安装实况（事件驱动：runtimeId → 最新 phase/percent/detail/兜底命令） */
     runtimeProgress: {} as Record<string, { phase: string; percent?: number; detail?: string; command?: string }>,
@@ -884,6 +889,15 @@ export const useKernelStore = defineStore('kernel', {
     async cancelRuntimeInstall(): Promise<void> {
       await this.call('v1.runtime.cancel', {})
     },
+    /** 启动已装未跑的运行时（2026-10-27 v0.1.89）：受理即返——实况走 v1.runtime.progress
+     *  的 launch/ready 相位（行内启动中态 + 取消等待）；DD 默认位解析让装完即启免重启应用 */
+    async launchRuntime(runtimeId: string): Promise<void> {
+      await this.call('v1.runtime.launch', { runtimeId })
+    },
+    /** 取消启动等待（2026-10-27 裁定：停轮询不杀已拉起的程序——DD 桌面应用照常完成启动） */
+    async cancelRuntimeLaunch(runtimeId: string): Promise<void> {
+      await this.call('v1.runtime.cancel', { runtimeId })
+    },
     /** 数据目录设置（UI 优化 0.1.26）：切换自动迁移全家（v0.1.64——两阶段安全搬运）；
      *  返回迁移文件数；null = 恢复默认（同样自动迁回） */
     async setDataRoot(path: string | null): Promise<{ moved: number }> {
@@ -1240,11 +1254,16 @@ export const useKernelStore = defineStore('kernel', {
           )
           return
         case 'v1.runtime.progress': {
-          // v0.2.0 一键安装实况：download %/提权等待/兜底命令；done/failed 后刷新探测+清单
+          // v0.2.0 一键安装实况 + v0.1.89 启动实况（launch 等待已等秒数 / ready 就绪终态）；
+          // done/failed/ready 后刷新探测+清单（ready → engineState 翻 running，行转「已可用」）
           const p = event.payload
           this.runtimeProgress = { ...this.runtimeProgress, [p.runtimeId]: { phase: p.phase, ...(p.percent !== undefined ? { percent: p.percent } : {}), ...(p.detail !== undefined ? { detail: p.detail } : {}), ...(p.command !== undefined ? { command: p.command } : {}) } }
-          if (p.phase === 'done' || p.phase === 'failed') {
-            if (p.phase === 'failed') useToastStore().push(`运行时安装失败：${p.detail ?? '未知原因'}`, 'error')
+          if (p.phase === 'done' || p.phase === 'failed' || p.phase === 'ready') {
+            if (p.phase === 'failed') {
+              // 稳定码前缀分流文案（同一通道承载安装/启动两条链）
+              const launchFail = (p.detail ?? '').startsWith('RUNTIME_LAUNCH')
+              useToastStore().push(`${launchFail ? '运行时启动失败' : '运行时安装失败'}：${p.detail ?? '未知原因'}`, 'error')
+            }
             // 刷新 fire-and-forget（onEvent 是同步投影——SSE 后续事件自然对齐）
             void this.refreshSandbox().catch(() => {})
             void this.refreshRuntimeInstallers().catch(() => {})

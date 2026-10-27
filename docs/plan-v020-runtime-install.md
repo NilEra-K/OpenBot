@@ -43,9 +43,11 @@ apps/desktop/src/main/installers/
 
 ## 3. 命令与事件面（additive）
 
-- `v1.runtime.list`：当前平台的安装器清单 `{id, runtime, sourceKind, installDirSelectable, dataDirSelectable, locationNote, notes[], fallbackCommand?}`（2026-10-21 起 `locationSelectable` 拆为两个布尔——旗标字面量属执行器实现细节不进协议）；
-- `v1.runtime.install {runtimeId, installDir?, dataDir?}`：单并发（进行中拒绝再启动）；位置参数须策略声明旗标（否则稳定码 `RUNTIME_LOCATION_NOT_SUPPORTED` 拒绝——不静默装到默认位置），进度走 `v1.runtime.progress` 事件 `{runtimeId, phase: download|verify|install|probe|done|failed|fallback, percent?, detail?, command?}`；
-- E2E：`OPENBOT_E2E=1` 时注册 **mock-runtime** 策略（builtin + node 1.5s 进程执行 + `locationFlags.installDir`）——全链（下载跳过→执行→进度事件→done）不触系统（mock 对称铁律），位置输入链（确认模态输入→命令面透传→执行 detail 含旗标值）可断言。
+- `v1.runtime.list`：当前平台的安装器清单 `{id, runtime, sourceKind, installDirSelectable, dataDirSelectable, locationNote, notes[], fallbackCommand?}`（2026-10-21 起 `locationSelectable` 拆为两个布尔——旗标字面量属执行器实现细节不进协议）；**2026-10-27 分层改造**：`available` 布尔退役 → `installState`（absent|installed|unknown，他平台 null）× `engineState`（running|stopped|unknown）+ `note` 稳定码（machine-missing）+ `launchSupported` 布尔（声明制），且改**调用时活探测**（去重并行；不再读构造期快照）；
+- `v1.runtime.install {runtimeId, installDir?, dataDir?}`：单并发（进行中拒绝再启动）；位置参数须策略声明旗标（否则稳定码 `RUNTIME_LOCATION_NOT_SUPPORTED` 拒绝——不静默装到默认位置），进度走 `v1.runtime.progress` 事件 `{runtimeId, phase: download|verify|install|probe|done|failed|fallback, percent?, detail?, command?}`（**2026-10-27 增相位 `launch`/`ready`**——启动实况/就绪终态，与安装链同通道）；
+- `v1.runtime.launch {runtimeId}`（2026-10-27 v0.1.89）：单飞（重复拒绝 `RUNTIME_LAUNCH_BUSY`）；策略须声明 `launch`（否则 `RUNTIME_LAUNCH_NOT_SUPPORTED`），拉起/等待失败 `RUNTIME_LAUNCH_FAILED`（detail 带上游 stderr/超时事实）；受理即返，实况走 progress 事件；
+- `v1.runtime.cancel`（2026-10-27 扩可选 `runtimeId`）：在场 = 取消该运行时启动等待（停轮询）；缺席 = 取消在途安装（原语义，兼容既有调用）；
+- E2E：`OPENBOT_E2E=1` 时注册 **mock-runtime** 策略（builtin + node 3s 进程执行 + `locationFlags.installDir` + `launch: mock`；台账：装完 installed / launch ready 后 running——模拟 DD 完整生命周期）——全链（下载跳过→执行→进度事件→done→立即启动→launch→ready）不触系统（mock 对称铁律），位置输入链（确认模态输入→命令面透传→执行 detail 含旗标值）与分层反转断言（装后不再现一键安装）可断言。
 
 ## 4. 安全红线
 
@@ -75,8 +77,20 @@ apps/desktop/src/main/installers/
 - ⚙ Box 数据目录模态改版（用户报障驱动）：补标签/「浏览…」/「恢复默认」/Esc/外点关闭/动作区右置——与同页「数据目录」「会话记录目录」模态同规格（此前为 approval-modal 半成品借壳）；
 - 兜底命令与包管理器型不受位置旗标影响（无安装器参数可注入，如实）。
 
+## 5c. 第四批（2026-10-27 v0.1.89：已装/未跑状态分层 + 启动引导）
+
+**动机（真机报障）**：已装 Docker Desktop 而引擎未运行时，设置页矩阵行误显「一键安装」；且装完无启动引导（需手动去开始菜单找）。根因有二：探测链单布尔（引擎可达）压平了「装没装」×「跑没跑」；`v1.runtime.list` 读构造期探测快照（安装/启动后不更新——done 模态「重启应用后即可」文案即此产物）。win 先行（DD + Podman launch），linux/mac backlog；就绪超时 5 分钟。
+
+- **探测分层**：`installState`（absent|installed；CLI 层 `--version` / 官方默认安装位在场）× `engineState`（running|stopped|unknown；`docker info` Server 段 / `podman machine list` Running——absent 不探测）。`v1.runtime.list` 改调用时活探测（目标去重并行），旧 `available` 布尔同提交退役。装配面 `probeAll` 快照语义不变（chooseBackend 是构造期事实）。
+- **PATH 继承坑（win）**：进程 PATH 启动时继承——新装运行时 CLI 不在本进程 PATH（`where` 找不到）。CLI/exe 解析一律 where 优先 → 官方默认安装位回退（DD `C:\Program Files\Docker\Docker`、Podman `C:\Program Files\Podman\podman.exe`）——装完「立即启动」与分层状态免重启应用。
+- **launch 声明制**（策略未声明即不显示启动钮）：DD/win = 拉起 `Docker Desktop.exe`（docker CLI 路径 **bin 上两级**推导 = 安装根——官方布局 `resources\bin`；detached 免提权）；Podman/win = `podman machine start`（用户级 VM 操作免提权）。
+- **就绪轮询**（`installers/launcher.ts`，全依赖注入）：2.5s 间隔、5 分钟超时如实收敛（失败文案指向 DD 首启初始化事实，不静默假装就绪）；每轮上抛已等秒数（行内/模态实况）。取消 = 停轮询——DD detached 已拉起进程不杀（用户裁定）；machine-start 子进程随 abort 即杀（如实文案区分）。
+- **UI 三态**：未安装→一键安装 / 已装·未跑→启动（钮旁 ⓘ 首启条款；DD stopped 行一行提示引导去官方设置勾开机自启——**不代改**）/ 运行中→已可用。启动中行内态（mini 可点回看 + 「取消等待」）；安装 done 模态加「立即启动」主钮。podman 无 machine（`note: machine-missing`）→「需初始化」chip + init 指引（start 必败不给假钮）；未声明 launch 的已装未跑行（linux/mac）→「已安装·未运行」如实标注。
+- **补位稳定码**（裁定清单外必要项）：`RUNTIME_LAUNCH_BUSY`（单飞防双击）；`engineNote: 'machine-missing'`（podman init 前置事实）。
+- **mock 对称**：mock-runtime 生命周期台账（装完 installed / launch ready 后 running——事件回调内同步置位防竞态）+ `launch: {kind:'mock'}`（内存等待 3s 不触真系统）；安装 builtin 停留 1.5s→3s（取消链断言窗口）。
+
 ## 6. 验证策略
 
-- 单测：策略表形状/发行版命令分支/下载器（本地 http 源：进度+sha256 通过与拒绝）/目录解析；
-- E2E：mock-runtime 全链 + list 断言 + 未知 id 稳定码拒绝；
-- **真机实装验收由作者手动执行一次**（自动化不碰真系统安装）。
+- 单测：策略表形状/发行版命令分支/下载器（本地 http 源：进度+sha256 通过与拒绝）/目录解析；2026-10-27 增：分层探测矩阵（docker/podman/wsl 装跑两维）、启动器（bin 上两级推导/exe 与 CLI 三通道解析/轮询 ready·timeout·canceled 收敛/app·machine-start·mock 拉起形态）、launch 声明矩阵；
+- E2E：mock-runtime 全生命周期（取消安装→正装→done 模态立即启动→取消等待→再启动→已可用）+ 分层反转断言（装后不再现一键安装）+ 未知 id 稳定码拒绝；
+- **真机实装验收由作者手动执行一次**（自动化不碰真系统安装）；2026-10-27 起真机补验「已装 DD 引擎未跑 → 行显示启动而非一键安装」与「立即启动→等待就绪→已可用」两链。

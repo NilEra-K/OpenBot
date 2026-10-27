@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import type { ProcResult, ProcRunner, ProcSpec } from '@openbot/boxes'
 import {
   downloadInstaller,
   resolveGithubLatest,
@@ -11,8 +12,23 @@ import {
   fallbackCommandText,
   strategiesFor,
   STRATEGIES,
+  DOCKER_DESKTOP_WIN_ROOT,
+  PODMAN_WIN_EXE,
 } from '../strategies.js'
 import { runInstall, assembleLocationArgs, buildLaunchPlan } from '../index.js'
+import {
+  probeDockerLayered,
+  probePodmanLayered,
+  probeWslLayered,
+} from '../layered.js'
+import {
+  deriveDesktopRoot,
+  resolveDockerCli,
+  resolveDockerDesktopExe,
+  resolvePodmanCli,
+  pollEngineReady,
+  runLaunch,
+} from '../launcher.js'
 import type { RuntimeStrategy } from '../strategies.js'
 
 describe('下载器（本地源——零外网）', () => {
@@ -215,6 +231,180 @@ describe('执行器', () => {
       }),
     ).rejects.toThrow('Homebrew')
     expect(fallbackCommand).toContain('brew install colima docker')
+  })
+})
+
+// ---- 状态分层探测（v0.1.89：装没装 × 跑没跑）----
+// ProcRunner 替身：按命令整串路由（layered/launcher 的探测命令带全路径——按 join 结果匹配）；
+// 值为 Error 时原样抛（Object.assign name:'ProcSpawnError' 模拟 CLI 缺席——isSpawnFailure 同判据）
+const R = (over: Partial<ProcResult> = {}): ProcResult => ({
+  exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, aborted: false, ...over,
+})
+const spawnMissing = (cli: string): Error => Object.assign(new Error(`${cli} 未安装或不在 PATH`), { name: 'ProcSpawnError' })
+const reply = (map: Record<string, ProcResult | Error>): ProcRunner => async (spec: ProcSpec) => {
+  const key = spec.command.join(' ')
+  const hit = map[key]
+  if (hit === undefined) throw new Error(`替身未覆盖命令：${key}`)
+  if (hit instanceof Error) throw hit
+  return hit
+}
+
+describe('状态分层探测（v0.1.89：装没装 × 跑没跑）', () => {
+  it('docker：CLI 与 DD exe 双缺 → absent；DD exe 在场但 CLI 不可寻（装完未重启应用）→ installed/unknown', async () => {
+    expect(await probeDockerLayered(reply({}), null, null)).toEqual({ installState: 'absent', engineState: 'unknown' })
+    expect(await probeDockerLayered(reply({}), null, `${DOCKER_DESKTOP_WIN_ROOT}\\Docker Desktop.exe`)).toEqual({
+      installState: 'installed',
+      engineState: 'unknown',
+    })
+  })
+
+  it('docker：CLI 在场引擎停（info exit 1——真机报障场景：DD 已装未开）→ installed/stopped；引擎跑 → running', async () => {
+    const stopped = reply({ 'docker info --format {{.ServerVersion}}': R({ exitCode: 1, stderr: 'error during connect' }) })
+    expect(await probeDockerLayered(stopped, 'docker', null)).toEqual({ installState: 'installed', engineState: 'stopped' })
+    const running = reply({ 'docker info --format {{.ServerVersion}}': R({ stdout: '27.3.1' }) })
+    expect(await probeDockerLayered(running, 'docker', null)).toEqual({ installState: 'installed', engineState: 'running' })
+  })
+
+  it('podman：CLI 缺席 → absent；无 machine → stopped + machine-missing（start 必败的如实细分）；Running → running', async () => {
+    expect(await probePodmanLayered(reply({}), null)).toEqual({ installState: 'absent', engineState: 'unknown' })
+    const empty = reply({ 'podman machine list --format json': R({ stdout: '[]' }) })
+    expect(await probePodmanLayered(empty, 'podman')).toEqual({
+      installState: 'installed',
+      engineState: 'stopped',
+      note: 'machine-missing',
+    })
+    const up = reply({ 'podman machine list --format json': R({ stdout: '[{"Name":"podman-machine-default","Running":true}]' }) })
+    expect(await probePodmanLayered(up, 'podman')).toEqual({ installState: 'installed', engineState: 'running' })
+  })
+
+  it('wsl：--status 过 → installed/running（按需内核特性无独立引擎）；不过 → absent', async () => {
+    expect(await probeWslLayered(reply({ 'wsl --status': R() }))).toEqual({ installState: 'installed', engineState: 'running' })
+    expect(await probeWslLayered(reply({ 'wsl --status': R({ exitCode: 1, stderr: '未安装' }) }))).toEqual({
+      installState: 'absent',
+      engineState: 'unknown',
+    })
+  })
+})
+
+describe('启动器（v0.1.89：路径解析 + 拉起 + 就绪轮询）', () => {
+  it('deriveDesktopRoot：CLI bin 上两级 = DD 安装根（官方布局 resources\\bin；自选安装位同样成立）', () => {
+    expect(deriveDesktopRoot(`${DOCKER_DESKTOP_WIN_ROOT}\\resources\\bin\\docker.exe`)).toBe(DOCKER_DESKTOP_WIN_ROOT)
+    expect(deriveDesktopRoot('D:\\Apps\\Docker\\Docker\\resources\\bin\\docker.exe')).toBe('D:\\Apps\\Docker\\Docker')
+  })
+
+  it('CLI/exe 解析：PATH 优先；PATH 缺席回退官方默认位（新装后本进程 PATH 未含）；双缺 null 如实', async () => {
+    const DD_CLI = `${DOCKER_DESKTOP_WIN_ROOT}\\resources\\bin\\docker.exe`
+    expect(
+      await resolveDockerCli(reply({ 'docker --version': R({ stdout: 'Docker version 27.3.1' }) }), () => false, DOCKER_DESKTOP_WIN_ROOT),
+    ).toBe('docker')
+    expect(
+      await resolveDockerCli(reply({ 'docker --version': spawnMissing('docker') }), (p) => p === DD_CLI, DOCKER_DESKTOP_WIN_ROOT),
+    ).toBe(DD_CLI)
+    expect(
+      await resolvePodmanCli(reply({ 'podman --version': spawnMissing('podman') }), (p) => p === PODMAN_WIN_EXE, PODMAN_WIN_EXE),
+    ).toBe(PODMAN_WIN_EXE)
+    // exe 定位：where 命中推导（自选安装位）优先；where 缺席回退默认位；双缺 null
+    const whereHit = reply({ 'where docker': R({ stdout: 'C:\\Custom\\Docker\\resources\\bin\\docker.exe\r\n' }) })
+    expect(
+      await resolveDockerDesktopExe(whereHit, (p) => p === 'C:\\Custom\\Docker\\Docker Desktop.exe', DOCKER_DESKTOP_WIN_ROOT),
+    ).toBe('C:\\Custom\\Docker\\Docker Desktop.exe')
+    const nothing = reply({ 'where docker': R({ exitCode: 1 }) })
+    expect(await resolveDockerDesktopExe(nothing, () => false, DOCKER_DESKTOP_WIN_ROOT)).toBeNull()
+    expect(await resolveDockerCli(reply({ 'docker --version': spawnMissing('docker') }), () => false, DOCKER_DESKTOP_WIN_ROOT)).toBeNull()
+  })
+
+  it('pollEngineReady：立即可用 → ready；持续不可用 → timeout；abort → canceled（短周期实测）', async () => {
+    expect(await pollEngineReady(async () => true, { intervalMs: 10, timeoutMs: 200 })).toBe('ready')
+    expect(await pollEngineReady(async () => false, { intervalMs: 5, timeoutMs: 30 })).toBe('timeout')
+    const c = new AbortController()
+    setTimeout(() => c.abort(), 10)
+    expect(await pollEngineReady(async () => false, { intervalMs: 5, timeoutMs: 5_000, signal: c.signal })).toBe('canceled')
+  })
+
+  it('runLaunch mock（E2E 对称）：launch → 短停留 → ready；中途 abort → canceled 不误报失败', async () => {
+    const mock = strategiesFor(process.platform, true).find((s) => s.id === 'mock-runtime')!
+    const phases: string[] = []
+    const ok = await runLaunch(mock, { onEvent: (e) => phases.push(e.phase) }, { run: reply({}), mockDelayMs: 20 })
+    expect(ok).toBe('ready')
+    expect(phases).toEqual(['launch', 'ready'])
+    const c = new AbortController()
+    setTimeout(() => c.abort(), 10)
+    const phases2: string[] = []
+    const canceled = await runLaunch(mock, { onEvent: (e) => phases2.push(e.phase) }, { run: reply({}), mockDelayMs: 200, signal: c.signal })
+    expect(canceled).toBe('canceled')
+    expect(phases2).toEqual(['launch', 'canceled'])
+  })
+
+  it('runLaunch app（DD）：推导 exe 拉起（spawnApp 注入捕获）→ 轮询到 ready；exe 双缺 → RUNTIME_LAUNCH_FAILED', async () => {
+    const dd = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'docker-desktop')!
+    const ddExe = `${DOCKER_DESKTOP_WIN_ROOT}\\Docker Desktop.exe`
+    const run = reply({
+      'where docker': R({ stdout: `${DOCKER_DESKTOP_WIN_ROOT}\\resources\\bin\\docker.exe` }),
+      'docker --version': R({ stdout: 'Docker version 27.3.1' }),
+      'docker info --format {{.ServerVersion}}': R({ stdout: '27.3.1' }),
+    })
+    const spawned: string[] = []
+    const outcome = await runLaunch(
+      dd,
+      { onEvent: () => {} },
+      { run, exists: (p) => p === ddExe, spawnApp: (exe) => spawned.push(exe), pollIntervalMs: 10, pollTimeoutMs: 1_000 },
+    )
+    expect(outcome).toBe('ready')
+    expect(spawned).toEqual([ddExe])
+    await expect(
+      runLaunch(
+        dd,
+        { onEvent: () => {} },
+        { run: reply({ 'where docker': R({ exitCode: 1 }) }), exists: () => false, pollIntervalMs: 10, pollTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/RUNTIME_LAUNCH_FAILED/)
+  })
+
+  it('runLaunch machine-start（Podman）：start → 轮询 Running → ready；start 退非 0 → RUNTIME_LAUNCH_FAILED（stderr 如实）', async () => {
+    const pod = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'podman')!
+    const ok = await runLaunch(
+      pod,
+      { onEvent: () => {} },
+      {
+        run: reply({
+          'podman --version': R({ stdout: 'podman version 6.1.4' }),
+          'podman machine start': R(),
+          'podman machine list --format json': R({ stdout: '[{"Name":"podman-machine-default","Running":true}]' }),
+        }),
+        exists: () => false,
+        pollIntervalMs: 10,
+        pollTimeoutMs: 500,
+      },
+    )
+    expect(ok).toBe('ready')
+    await expect(
+      runLaunch(
+        pod,
+        { onEvent: () => {} },
+        {
+          run: reply({
+            'podman --version': R({ stdout: 'podman version 6.1.4' }),
+            'podman machine start': R({ exitCode: 125, stderr: 'VM does not exist' }),
+          }),
+          exists: () => false,
+          pollIntervalMs: 10,
+          pollTimeoutMs: 200,
+        },
+      ),
+    ).rejects.toThrow(/RUNTIME_LAUNCH_FAILED.*VM does not exist/)
+  })
+})
+
+describe('launch 声明矩阵（2026-10-27 声明制——未声明不显示启动钮）', () => {
+  it('win：DD=app（官方默认位）、Podman=machine-start；其余（wsl2/linux/mac 全部）未声明（backlog）；mock 仅 E2E 声明', () => {
+    const dd = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'docker-desktop')!
+    expect(dd.launch).toEqual({ kind: 'app', exeName: 'Docker Desktop.exe', defaultRoot: DOCKER_DESKTOP_WIN_ROOT })
+    const pod = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'podman')!
+    expect(pod.launch).toEqual({ kind: 'machine-start', defaultCliPath: PODMAN_WIN_EXE })
+    for (const s of STRATEGIES.filter((x) => !(x.platform === 'win32' && (x.id === 'docker-desktop' || x.id === 'podman')))) {
+      expect(s.launch).toBeUndefined()
+    }
+    expect(strategiesFor(process.platform, true).find((s) => s.id === 'mock-runtime')!.launch).toEqual({ kind: 'mock' })
   })
 })
 

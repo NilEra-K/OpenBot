@@ -2636,7 +2636,7 @@ test('插件视图（2026-10-19 一期 + 2026-10-20 P1 运行时）：拼图入�
   }
 })
 
-test('运行时一键安装（v0.2.0）：mock-runtime 全链——确认弹窗（提权告知）→ 安装 → 进度完成 → 清单刷新', async () => {
+test('运行时状态分层与启动引导（v0.1.89）：mock-runtime 全生命周期——取消安装 → 一键安装 → done 模态「立即启动」→ 取消等待 → 再启动 → 已可用（反转：装后不再现一键安装）', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-runtime-'))
   const app = await _electron.launch({
     args: ['.'],
@@ -2648,16 +2648,19 @@ test('运行时一键安装（v0.2.0）：mock-runtime 全链——确认弹窗�
   try {
     await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
 
-    // 设置 → 容器与镜像分节：mock 运行时在矩阵（E2E 门控注册——mock 对称；2026-10-20 矩阵化改 .rt-row）
+    // 设置 → 容器与镜像分节：mock 运行时在矩阵（E2E 门控注册——mock 对称；分层后初始 absent）
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click()
     const row = page.locator('.rt-row', { hasText: 'Mock 运行时' })
     await expect(row).toBeVisible()
-    // 如实标注收进确认模态 ⓘ（2026-10-26）——行上不再铺位置事实/notes
+    // 分层基线（v0.1.89）：未装只有一键安装；启动钮仅在 installed 后出现；行不铺说明（2026-10-26 裁定）
+    await expect(row.getByRole('button', { name: '一键安装' })).toBeVisible()
+    await expect(row.getByRole('button', { name: '启动', exact: true })).toHaveCount(0)
     await expect(row.locator('.ri-note')).toHaveCount(0)
     await expect(row.locator('.appearance-desc')).toHaveCount(0)
 
-    // 确认弹窗：提权告知 + 位置事实 + 位置自选输入（透明前提）
+    // —— 取消链先行（2026-10-27 重排：mock 未装——取消不落台账，行回一键安装；
+    //    确认弹窗断言（提权告知/ⓘ 收纳/位置输入）原样保留）——
     await row.getByRole('button', { name: '一键安装' }).click()
     const modal = page.locator('.approval-modal')
     await expect(modal).toBeVisible()
@@ -2672,39 +2675,48 @@ test('运行时一键安装（v0.2.0）：mock-runtime 全链——确认弹窗�
     await expect(modal.locator('#rtDataDir')).toHaveCount(0)
     await modal.locator('#rtInstallDir').fill('D:\\e2e-mock')
     await modal.getByRole('button', { name: '开始安装' }).click()
+    // builtin mock 3s 停留（2026-10-27 由 1.5s 放宽——取消链窗口）→ 抢点取消 → canceled 如实呈现
+    await modal.getByRole('button', { name: '取消', exact: true }).click({ timeout: 3_000 })
+    await expect(modal).toContainText('已取消', { timeout: 10_000 })
+    await modal.getByRole('button', { name: '关闭' }).click()
+    await expect(modal).toHaveCount(0)
+    // 取消不落台账：分层状态仍是 absent（行回一键安装）
+    await expect(row.getByRole('button', { name: '一键安装' })).toBeEnabled({ timeout: 10_000 })
 
-    // 进度在模态内（2026-10-20 用户裁定：说明内容收进模态——行上只剩「安装中…」chip）；
-    // builtin mock 1.5s 停留（2026-10-21 改）→ installing 窗口可断言：
-    // 执行 detail 含组装后的位置旗标值（输入 → 命令面 → 执行器全链透传实证）
-    const installModal = page.locator('.approval-modal')
-    await expect(installModal.locator('.ri-progress')).toBeVisible({ timeout: 15_000 })
-    await expect(installModal.locator('.ri-detail').first()).toContainText('MOCK_INSTALL_DIR=D:\\e2e-mock', {
+    // —— 正装全链：确认 → 安装（detail 含位置旗标全链透传）→ done 模态「立即启动」在场 ——
+    await row.getByRole('button', { name: '一键安装' }).click()
+    await modal.locator('#rtInstallDir').fill('D:\\e2e-mock')
+    await modal.getByRole('button', { name: '开始安装' }).click()
+    await expect(modal.locator('.ri-progress')).toBeVisible({ timeout: 15_000 })
+    await expect(modal.locator('.ri-detail').first()).toContainText('MOCK_INSTALL_DIR=D:\\e2e-mock', {
       timeout: 5_000,
     })
-    // 行内迷你进度条（2026-10-20 用户裁定）在场：1.5s 窗口内抢断言，过则跳过
+    // 行内迷你进度条（2026-10-20 用户裁定）在场：3s 窗口内抢断言，过则跳过
     await expect(page.locator('.rt-mini').first()).toBeVisible({ timeout: 2_000 }).catch(() => {})
-    await expect(installModal).toContainText('安装完成', { timeout: 15_000 })
-    await installModal.getByRole('button', { name: '关闭' }).click()
-    await expect(installModal).toHaveCount(0)
-    // 关闭后行状态如实（mock 无探测映射——仍可重装）
-    await expect(row.getByRole('button', { name: '一键安装' })).toBeEnabled()
+    await expect(modal).toContainText('安装完成', { timeout: 15_000 })
+    // done 模态启动引导（v0.1.89 裁定）：声明 launch 策略 → 「立即启动」主钮在场
+    const launchNow = modal.getByRole('button', { name: '立即启动' })
+    await expect(launchNow).toBeVisible()
+    await launchNow.click()
+    await expect(modal).toHaveCount(0)
 
-    // —— 取消链（2026-10-20 用户报障：流量敏感客户）：再启安装 → installing 双钮在场
-    // （后台下载/取消）→ 抢点取消 → canceled/done 终态（builtin 秒级——时序诚实降级） ——
-    await row.getByRole('button', { name: '一键安装' }).click()
-    await installModal.getByRole('button', { name: '开始安装' }).click()
-    const sawCancel = await installModal
-      .getByRole('button', { name: '取消', exact: true })
-      .click({ timeout: 3000 })
-      .then(() => true)
-      .catch(() => false)
-    if (sawCancel) {
-      await expect(installModal).toContainText(/已取消|安装完成|安装失败/, { timeout: 10_000 })
-    }
-    const modalBtn = installModal.getByRole('button', { name: '关闭' })
-    if ((await modalBtn.count()) > 0) await modalBtn.click().catch(() => {})
-    await expect(installModal).toHaveCount(0, { timeout: 10_000 })
-    await expect(row.getByRole('button', { name: '一键安装' })).toBeEnabled({ timeout: 10_000 })
+    // 立即启动即转行内启动态：行显示「启动中…」+「取消等待」——
+    // 反转断言（v0.1.89 报障根因实证）：装后行不再出现一键安装
+    await expect(row.locator('.rt-mini')).toContainText('启动中', { timeout: 10_000 })
+    await expect(row.getByRole('button', { name: '取消等待' })).toBeVisible()
+    await expect(row.getByRole('button', { name: '一键安装' })).toHaveCount(0)
+
+    // —— 取消等待（裁定：停轮询不杀已拉起程序；mock 3s 停留给断言窗口）→ canceled → 行回启动钮 ——
+    await row.getByRole('button', { name: '取消等待' }).click()
+    await expect(row.getByRole('button', { name: '启动', exact: true })).toBeVisible({ timeout: 10_000 })
+    await expect(row.getByRole('button', { name: '取消等待' })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: '一键安装' })).toHaveCount(0)
+
+    // —— 再启动 → ready → 已可用（launch 全链收口：engineState 翻 running——活探测实证）——
+    await row.getByRole('button', { name: '启动', exact: true }).click()
+    await expect(row.locator('.chip-success')).toContainText('已可用', { timeout: 15_000 })
+    await expect(row.getByRole('button', { name: '启动', exact: true })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: '一键安装' })).toHaveCount(0)
 
     // —— ⚙ Box 数据目录模态改版（2026-10-21）：同页目录模态同规格——标签/浏览/恢复默认在场 + Esc 关闭 ——
     const wslRow = page.locator('.rt-row', { hasText: 'WSL2' })

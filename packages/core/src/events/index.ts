@@ -211,10 +211,22 @@ export interface PluginEventPayload {
 }
 
 /** 运行时安装进度（2026-10-20 v0.2.0 一键安装）：download(带 percent)/verify/install/probe/done/failed/fallback。
- *  fallback 带 command 全文（Linux 无 polkit / macOS 无 brew 的如实降级——用户过目复制执行） */
+ *  fallback 带 command 全文（Linux 无 polkit / macOS 无 brew 的如实降级——用户过目复制执行）。
+ *  launch/ready（2026-10-27 v0.1.89 启动引导）：已装未跑运行时的拉起实况——launch=拉起中/等待引擎
+ *  就绪（detail 带已等秒数），ready=引擎就绪终态；failed/canceled 与安装链同形复用。 */
 export interface RuntimeProgressPayload {
   runtimeId: string
-  phase: 'download' | 'verify' | 'install' | 'probe' | 'done' | 'failed' | 'fallback' | 'canceled'
+  phase:
+    | 'download'
+    | 'verify'
+    | 'install'
+    | 'probe'
+    | 'done'
+    | 'failed'
+    | 'fallback'
+    | 'canceled'
+    | 'launch'
+    | 'ready'
   percent?: number
   detail?: string
   command?: string

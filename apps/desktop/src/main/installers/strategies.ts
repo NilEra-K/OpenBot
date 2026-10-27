@@ -39,6 +39,21 @@ export interface LocationFlags {
   dataDir?: string
 }
 
+/** 启动策略（2026-10-27 v0.1.89 已装未跑分层）：声明制——未声明者不显示启动钮（linux/mac backlog）。
+ *  - app：拉起桌面应用（win Docker Desktop——detached 免提权；exe 定位 = CLI 路径 bin 上两级推导，
+ *    回退官方默认安装位——新装后本进程 PATH 未含 CLI 也能启动）
+ *  - machine-start：CLI 子命令启动虚拟机（win podman machine start）
+ *  - mock：E2E 专用（内存等待不触真系统——mock 对称铁律） */
+export type LaunchStrategy =
+  | { kind: 'app'; exeName: string; defaultRoot: string }
+  | { kind: 'machine-start'; defaultCliPath: string }
+  | { kind: 'mock' }
+
+/** 官方默认安装位（win，2026-10-27）：launch 声明与壳层 CLI/exe 解析回退共用——
+ *  Windows 进程 PATH 启动时继承，新装运行时 CLI 不在本进程 PATH，默认位在场即判已装/可直接拉起 */
+export const DOCKER_DESKTOP_WIN_ROOT = 'C:\\Program Files\\Docker\\Docker'
+export const PODMAN_WIN_EXE = 'C:\\Program Files\\Podman\\podman.exe'
+
 export interface RuntimeStrategy {
   id: RuntimeId
   /** 运行时显示名 */
@@ -49,6 +64,8 @@ export interface RuntimeStrategy {
   elevation: 'uac' | 'polkit' | 'none'
   /** 位置旗标（缺席 = 安装位置/容器数据位置均不可选，locationNote 如实说明） */
   locationFlags?: LocationFlags
+  /** 启动策略（2026-10-27 声明制）：缺席 = 不显示启动钮（应用外自行启动） */
+  launch?: LaunchStrategy
   /** 位置事实（安装/数据位置各自可选与否的如实说明——UI 披露行） */
   locationNote: string
   /** 如实标注（许可/上游限制等） */
@@ -85,6 +102,8 @@ export const STRATEGIES: RuntimeStrategy[] = [
     elevation: 'uac',
     // 官方安装器旗标（docs.docker.com 命令行安装）：程序本体与 WSL 后端数据位置安装时均可自选
     locationFlags: { installDir: '--installation-dir=', dataDir: '--wsl-default-data-root=' },
+    // 启动引导（2026-10-27 win 先行）：拉起 Docker Desktop.exe（detached 免提权）
+    launch: { kind: 'app', exeName: 'Docker Desktop.exe', defaultRoot: DOCKER_DESKTOP_WIN_ROOT },
     locationNote:
       '安装位置与容器数据位置安装时可自选，留空均用官方默认——装后也可在 Docker Desktop 设置中调整',
     notes: [...DOCKER_DESKTOP_NOTES, '许可注意：大企业（>250 人或年收入 >$10M）需付费订阅'],
@@ -106,6 +125,8 @@ export const STRATEGIES: RuntimeStrategy[] = [
     elevation: 'uac',
     // WiX INSTALLDIR 公开属性（contrib/win-installer/wix/podman-main.wxs Directory Id=INSTALLDIR）
     locationFlags: { installDir: 'INSTALLDIR=' },
+    // 启动引导（2026-10-27 win 先行）：podman machine start（用户级 VM 操作免提权）
+    launch: { kind: 'machine-start', defaultCliPath: PODMAN_WIN_EXE },
     locationNote: '安装位置可自选（MSI INSTALLDIR 属性）。容器数据位置受上游限制（machine 目录 C 盘真实目录 bug）——不可选',
     notes: [
       'GitHub Releases latest（API digest sha256 强校验）',
@@ -172,15 +193,17 @@ export function mockStrategies(enabled: boolean): RuntimeStrategy[] {
       runtime: 'Mock 运行时（E2E）',
       platform: process.platform,
       // Electron 主进程 execPath 是 electron.exe——须 ELECTRON_RUN_AS_NODE=1（与 McpClient 同坑）；
-      // 1.5s 停留让 installing 阶段可断言（进度 detail 含组装后的位置参数）
+      // 3s 停留（2026-10-27 由 1.5s 放宽）让 installing 窗口与安装取消链可断言（进度 detail 含组装后的位置参数）
       source: {
         kind: 'builtin',
-        command: [process.execPath, '-e', 'setTimeout(()=>process.exit(0),1500)'],
+        command: [process.execPath, '-e', 'setTimeout(()=>process.exit(0),3000)'],
         args: [],
         env: { ELECTRON_RUN_AS_NODE: '1' },
       },
       elevation: 'none',
       locationFlags: { installDir: 'MOCK_INSTALL_DIR=' },
+      // 启动引导（2026-10-27）：mock 对称——内存等待后 ready，不触真系统
+      launch: { kind: 'mock' },
       locationNote: '安装位置可自选（E2E 演示链）；容器数据位置不可选',
       notes: ['仅 E2E 环境注册'],
     },

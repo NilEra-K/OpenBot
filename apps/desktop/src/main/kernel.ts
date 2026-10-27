@@ -22,8 +22,11 @@ import type { GatewayHandle } from '@openbot/transport'
 import type { LifecycleFinishedPayload, MessageAgentPayload, MessageUserPayload } from '@openbot/core'
 import { NodeFs, SettingsStore, MemoryStore, AutomationStore, ImageStore, nextAfter } from '@openbot/state'
 import { manifestSchema } from '@openbot/coordinator'
-import { STRATEGIES, strategiesFor } from './installers/strategies.js'
+import { STRATEGIES, strategiesFor, DOCKER_DESKTOP_WIN_ROOT, PODMAN_WIN_EXE } from './installers/strategies.js'
 import { runInstall } from './installers/index.js'
+import { runLaunch, resolveDockerCli, resolveDockerDesktopExe, resolvePodmanCli } from './installers/launcher.js'
+import { probeDockerLayered, probePodmanLayered, probeWslLayered } from './installers/layered.js'
+import type { LayeredProbeResult, InstallState, EngineState, EngineNote } from './installers/layered.js'
 import type { RuntimeStrategy } from './installers/strategies.js'
 import type { SandboxPreference, RelaySettings, ImageEntry } from '@openbot/state'
 import { LlmError, LlmErrorCodes, OpenAiCompatProvider, AnthropicProvider } from '@openbot/llm'
@@ -941,6 +944,14 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   /** 运行时安装单并发守卫（v0.2.0 一键安装）+ 取消控制器（2026-10-20 流量敏感客户） */
   let runtimeInstallBusy = false
   let runtimeInstallAbort: AbortController | null = null
+  /** 启动等待单飞（2026-10-27 v0.1.89）：per-runtime 在途守卫 + 取消控制器
+   *  （取消 = 停轮询——DD detached 已拉起进程不杀；machine-start 子进程随 abort 即杀） */
+  const runtimeLaunchBusy = new Set<string>()
+  const runtimeLaunchAborts = new Map<string, AbortController>()
+  /** mock-runtime 生命周期台账（E2E 对称，2026-10-27）：装完即 installed / launch ready 即 running
+   *  ——模拟 DD 完整生命周期；在事件回调内同步置位（早于渲染层刷新拉取，免竞态读到旧态） */
+  let mockRuntimeInstalled = false
+  let mockRuntimeEngineRunning = false
   const sandboxStatus: SandboxStatus = {
     preference,
     stored: await settings.getSandbox(),
@@ -1528,44 +1539,83 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }))
     .register('v1.runtime.list', async () => {
       // 2026-10-20 矩阵化（用户裁定）：返回**全部平台**策略——渲染层按运行时分组拼矩阵，
-      // 本系统能装的高亮给按钮、其他系统如实标「不支持」。探测只在策略平台=本平台时有意义。
+      // 本系统能装的高亮给按钮、其他系统如实标「不支持」。
+      // 2026-10-27 v0.1.89 状态分层：旧 available 单布尔退役（压平了装没装×跑没跑——已装 DD
+      // 引擎未跑误显「一键安装」的根因）——改 installState × engineState 两维，且**调用时活探测**
+      // （旧实现读构造期探测快照，安装/启动后不更新——done 模态「重启应用后即可」文案的根因）。
+      // 探测目标去重并行；win 的 CLI 解析带官方默认安装位回退（PATH 启动时继承——新装后未含）。
       const e2e = process.env.OPENBOT_E2E === '1'
       const strategies = [...strategiesFor(process.platform, e2e), ...STRATEGIES.filter((st) => st.platform !== process.platform)]
-      const probeById = new Map(sandboxStatus.probes.map((p) => [p.id, p.available]))
+      const exists = (p: string): boolean => existsSync(p)
+      const targets = new Set<string>()
+      for (const st of strategies) {
+        if (st.platform !== process.platform) continue
+        // 探测目标映射：wsl2→wsl；docker-desktop(非 mac)/docker/colima→docker；podman→podman
+        if (st.id === 'wsl2') targets.add('wsl')
+        else if (st.id === 'docker-desktop' || st.id === 'docker' || st.id === 'colima') targets.add('docker')
+        else if (st.id === 'podman') targets.add('podman')
+      }
+      const layered = new Map<string, LayeredProbeResult>()
+      await Promise.all(
+        [...targets].map(async (t) => {
+          if (t === 'wsl') {
+            layered.set('wsl', await probeWslLayered(runProcess))
+          } else if (t === 'docker') {
+            const cli = await resolveDockerCli(runProcess, exists, DOCKER_DESKTOP_WIN_ROOT)
+            // DD exe 在场只对 win 有意义（CLI 不可寻时兜底 installed 判定）；他平台 docker 走 PATH 面
+            const exe = process.platform === 'win32' ? await resolveDockerDesktopExe(runProcess, exists, DOCKER_DESKTOP_WIN_ROOT) : null
+            layered.set('docker', await probeDockerLayered(runProcess, cli, exe))
+          } else if (t === 'podman') {
+            layered.set('podman', await probePodmanLayered(runProcess, await resolvePodmanCli(runProcess, exists, PODMAN_WIN_EXE)))
+          }
+        }),
+      )
+      // 缺席目标兜底（目标集由本平台策略推导，恒在场——纯类型完备）
+      const probeOf = (key: string): LayeredProbeResult => layered.get(key) ?? { installState: 'unknown', engineState: 'unknown' }
       return {
-        installers: strategies.map((st) => ({
-          id: st.id,
-          runtime: st.runtime,
-          platform: st.platform,
-          supported: st.platform === process.platform,
-          sourceKind: st.source.kind,
-          elevation: st.elevation,
-          // 位置可选事实（2026-10-21 位置旗标）：只透传布尔——旗标字面量属执行器实现细节不进协议
-          installDirSelectable: st.locationFlags?.installDir !== undefined,
-          dataDirSelectable: st.locationFlags?.dataDir !== undefined,
-          locationNote: st.locationNote,
-          notes: st.notes,
-          // 探测映射（仅本平台有意义；他平台 null）：wsl2→wsl；docker-desktop(非 mac)/docker→docker；
-          // podman→podman；colima→docker；mock→false（E2E 可见可点）
-          available:
-            st.platform !== process.platform
-              ? null
-              : st.id === 'wsl2'
-                ? (probeById.get('wsl') ?? null)
-                : st.id === 'docker-desktop'
-                  ? st.platform === 'darwin'
-                    ? null // brew 面不映射探测（如实在 UI 标未知）
-                    : (probeById.get('docker') ?? null)
-                  : st.id === 'docker'
-                    ? (probeById.get('docker') ?? null)
-                    : st.id === 'podman'
-                      ? (probeById.get('podman') ?? null)
-                      : st.id === 'colima'
-                        ? (probeById.get('docker') ?? null)
-                        : st.id === 'mock-runtime'
-                          ? false
-                          : null,
-        })),
+        installers: strategies.map((st) => {
+          // 他平台 null（无探测面）；本平台无探测面（mac brew 行）= unknown 如实
+          let installState: InstallState | null = null
+          let engineState: EngineState | null = null
+          let note: EngineNote | undefined
+          if (st.platform === process.platform) {
+            if (st.id === 'mock-runtime') {
+              installState = mockRuntimeInstalled ? 'installed' : 'absent'
+              engineState = mockRuntimeEngineRunning ? 'running' : 'stopped'
+            } else if (st.id === 'wsl2') {
+              ;({ installState, engineState } = probeOf('wsl'))
+            } else if (st.id === 'podman') {
+              const p = probeOf('podman')
+              ;({ installState, engineState } = p)
+              note = p.note
+            } else if (st.id === 'docker' || st.id === 'colima' || (st.id === 'docker-desktop' && st.platform !== 'darwin')) {
+              ;({ installState, engineState } = probeOf('docker'))
+            } else {
+              installState = 'unknown'
+              engineState = 'unknown'
+            }
+          }
+          return {
+            id: st.id,
+            runtime: st.runtime,
+            platform: st.platform,
+            supported: st.platform === process.platform,
+            sourceKind: st.source.kind,
+            elevation: st.elevation,
+            // 位置可选事实（2026-10-21 位置旗标）：只透传布尔——旗标字面量属执行器实现细节不进协议
+            installDirSelectable: st.locationFlags?.installDir !== undefined,
+            dataDirSelectable: st.locationFlags?.dataDir !== undefined,
+            locationNote: st.locationNote,
+            notes: st.notes,
+            // 分层事实（2026-10-27）：installState=装没装（CLI/默认位判定）；engineState=跑没跑
+            // （docker info/machine list；absent 不探测 → unknown）；note 稳定码（渲染层映射文案）
+            installState,
+            engineState,
+            ...(note !== undefined ? { note } : {}),
+            // 启动声明制（未声明不显示启动钮——linux/mac backlog）：同样只透传布尔
+            launchSupported: st.launch !== undefined,
+          }
+        }),
       }
     })
     .register('v1.runtime.install', async (payload) => {
@@ -1599,6 +1649,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         try {
           await runInstall(strategy, {
             onEvent: (ev) => {
+              // mock 台账在 done 事件回调内同步置位（早于渲染层刷新拉取——免竞态读到旧态）
+              if (ev.phase === 'done' && strategy.id === 'mock-runtime') mockRuntimeInstalled = true
               kernel.bus.emit('v1.runtime.progress', { runtimeId: strategy.id, ...ev })
             },
           }, {
@@ -1625,10 +1677,55 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }))
     // 取消安装（2026-10-20 用户报障：下载无法取消对流量敏感客户不友好）——abort 在途
     // 任务（下载清临时文件、子进程即杀）；非在途幂等通过（无操作）
-    .register('v1.runtime.cancel', async () => {
-      runtimeInstallAbort?.abort()
+    // 2026-10-27 扩可选 runtimeId：在场 = 取消该运行时的启动等待（停轮询；DD 已拉起进程
+    // 不杀）；缺席 = 取消在途安装（原语义——兼容既有调用）
+    .register('v1.runtime.cancel', async (payload) => {
+      const { runtimeId } = z.object({ runtimeId: z.string().trim().min(1).max(32).optional() }).parse(payload ?? {})
+      if (runtimeId !== undefined) runtimeLaunchAborts.get(runtimeId)?.abort()
+      else runtimeInstallAbort?.abort()
       return { ok: true }
-    })
+    }, z.object({ runtimeId: z.string().trim().min(1).max(32).optional() }))
+    // ---- 启动引导（2026-10-27 v0.1.89 状态分层：已装未跑 → 应用内拉起 + 就绪轮询）----
+    // 受理即返（就绪等待分钟级不占命令通道）；实况/终态走 v1.runtime.progress 的
+    // launch/ready 相位；轮询节奏与取消语义见 installers/launcher.ts（裁定 2.5s/5min）
+    .register('v1.runtime.launch', async (payload) => {
+      const { runtimeId } = z.object({ runtimeId: z.string().trim().min(1).max(32) }).parse(payload)
+      if (runtimeLaunchBusy.has(runtimeId)) {
+        throw new KernelError('RUNTIME_LAUNCH_BUSY', '该运行时已在启动中——等它完成或先取消等待')
+      }
+      const e2e = process.env.OPENBOT_E2E === '1'
+      const strategy = strategiesFor(process.platform, e2e).find((st) => st.id === runtimeId)
+      if (strategy === undefined) {
+        throw new KernelError('RUNTIME_NOT_FOUND', `当前平台无此运行时：${runtimeId}`)
+      }
+      if (strategy.launch === undefined) {
+        throw new KernelError('RUNTIME_LAUNCH_NOT_SUPPORTED', '该运行时未声明应用内启动——请在应用外启动')
+      }
+      runtimeLaunchBusy.add(runtimeId)
+      const abort = new AbortController()
+      runtimeLaunchAborts.set(runtimeId, abort)
+      void (async () => {
+        try {
+          await runLaunch(strategy, {
+            onEvent: (ev) => {
+              // mock 台账同步置位（同 install done——免竞态）
+              if (ev.phase === 'ready' && strategy.id === 'mock-runtime') mockRuntimeEngineRunning = true
+              kernel.bus.emit('v1.runtime.progress', { runtimeId: strategy.id, ...ev })
+            },
+          }, { run: runProcess, signal: abort.signal, exists: existsSync })
+        } catch (err) {
+          kernel.bus.emit('v1.runtime.progress', {
+            runtimeId: strategy.id,
+            phase: 'failed',
+            detail: err instanceof Error ? err.message : String(err),
+          })
+        } finally {
+          runtimeLaunchBusy.delete(runtimeId)
+          runtimeLaunchAborts.delete(runtimeId)
+        }
+      })()
+      return { ok: true }
+    }, z.object({ runtimeId: z.string().trim().min(1).max(32) }))
     // 跨用户房间（P7 多房间轮）：状态呈现（settings 全量 + env 叠加路的连接态）+ 配置全量写入
     .register('v1.relay.status', async () => {
       const stored = await settings.getRelays()

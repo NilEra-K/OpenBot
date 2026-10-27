@@ -1528,6 +1528,8 @@
   flex: none;
   display: flex;
   align-items: center;
+  /* 2026-10-27 状态区多元素（启动钮+ⓘ+取消等待/mini+取消等待）——统一间距 */
+  gap: 8px;
 }
 .rt-unsupported {
   color: var(--ink3);
