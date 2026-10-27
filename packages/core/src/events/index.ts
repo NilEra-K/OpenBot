@@ -198,8 +198,9 @@ export interface GroupMessagePayload {
   from: string
   text: string
   runId?: string
-  /** 发言模式（2026-10-18 群发言模式体系）：kind='user' 时在场——渲染层徽标（独立作答/汇总/点名） */
-  mode?: 'independent' | 'summary' | 'mention'
+  /** 发言模式（2026-10-18 群发言模式体系；2026-10-27 v0.1.93 增 debate）：kind='user' 时在场——
+   *  渲染层徽标（独立作答/汇总/点名/辩论） */
+  mode?: 'independent' | 'summary' | 'mention' | 'debate'
 }
 
 /** 插件上行事件（2026-10-20 插件运行时 P1）：插件进程 → 内核 → 路由（用户通知 / 唤醒绑定 Agent）。

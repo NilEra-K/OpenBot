@@ -197,7 +197,8 @@ coordinator ← 以上全部（全项目唯一被允许全知的装配根）
 - **发言模式体系**（2026-10-18/19）：`#xxx ` 前缀触发，内核 `GROUP_MODE_PREFIXES` 注册表解析（前缀剥离 + group-user 记录留 mode 痕），协议 schema 零改动——新模式同位追加。已注册：
   - `#讨论`/`#独立`（independent）：全员并发入队、context 恒空（互不可见各抒己见）、settle 不推进、全员结算收敛；
   - `#汇总`（summary）：阶段一盲答（同 independent）→ 阶段二汇总人交叉总结（**管家优先**，GroupDeps.roleOf 装配注入；带全量观点 context）→ settle 收敛；
-  - `#点名`（mention）：门控——仅被 @ 的成员应答（轮转语义保留）；空点名回退轮转并注记。
+  - `#点名`（mention）：门控——仅被 @ 的成员应答（轮转语义保留）；空点名回退轮转并注记；
+  - `#辩论`（debate，2026-10-27 v0.1.93）：@ 两方按**文本出现序**定正反（`#mentionedOf` 按成员表序返回——正反定序用文本位置）——①立场轮（双方并发盲答、互不可见）→ ②驳斥 ×4（反方先驳、交替 con→pro→con→pro；靶点=对方最近发言；pass 跳步不终止）→ ③中立汇总（管家优先，次选未参辩成员，兜底正方；不判胜负——复用 summarizing 收敛位）；任一方未亮立场即终止；`GroupTurnPayload` 增 `debate` 面（phase/stance/opponent——runner 注入立场约束与对立方名）。
 - **身份分层**（2026-10-18）：`AgentProfile.persona`（人设一句话，ctx 档案可编辑、即时生效）+ `roleName`（角色档位名——呈现留档，权限语义恒在 role）。系统提示词按 agent 分流：worker 以「你是「名字」（人设）……不是管家」开场（全局一句「你是管家」致 worker 集体自认管家是已被实证修复的缺陷）。**自定义角色模板**（`settings.roleTemplates`：name + persona，v1.roles.* 命令族，上限 20）：小红书运维/微商运营等用户自建档位，建 Agent 时选用复用；内置四角色（管家/研究员/工程师/观察员）代码内建不落库。群轮 prompt 注入成员身份行与同伴名单（经 agentMeta——装配层档案真相缓存，任命事务经 roster 事件随动）。
 - 广播：→全员单向扇出，顺序调度、并发执行、无环（发起方：用户与 steward，见上）。
 - subagent：父 agent 派生后台 run，lineage 世系、steer、abort。

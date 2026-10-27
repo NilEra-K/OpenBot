@@ -55,20 +55,25 @@ export interface GroupTurnPayload {
   /** 本轮被 @ 的成员（prompt 可见——优先发言已由编排保证） */
   mentioned: string[]
   /** 发言模式（2026-10-18）：independent=独立作答（全员并发、互不可见）；summary=汇总
-   *  （阶段一独立盲答 + 汇总人交叉总结）；缺省 rotation 轮转。mention 门控在编排层（不入 payload） */
-  mode?: 'independent' | 'summary'
+   *  （阶段一独立盲答 + 汇总人交叉总结）；debate=辩论（2026-10-27 v0.1.93——立场/驳斥/汇总
+   *  多轮编排，细粒度面见 debate 字段）；缺省 rotation 轮转。mention 门控在编排层（不入 payload） */
+  mode?: 'independent' | 'summary' | 'debate'
+  /** 辩论面（v0.1.93，mode='debate' 时在场）：opening/rebuttal 带立场与对立方 agentId
+   *  （runner 注入立场约束与对立方名字）；summary=中立汇总轮（无立场——不判胜负） */
+  debate?: { phase: 'opening' | 'rebuttal'; stance: 'pro' | 'con'; opponent: string } | { phase: 'summary' }
   /** 全体成员 id（身份注入用——runner 经 agentMetaOf 解析为名字） */
   memberIds?: string[]
 }
 
-/** 群发言模式（2026-10-18 用户裁定：语法触发、可扩展的模式注册面） */
-export type GroupSpeakMode = 'independent' | 'summary' | 'mention'
+/** 群发言模式（2026-10-18 用户裁定：语法触发、可扩展的模式注册面；2026-10-27 v0.1.93 增 debate） */
+export type GroupSpeakMode = 'independent' | 'summary' | 'mention' | 'debate'
 
-/** 模式触发前缀注册表：新模式在此同位追加（#辩论 等）——前缀剥离、group-user 记 mode 痕 */
+/** 模式触发前缀注册表：新模式在此同位追加——前缀剥离、group-user 记 mode 痕 */
 export const GROUP_MODE_PREFIXES: Array<{ re: RegExp; mode: GroupSpeakMode }> = [
   { re: /^#(讨论|独立)\s+/, mode: 'independent' },
   { re: /^#汇总\s+/, mode: 'summary' },
   { re: /^#点名\s+/, mode: 'mention' },
+  { re: /^#辩论\s+/, mode: 'debate' },
 ]
 
 export interface GroupRecord {
@@ -91,8 +96,12 @@ interface GroupRuntime {
   mentioned: string[]
   /** 发言模式（2026-10-18）：本轮触发模式（缺省 rotation）；summary 阶段二进行中用 summarizing 标记 */
   mode?: GroupSpeakMode
-  /** 汇总轮进行中（#summary 阶段二：汇总人 run 已入队——settle 即收敛） */
+  /** 汇总轮进行中（#summary 阶段二 / #辩论 终轮：汇总人 run 已入队——settle 即收敛） */
   summarizing?: boolean
+  /** 辩论态（v0.1.93 #辩论）：pro/con 按提及顺序（文本出现序，非成员表序）；phase 推进 =
+   *  opening（双方并发盲答亮立场）→ rebuttal ×4（反方先驳、交替）→ summary（中立汇总——
+   *  复用 summarizing 收敛位）；任一方 opening pass → 辩论终止（单方观点已在群流如实呈现） */
+  debate?: { pro: string; con: string; phase: 'opening' | 'rebuttal' | 'summary'; step: number }
 }
 
 export interface GroupDeps {
@@ -199,6 +208,18 @@ export class GroupService {
       await this.#sys(input.groupId, '#点名 未点名任何成员——按轮转处理')
       mode = undefined
     }
+    // #辩论（v0.1.93）：需 @ 两方——提及顺序定正反（文本出现序，非成员表序——@B @A 时 B 为正方）；
+    // 不足两方回退轮转并注记（同 #点名 空点名式样）
+    let debate: GroupRuntime['debate'] | undefined
+    if (mode === 'debate') {
+      if (mentioned.length < 2) {
+        await this.#sys(input.groupId, '#辩论 需 @ 点名正反两方（先提及者为正方）——按轮转处理')
+        mode = undefined
+      } else {
+        const ordered = [...mentioned].sort((a, b) => this.#mentionPosOf(text, a) - this.#mentionPosOf(text, b))
+        debate = { pro: ordered[0]!, con: ordered[1]!, phase: 'opening', step: 0 }
+      }
+    }
     const messageId = this.#deps.nextMessageId()
     await this.#deps.transcript.append(input.groupId, 'group-user', {
       messageId,
@@ -224,6 +245,7 @@ export class GroupService {
     rt.spoken = []
     rt.passed = []
     rt.summarizing = false
+    rt.debate = debate
     rt.turnText = text
     rt.turnMessageId = messageId
     rt.mentioned = mentioned
@@ -272,6 +294,18 @@ export class GroupService {
     return group.members.filter((m) => hit(m) || hit(this.#deps.nameOf?.(m) ?? ''))
   }
 
+  /** 成员 @ 在文本中的首现位置（#辩论 正反定序用——提及顺序 = 文本出现序，非成员表序：
+   *  #mentionedOf 按成员表序返回，@B @A 时 B 应为正方） */
+  #mentionPosOf(text: string, agentId: string): number {
+    let best = Number.MAX_SAFE_INTEGER
+    for (const token of [agentId, this.#deps.nameOf?.(agentId) ?? '']) {
+      if (token === '') continue
+      const m = text.match(new RegExp(`(?:^|[^一-龥A-Za-z0-9])@${escapeRe(token)}(?![一-龥A-Za-z0-9])`))
+      if (m !== null && m.index !== undefined) best = Math.min(best, m.index)
+    }
+    return best
+  }
+
   /**
    * 轮转代际是否已过期（supersede 判定）：runner 终答写入前调用（装配注入
    * isGroupTurnStale）——旧轮 turn 的发言静默丢弃，不落群流不发事件。
@@ -287,6 +321,8 @@ export class GroupService {
    *  settle 不再推进下一员（见 #settleAdvance 的收敛与汇总轮判定）。
    *  点名门控（#点名）：候选仅限被 @ 的成员 */
   #advance(group: GroupRecord, rt: GroupRuntime): string[] {
+    // 辩论（v0.1.93）：立场轮双方并发盲答；后续驳斥/汇总轮由 #settleDebate 按结算交替入队
+    if (rt.mode === 'debate') return this.#enqueueDebateOpening(group, rt)
     const spokenIds = rt.spoken.map((s) => s.id)
     const remaining = (id: string): boolean => !spokenIds.includes(id) && !rt.passed.includes(id)
     const order =
@@ -352,13 +388,18 @@ export class GroupService {
     const group = this.#groups.get(groupId)
     const rt = this.#runtimeOf(groupId)
     if (!group) return
-    // 汇总轮 settle（#汇总 阶段二）：汇总观点经 runner 落群流；此处只收敛（不进 spoken）
+    // 汇总轮 settle（#汇总 阶段二 / #辩论 终轮）：汇总观点经 runner 落群流；此处只收敛（不进 spoken）
     if (rt.summarizing === true) {
       rt.summarizing = false
       if (outcome.state !== 'succeeded') {
         await this.#sys(groupId, `${memberId} 汇总失败（${outcome.code ?? outcome.state}）`)
       }
       await this.#converge(groupId, rt)
+      return
+    }
+    // 辩论结算（v0.1.93）：spoken/passed 记账 + 阶段推进（立场收齐 → 驳斥交替 → 中立汇总）
+    if (rt.mode === 'debate') {
+      await this.#settleDebate(group, rt, memberId, outcome)
       return
     }
     const text =
@@ -424,6 +465,154 @@ export class GroupService {
         memberIds: [...group.members],
       } satisfies GroupTurnPayload,
       summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮汇总 ${summarizer}`),
+    })
+    void ticket.settled.then((outcome) => this.#onSettled(group.groupId, genAtEnqueue, summarizer, outcome))
+  }
+
+  // ---- #辩论（2026-10-27 v0.1.93：立场 → 驳斥 ×4 → 中立汇总——首个多轮编排型模式） ----
+
+  /** 驳斥步数（裁定 ×2：反方先驳 → 正方 → 反方 → 正方——交锋深度即本模式差异化） */
+  static readonly #DEBATE_REBUTTAL_STEPS = 4
+
+  /** 辩论立场轮：正反双方并发盲答（context 恒空——立场各自独立成型，不互看锚定） */
+  #enqueueDebateOpening(group: GroupRecord, rt: GroupRuntime): string[] {
+    const d = rt.debate
+    if (d === undefined) return []
+    const runIds: string[] = []
+    for (const side of [
+      { id: d.pro, stance: 'pro' as const, opponent: d.con },
+      { id: d.con, stance: 'con' as const, opponent: d.pro },
+    ]) {
+      const genAtEnqueue = rt.gen
+      const ticket = this.#deps.schedulerOf(side.id).enqueue({
+        lane: 'agent',
+        kind: 'group',
+        payload: {
+          messageId: rt.turnMessageId,
+          groupId: group.groupId,
+          gen: rt.gen,
+          round: rt.round,
+          text: rt.turnText,
+          context: [],
+          mentioned: [...rt.mentioned],
+          mode: 'debate',
+          debate: { phase: 'opening', stance: side.stance, opponent: side.opponent },
+          memberIds: [...group.members],
+        } satisfies GroupTurnPayload,
+        summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮辩论立场 ${side.id}`),
+      })
+      void ticket.settled.then((outcome) => this.#onSettled(group.groupId, genAtEnqueue, side.id, outcome))
+      runIds.push(ticket.runId)
+    }
+    return runIds
+  }
+
+  /** 辩论结算：发言/缺席记账（驳斥轮 pass 跳过该步不终止——缺席如实）+ 阶段推进 */
+  async #settleDebate(group: GroupRecord, rt: GroupRuntime, memberId: string, outcome: RunOutcome): Promise<void> {
+    const d = rt.debate
+    if (d === undefined) {
+      await this.#converge(group.groupId, rt)
+      return
+    }
+    const text =
+      outcome.state === 'succeeded'
+        ? String(((outcome.result as { text?: string } | undefined)?.text ?? '')).trim()
+        : ''
+    if (outcome.state === 'succeeded' && text !== '' && text !== GROUP_PASS_TOKEN) {
+      rt.spoken.push({ id: memberId, text })
+    } else {
+      if (outcome.state !== 'succeeded') {
+        await this.#sys(group.groupId, `${memberId} 未响应（${outcome.code ?? outcome.state}）`)
+      } else {
+        await this.#sys(group.groupId, `${memberId} 本轮 pass`)
+      }
+      rt.passed.push(memberId)
+    }
+    if (d.phase === 'opening') {
+      const bothSettled = [d.pro, d.con].every((id) => rt.spoken.some((s) => s.id === id) || rt.passed.includes(id))
+      if (!bothSettled) return
+      // 任一方未亮立场 → 辩论不成立（已发言一方的观点已在群流如实呈现，不硬凑单方独白）
+      if (rt.passed.includes(d.pro) || rt.passed.includes(d.con)) {
+        await this.#sys(group.groupId, '一方未亮立场——辩论终止')
+        await this.#converge(group.groupId, rt)
+        return
+      }
+      d.phase = 'rebuttal'
+      d.step = 0
+      this.#enqueueDebateRebuttal(group, rt)
+      return
+    }
+    if (d.phase === 'rebuttal') {
+      d.step += 1
+      if (d.step >= GroupService.#DEBATE_REBUTTAL_STEPS) {
+        d.phase = 'summary'
+        await this.#enqueueDebateSummary(group, rt)
+        return
+      }
+      this.#enqueueDebateRebuttal(group, rt)
+    }
+  }
+
+  /** 辩论驳斥轮：反方先驳（正方亮立场后 con 立即回应），交替 con→pro→con→pro；
+   *  靶点 = 对方最近一次发言（立场或上一轮驳斥——spoken 逆序找） */
+  #enqueueDebateRebuttal(group: GroupRecord, rt: GroupRuntime): void {
+    const d = rt.debate
+    if (d === undefined) return
+    const speaker = d.step % 2 === 0 ? d.con : d.pro
+    const opponent = speaker === d.pro ? d.con : d.pro
+    const last = [...rt.spoken].reverse().find((s) => s.id === opponent)
+    const genAtEnqueue = rt.gen
+    const ticket = this.#deps.schedulerOf(speaker).enqueue({
+      lane: 'agent',
+      kind: 'group',
+      payload: {
+        messageId: rt.turnMessageId,
+        groupId: group.groupId,
+        gen: rt.gen,
+        round: rt.round,
+        text: rt.turnText,
+        context: last !== undefined ? [`${last.id}：${last.text}`] : [],
+        mentioned: [],
+        mode: 'debate',
+        debate: { phase: 'rebuttal', stance: speaker === d.pro ? 'pro' : 'con', opponent },
+        memberIds: [...group.members],
+      } satisfies GroupTurnPayload,
+      summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮辩论驳斥 ${speaker}`),
+    })
+    void ticket.settled.then((outcome) => this.#onSettled(group.groupId, genAtEnqueue, speaker, outcome))
+  }
+
+  /** 辩论终轮：中立汇总——管家优先，次选未参辩成员（旁观者清），兜底正方（首发言者）；
+   *  不判胜负（呈现分歧点，判断留给用户）；复用 summarizing 收敛位（settle 即 converge） */
+  async #enqueueDebateSummary(group: GroupRecord, rt: GroupRuntime): Promise<void> {
+    const debaters = new Set([rt.debate?.pro, rt.debate?.con])
+    const summarizer =
+      group.members.find((m) => this.#deps.roleOf?.(m) === 'steward') ??
+      group.members.find((m) => !debaters.has(m)) ??
+      rt.debate?.pro ??
+      group.members[0]
+    if (summarizer === undefined) {
+      await this.#converge(group.groupId, rt)
+      return
+    }
+    rt.summarizing = true
+    const genAtEnqueue = rt.gen
+    const ticket = this.#deps.schedulerOf(summarizer).enqueue({
+      lane: 'agent',
+      kind: 'group',
+      payload: {
+        messageId: rt.turnMessageId,
+        groupId: group.groupId,
+        gen: rt.gen,
+        round: rt.round,
+        text: rt.turnText,
+        context: rt.spoken.map((s) => `${s.id}：${s.text}`),
+        mentioned: [],
+        mode: 'debate',
+        debate: { phase: 'summary' },
+        memberIds: [...group.members],
+      } satisfies GroupTurnPayload,
+      summary: summarizeRun(`群 ${group.groupId} 第${rt.round}轮辩论汇总 ${summarizer}`),
     })
     void ticket.settled.then((outcome) => this.#onSettled(group.groupId, genAtEnqueue, summarizer, outcome))
   }

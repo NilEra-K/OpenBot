@@ -452,11 +452,13 @@ const slash = ref<{ open: boolean; mode: SlashMode; start: number; sel: number; 
 })
 const slashLoading = ref(false)
 
-/** 群发言模式徽标文案（2026-10-18 模式体系——与内核 GROUP_MODE_PREFIXES 注册表同源） */
-const GROUP_MODE_LABELS: Record<'independent' | 'summary' | 'mention', string> = {
+/** 群发言模式徽标文案（2026-10-18 模式体系；2026-10-27 v0.1.93 增辩论——与内核
+ *  GROUP_MODE_PREFIXES 注册表同源） */
+const GROUP_MODE_LABELS: Record<'independent' | 'summary' | 'mention' | 'debate', string> = {
   independent: '独立作答',
   summary: '汇总',
   mention: '点名',
+  debate: '辩论',
 }
 
 /** 命令清单（子串联想；/quote 进 agent 级；# 前缀为群发言模式——2026-10-18 可扩展注册面） */

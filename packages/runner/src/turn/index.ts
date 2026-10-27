@@ -135,7 +135,13 @@ export class TurnRunner {
           ? `（独立作答：本轮各成员分别独立作答、互不可见——给出你自己的观点，不要试图猜测或引用他人）`
           : payload.mode === 'summary'
             ? `（本轮汇总：你是汇总人——综合上方各成员的独立观点，给出收敛的结论：共识、分歧与建议；直接面向用户成文）`
-            : `（群聊轮转：仅当你确实无话可说时才回复 ${'[pass]'}；用户要求每位成员回应或点名你时必须直接回应，不要因他人已发言而 ${'[pass]'}）`
+            : payload.mode === 'debate' && payload.debate !== undefined
+              ? payload.debate.phase === 'opening'
+                ? `（辩论·${payload.debate.stance === 'pro' ? '正方' : '反方'}立场：本场辩论中你是${payload.debate.stance === 'pro' ? '正方' : '反方'}，对立${payload.debate.stance === 'pro' ? '反方' : '正方'}是 ${nameOfPeer(payload.debate.opponent)}——就话题亮明你方立场并给出论据，坚定为你方辩护，不要替对方让步）`
+                : payload.debate.phase === 'rebuttal'
+                  ? `（辩论·驳斥轮：针对「本轮已发言」中 ${nameOfPeer(payload.debate.opponent)} 的最新发言进行驳斥——指出薄弱点、正面回应质疑、强化你方立场；保持交锋礼节，不人身攻击）`
+                  : `（辩论·中立汇总：你是本场辩论的汇总人——中立呈现双方立场、交锋中的关键分歧点与各自最有力的论据；不判胜负，把判断留给用户）`
+              : `（群聊轮转：仅当你确实无话可说时才回复 ${'[pass]'}；用户要求每位成员回应或点名你时必须直接回应，不要因他人已发言而 ${'[pass]'}）`
       const toolNote = `回答前可先用工具查证或计算，再下结论。`
       return this.#runTurn(run, {
         userMessage: {

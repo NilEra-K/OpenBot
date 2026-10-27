@@ -420,3 +420,130 @@ describe('GroupService 汇总与点名模式（2026-10-18 模式体系扩展）'
     expect(rec).toEqual(['mention', undefined]) // 回退轮转的消息无 mode 痕
   })
 })
+
+describe('GroupService #辩论（2026-10-27 v0.1.93：立场 → 驳斥 ×4 → 中立汇总）', () => {
+  it('全流程：双方并发盲答亮立场 → 反方先驳交替 ×4（靶点=对方最近发言）→ 未参辩成员中立汇总 → 收敛', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    h.register('a3')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2', 'a3'] })
+    const acc = await h.service.sendUserMessage({ groupId: group.groupId, text: '#辩论 @a1 @a2 用 Rust 还是 Go', nonce: 'n1' })
+    // 立场轮：正（a1）反（a2）并发盲答——context 恒空、前缀剥离进话题
+    expect(acc.runIds).toHaveLength(2)
+    expect(h.gates.map((g) => g.run.agentId)).toEqual(['a1', 'a2'])
+    const opening = (i: number): { mode: string; debate: { phase: string; stance: string; opponent: string }; context: string[]; text: string } =>
+      h.gates[i]!.run.payload as never
+    expect(opening(0).mode).toBe('debate')
+    expect(opening(0).debate).toEqual({ phase: 'opening', stance: 'pro', opponent: 'a2' })
+    expect(opening(1).debate).toEqual({ phase: 'opening', stance: 'con', opponent: 'a1' })
+    expect(opening(0).context).toEqual([]) // 盲答互不可见
+    expect(opening(0).text).toBe('@a1 @a2 用 Rust 还是 Go') // 前缀剥离，@提及留在话题文本（同 #点名 语义）
+    h.gates[0]!.resolve({ text: '正方：Rust 安全' })
+    await h.flush()
+    expect(h.gates).toHaveLength(2) // 并发——一方 settle 不推进
+    h.gates[1]!.resolve({ text: '反方：Go 简单' })
+    await h.flush()
+    // 驳斥 ×4：反方先驳（con→pro→con→pro），靶点=对方最近发言
+    const expectRebuttal = (gateIdx: number, speaker: string, targetCtx: string): void => {
+      expect(h.gates[gateIdx]?.run.agentId).toBe(speaker)
+      const p = h.gates[gateIdx]!.run.payload as { debate: { phase: string; stance: string; opponent: string }; context: string[] }
+      expect(p.debate.phase).toBe('rebuttal')
+      expect(p.context).toEqual([targetCtx])
+    }
+    expectRebuttal(2, 'a2', 'a1：正方：Rust 安全')
+    h.gates[2]!.resolve({ text: '驳：学习曲线陡' })
+    await h.flush()
+    expectRebuttal(3, 'a1', 'a2：驳：学习曲线陡')
+    h.gates[3]!.resolve({ text: '驳：编译器兜底' })
+    await h.flush()
+    expectRebuttal(4, 'a2', 'a1：驳：编译器兜底')
+    h.gates[4]!.resolve({ text: '再驳：生态慢' })
+    await h.flush()
+    expectRebuttal(5, 'a1', 'a2：再驳：生态慢')
+    h.gates[5]!.resolve({ text: '终驳：值回票价' })
+    await h.flush()
+    // 汇总轮：无管家注入 → 次选未参辩成员 a3（旁观者清）；context = 全部六段发言
+    expect(h.gates[6]?.run.agentId).toBe('a3')
+    const sum = h.gates[6]!.run.payload as { mode: string; debate: { phase: string }; context: string[] }
+    expect(sum.mode).toBe('debate')
+    expect(sum.debate).toEqual({ phase: 'summary' })
+    expect(sum.context).toEqual([
+      'a1：正方：Rust 安全',
+      'a2：反方：Go 简单',
+      'a2：驳：学习曲线陡',
+      'a1：驳：编译器兜底',
+      'a2：再驳：生态慢',
+      'a1：终驳：值回票价',
+    ])
+    h.gates[6]!.resolve({ text: '分歧在安全预算 vs 交付速度' })
+    await h.flush()
+    expect(h.gates).toHaveLength(7) // 收敛——不再入队
+  })
+
+  it('提及顺序定正反（文本出现序——@反 在前则其为正方；提及表序不干扰）', async () => {
+    const h = makeHarness((id) => (id === 'a1' ? '甲' : id === 'a2' ? '乙' : undefined))
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#辩论 @乙 @甲 今晚吃啥', nonce: 'n1' })
+    // 文本里 @乙（a2）在前 → a2 为正方（成员表序 a1,a2 不干扰）
+    expect(h.gates.map((g) => g.run.agentId)).toEqual(['a2', 'a1'])
+    const p0 = h.gates[0]!.run.payload as { debate: { stance: string } }
+    expect(p0.debate.stance).toBe('pro')
+    const p1 = h.gates[1]!.run.payload as { debate: { stance: string } }
+    expect(p1.debate.stance).toBe('con')
+  })
+
+  it('不足两方：回退轮转并注记（同 #点名 空点名式样）——mode 痕不落', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#辩论 就我一个人', nonce: 'n1' })
+    expect(h.gates).toHaveLength(1) // 回退轮转（首员依序）
+    expect((h.gates[0]!.run.payload as { mode?: string }).mode).toBeUndefined()
+    const notes = (await h.transcript.readAll(group.groupId))
+      .filter((r) => r.kind === 'group-sys')
+      .map((r) => (r.payload as { text: string }).text)
+    expect(notes.some((n) => n.includes('需 @ 点名正反两方'))).toBe(true)
+  })
+
+  it('一方未亮立场（opening pass）：辩论终止——另一方观点已在群流如实呈现', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#辩论 @a1 @a2 话题', nonce: 'n1' })
+    h.gates[0]!.resolve({ text: '[pass]' })
+    await h.flush()
+    h.gates[1]!.resolve({ text: '反方立场' })
+    await h.flush()
+    // 双方结算完毕但正方缺席 → 终止注记 + 收敛（无驳斥轮入队）
+    expect(h.gates).toHaveLength(2)
+    const notes = (await h.transcript.readAll(group.groupId))
+      .filter((r) => r.kind === 'group-sys')
+      .map((r) => (r.payload as { text: string }).text)
+    expect(notes.some((n) => n.includes('一方未亮立场——辩论终止'))).toBe(true)
+  })
+
+  it('supersede 对辩论在途轮生效：驳斥中插话 → 旧轮结算静默丢弃、新轮开始', async () => {
+    const h = makeHarness()
+    h.register('a1')
+    h.register('a2')
+    const group = await h.service.createGroup({ name: 'g', memberAgentIds: ['a1', 'a2'] })
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '#辩论 @a1 @a2 话题', nonce: 'n1' })
+    h.gates[0]!.resolve({ text: '正方立场' })
+    await h.flush()
+    h.gates[1]!.resolve({ text: '反方立场' })
+    await h.flush()
+    expect(h.gates[2]?.run.agentId).toBe('a2') // 驳斥轮在队
+    // 插话（supersede：gen bump——在途驳斥结算时静默丢弃）
+    await h.service.sendUserMessage({ groupId: group.groupId, text: '换话题了', nonce: 'n2' })
+    expect(h.gates[3]?.run.agentId).toBe('a1') // 新轮轮转已入队
+    h.gates[2]!.resolve({ text: '迟到的驳斥' })
+    await h.flush()
+    expect(h.gates).toHaveLength(4) // 旧轮结算不推进任何新入队
+    expect((h.gates[3]!.run.payload as { text: string }).text).toBe('换话题了')
+  })
+})

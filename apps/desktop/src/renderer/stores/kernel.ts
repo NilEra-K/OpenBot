@@ -108,7 +108,7 @@ export interface ChatMessage {
   /** 群消息（P5 Step 4）：所属群——群会话流按此过滤 */
   groupId?: string
   /** 群发言模式（2026-10-18 模式体系）：group-user 在场——徽标（独立作答/汇总/点名） */
-  groupMode?: 'independent' | 'summary' | 'mention'
+  groupMode?: 'independent' | 'summary' | 'mention' | 'debate'
   /** 乐观占位：命令响应/事件到达前为 true（UI 显示发送中态） */
   pending?: boolean
   /** 发送失败（网络/领域错误）：UI 显示重试 */
@@ -683,10 +683,10 @@ export const useKernelStore = defineStore('kernel', {
     async sendGroupMessage(groupId: string, text: string, reuseNonce?: string): Promise<void> {
       const nonce = reuseNonce ?? crypto.randomUUID()
       const placeholderId = `~${nonce}`
-      const modeMatch = text.match(/^#(讨论|独立|汇总|点名)\s+/)
+      const modeMatch = text.match(/^#(讨论|独立|汇总|点名|辩论)\s+/)
       const shown = modeMatch !== null ? text.slice(modeMatch[0].length) : text
       if (!this.messages.some((m) => m.messageId === placeholderId)) {
-        this.messages.push({ messageId: placeholderId, kind: 'group-user', from: 'user', to: groupId, text: shown, at: Date.now(), groupId, ...(modeMatch !== null ? { groupMode: modeMatch[1] === '讨论' || modeMatch[1] === '独立' ? ('independent' as const) : (modeMatch[1] as 'summary' | 'mention') } : {}), pending: true })
+        this.messages.push({ messageId: placeholderId, kind: 'group-user', from: 'user', to: groupId, text: shown, at: Date.now(), groupId, ...(modeMatch !== null ? { groupMode: modeMatch[1] === '讨论' || modeMatch[1] === '独立' ? ('independent' as const) : modeMatch[1] === '辩论' ? ('debate' as const) : (modeMatch[1] as 'summary' | 'mention') } : {}), pending: true })
       }
       try {
         const acceptance = await this.call<{ messageId: string }>('v1.group.send', { groupId, text, nonce })
@@ -1148,7 +1148,7 @@ export const useKernelStore = defineStore('kernel', {
                 : record.kind === 'a2a-in' && typeof msg.from === 'string'
                   ? { messageId: msg.messageId, kind: 'a2a', from: msg.from, to: agentId, text: msg.text, at: record.at }
                   : record.kind === 'group-user'
-                    ? { messageId: msg.messageId, kind: 'group-user', from: 'user', to: agentId, text: msg.text, at: record.at, groupId: agentId, ...(p['mode'] === 'independent' || p['mode'] === 'summary' || p['mode'] === 'mention' ? { groupMode: p['mode'] as 'independent' | 'summary' | 'mention' } : {}) }
+                    ? { messageId: msg.messageId, kind: 'group-user', from: 'user', to: agentId, text: msg.text, at: record.at, groupId: agentId, ...(p['mode'] === 'independent' || p['mode'] === 'summary' || p['mode'] === 'mention' || p['mode'] === 'debate' ? { groupMode: p['mode'] as 'independent' | 'summary' | 'mention' | 'debate' } : {}) }
                     : record.kind === 'group-agent' && typeof msg.from === 'string'
                       ? { messageId: msg.messageId, kind: 'group-agent', from: msg.from, to: agentId, text: msg.text, at: record.at, groupId: agentId }
                       : record.kind === 'group-sys'
@@ -1330,7 +1330,7 @@ export const useKernelStore = defineStore('kernel', {
             text: p.text,
             at: event.at,
             groupId: p.groupId,
-            ...(p.kind === 'user' && (p.mode === 'independent' || p.mode === 'summary' || p.mode === 'mention')
+            ...(p.kind === 'user' && (p.mode === 'independent' || p.mode === 'summary' || p.mode === 'mention' || p.mode === 'debate')
             ? { groupMode: p.mode }
             : {}),
           })
