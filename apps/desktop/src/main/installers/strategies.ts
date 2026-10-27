@@ -55,8 +55,11 @@ export interface RuntimeStrategy {
   notes: string[]
 }
 
-const DOCKER_DESKTOP_NOTE =
-  '官方滚动直链（TLS）——无预置哈希可校验（如实披露）；安装后需启动一次 Docker Desktop'
+/** 官方直链如实事注（2026-10-26 拆两条——一行一事实，密度优化） */
+const DOCKER_DESKTOP_NOTES = [
+  '官方滚动直链（TLS），无预置哈希可校验（如实披露）',
+  '安装后需启动一次 Docker Desktop',
+]
 
 export const STRATEGIES: RuntimeStrategy[] = [
   // ---- Windows ----
@@ -82,8 +85,9 @@ export const STRATEGIES: RuntimeStrategy[] = [
     elevation: 'uac',
     // 官方安装器旗标（docs.docker.com 命令行安装）：程序本体与 WSL 后端数据位置安装时均可自选
     locationFlags: { installDir: '--installation-dir=', dataDir: '--wsl-default-data-root=' },
-    locationNote: '安装位置与容器数据位置均可在安装时自选（官方安装器旗标）；装后也可在 Docker Desktop 设置中调整',
-    notes: [DOCKER_DESKTOP_NOTE, '许可注意：大企业（>250 人或年收入 >$10M）需付费订阅'],
+    locationNote:
+      '安装位置与容器数据位置安装时可自选，留空均用官方默认——装后也可在 Docker Desktop 设置中调整',
+    notes: [...DOCKER_DESKTOP_NOTES, '许可注意：大企业（>250 人或年收入 >$10M）需付费订阅'],
   },
   {
     id: 'podman',

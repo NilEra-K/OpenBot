@@ -1080,6 +1080,12 @@ const phaseLabel: Record<string, string> = {
   canceled: '已取消',
 }
 
+/** ⓘ 收纳内容（2026-10-26 用户裁定）：per-runtime 如实标注 + 通用体积行——正文只留位置与提权告知 */
+const installTipLines = computed<string[]>(() => {
+  const inst = installModal.installer
+  return inst === null ? [] : [...inst.notes, '下载体积可能较大（数百 MB）——可随时「取消」或转「后台下载」']
+})
+
 const openInstallConfirm = (installer: typeof kernel.runtimeInstallers[number]): void => {
   installModal.open = true
   installModal.installer = installer
@@ -1379,14 +1385,11 @@ const wslRelevant = computed(
                 <span class="appearance-name">{{ row.runtime }}</span>
                 <span v-for="pf in row.platforms" :key="pf" class="rt-pf" :class="{ 'is-here': pf === hostPlatform }">{{ PLATFORM_LABEL[pf] }}</span>
               </div>
-              <!-- 本平台行：位置事实 + 如实标注（安装实况收进模态——2026-10-20 用户裁定） -->
-              <div v-if="row.local !== null" class="appearance-desc">
-                {{ row.local.locationNote }}
-                <span v-for="n in row.local.notes" :key="n" class="ri-note">· {{ n }}</span>
-              </div>
-              <div v-else-if="row.staticState === 'builtin'" class="appearance-desc">systemd 原生轻量容器——系统自带，零安装</div>
+              <!-- 本平台行不再铺位置事实/如实标注（2026-10-26 用户裁定：与安装确认模态重复——
+                   位置说明/输入/ⓘ 收纳归模态一处；行上只留名称+徽章+状态） -->
+              <div v-if="row.staticState === 'builtin'" class="appearance-desc">systemd 原生轻量容器——系统自带，零安装</div>
               <div v-else-if="row.staticState === 'deferred'" class="appearance-desc">macOS 虚拟机载体（GUI 沙箱路线）——安装器记档后置</div>
-              <div v-else class="appearance-desc">适用于 {{ row.platforms.map((pf) => PLATFORM_LABEL[pf]).join(' / ') }}——在{{ thisPlatformLabel }}上不支持</div>
+              <div v-else-if="row.local === null" class="appearance-desc">适用于 {{ row.platforms.map((pf) => PLATFORM_LABEL[pf]).join(' / ') }}——在{{ thisPlatformLabel }}上不支持</div>
             </div>
             <!-- 状态区：已可用绿签 / 安装中/一键安装 / 自带 / 后置 / 不支持；⚙ 行级数据目录 -->
             <div class="rt-status">
@@ -1434,9 +1437,14 @@ const wslRelevant = computed(
         <div v-if="installModal.open && installModal.installer" class="approval-scrim" role="presentation">
           <div class="approval-modal" role="dialog" aria-modal="true" aria-label="运行时安装">
             <div class="am-head">
-              <span class="am-title">
-                {{ installModal.stage === 'confirm' ? `安装 ${installModal.installer.runtime}` : installModal.installer.runtime }}
-              </span>
+              <div class="am-head-left">
+                <span class="am-title">
+                  {{ installModal.stage === 'confirm' ? `安装 ${installModal.installer.runtime}` : installModal.installer.runtime }}
+                </span>
+                <!-- 如实事注收纳（2026-10-26 用户裁定）：notes + 体积行收进标题右侧 ⓘ——
+                     正文只留位置与提权告知（UAC/polkit 是安全透明，不收纳） -->
+                <HelpTip :lines="installTipLines" />
+              </div>
             </div>
             <!-- 阶段一：确认（提权透明 + 位置事实 + 位置自选输入 + 许可注意） -->
             <div v-if="installModal.stage === 'confirm'" class="am-body">
@@ -1444,21 +1452,19 @@ const wslRelevant = computed(
               <!-- 位置自选输入（2026-10-21 用户需求：安装位置/容器数据位置区分可选）：
                    策略声明旗标才呈现（不放假输入）；留空 = 官方默认 -->
               <div v-if="installModal.installer.installDirSelectable" class="am-field">
-                <label class="field-label" for="rtInstallDir">安装位置（可选——运行时程序本体装哪）</label>
+                <label class="field-label" for="rtInstallDir">安装位置（程序本体，可选）</label>
                 <div class="field-pick">
-                  <input id="rtInstallDir" v-model="installModal.installDir" class="wiz-input mono" placeholder="留空 = 官方默认" maxlength="300" autocomplete="off" spellcheck="false" />
+                  <input id="rtInstallDir" v-model="installModal.installDir" class="wiz-input mono" placeholder="官方默认" maxlength="300" autocomplete="off" spellcheck="false" />
                   <button type="button" class="btn btn-ghost" @click="pickInto((p) => (installModal.installDir = p))">浏览…</button>
                 </div>
               </div>
               <div v-if="installModal.installer.dataDirSelectable" class="am-field">
-                <label class="field-label" for="rtDataDir">容器数据位置（可选——镜像/卷落盘哪）</label>
+                <label class="field-label" for="rtDataDir">容器数据位置（镜像/卷，可选）</label>
                 <div class="field-pick">
-                  <input id="rtDataDir" v-model="installModal.dataDir" class="wiz-input mono" placeholder="留空 = 官方默认" maxlength="300" autocomplete="off" spellcheck="false" />
+                  <input id="rtDataDir" v-model="installModal.dataDir" class="wiz-input mono" placeholder="官方默认" maxlength="300" autocomplete="off" spellcheck="false" />
                   <button type="button" class="btn btn-ghost" @click="pickInto((p) => (installModal.dataDir = p))">浏览…</button>
                 </div>
               </div>
-              <p v-for="n in installModal.installer.notes" :key="n" class="am-line am-note">· {{ n }}</p>
-              <p class="am-line am-note">下载体积可能较大（数百 MB）——安装中可随时「取消」或转「后台下载」。</p>
               <p v-if="installModal.installer.elevation === 'uac'" class="am-line">⚠ 将弹出系统授权框（UAC）——由你确认后才安装。</p>
               <p v-else-if="installModal.installer.elevation === 'polkit'" class="am-line">⚠ 将弹出系统授权框（polkit 密码框）——由你确认后才安装。</p>
             </div>
@@ -1499,16 +1505,16 @@ const wslRelevant = computed(
           <div class="approval-modal" role="dialog" aria-modal="true" aria-label="设置 Box 数据目录" @keydown.escape="dirModal.open = false">
             <div class="am-head"><span class="am-title">「{{ dirModal.name }}」Box 数据目录</span></div>
             <div class="am-body">
-              <p class="am-line">只决定 OpenBot 自建 Box（发行版 VHDX / 快照）的落盘位置——与运行时程序本体的<b>安装位置</b>无关（后者见各运行时的安装确认）。</p>
+              <p class="am-line">Box 发行版（VHDX / 快照）的落盘位置——与运行时程序本体的<b>安装位置</b>是两回事。</p>
               <div class="am-field">
                 <label class="field-label" for="rtBoxDir">Box 数据目录（绝对路径）</label>
                 <div class="field-pick">
-                  <input id="rtBoxDir" v-model="dirModal.value" class="wiz-input mono" placeholder="留空 = 应用默认" maxlength="300" autocomplete="off" spellcheck="false" @keydown.enter.prevent="saveDirModal" />
+                  <input id="rtBoxDir" v-model="dirModal.value" class="wiz-input mono" placeholder="应用默认" maxlength="300" autocomplete="off" spellcheck="false" @keydown.enter.prevent="saveDirModal" />
                   <button type="button" class="btn btn-ghost" @click="pickInto((p) => (dirModal.value = p))">浏览…</button>
                 </div>
               </div>
               <p v-if="dirModal.current !== ''" class="am-line am-note">当前：{{ dirModal.current }}</p>
-              <p class="am-line am-note">留空 = 应用默认（userData/boxes）；单盒可在建 Agent 时另行指定。保存后重启生效。</p>
+              <p class="am-line am-note">留空用应用默认（userData/boxes）；单盒可在建 Agent 时另行指定；保存后重启生效。</p>
             </div>
             <div class="am-actions">
               <button type="button" class="btn btn-primary" :disabled="dirModal.busy" @click="saveDirModal">保存</button>

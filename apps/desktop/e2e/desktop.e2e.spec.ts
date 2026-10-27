@@ -2653,13 +2653,20 @@ test('运行时一键安装（v0.2.0）：mock-runtime 全链——确认弹窗�
     await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click()
     const row = page.locator('.rt-row', { hasText: 'Mock 运行时' })
     await expect(row).toBeVisible()
-    await expect(row.locator('.ri-note').first()).toBeVisible() // 如实标注在场
+    // 如实标注收进确认模态 ⓘ（2026-10-26）——行上不再铺位置事实/notes
+    await expect(row.locator('.ri-note')).toHaveCount(0)
+    await expect(row.locator('.appearance-desc')).toHaveCount(0)
 
-    // 确认弹窗：提权告知 + 位置事实 + 许可注意（透明前提）
+    // 确认弹窗：提权告知 + 位置事实 + 位置自选输入（透明前提）
     await row.getByRole('button', { name: '一键安装' }).click()
     const modal = page.locator('.approval-modal')
     await expect(modal).toBeVisible()
     await expect(modal).toContainText('安装 Mock 运行时')
+    // ⓘ 收纳（2026-10-26）：notes + 体积行收进标题右侧 hover 浮层——正文不再铺四条
+    await modal.locator('.help-tip').hover()
+    await expect(modal.locator('.help-tip-body')).toContainText('仅 E2E 环境注册')
+    await expect(modal.locator('.help-tip-body')).toContainText('下载体积可能较大')
+    await expect(modal.locator('.am-body')).not.toContainText('· 仅 E2E 环境注册')
     // 位置自选输入（2026-10-21 位置旗标链）：mock 声明 installDir → 输入在场；dataDir 未声明 → 不放假输入
     await expect(modal.locator('#rtInstallDir')).toBeVisible()
     await expect(modal.locator('#rtDataDir')).toHaveCount(0)

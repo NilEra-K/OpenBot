@@ -1403,11 +1403,6 @@
 }
 
 /* 运行时一键安装（2026-10-20 v0.2.0）：安装器行/进度条/兜底命令/折叠区 */
-.ri-note {
-  color: var(--ink3);
-  font-size: 11.5px;
-  margin-left: 6px;
-}
 .ri-progress {
   display: flex;
   flex-direction: column;
@@ -1600,6 +1595,13 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+/* 标题左组（2026-10-26 安装确认模态）：标题 + ⓘ 收纳并排——不与 space-between 相抵（否则 ⓘ 被推最右） */
+.am-head-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 .am-title {
   font-size: 14.5px;

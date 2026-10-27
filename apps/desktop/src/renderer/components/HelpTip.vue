@@ -7,18 +7,26 @@
  * up prop（2026-10-13 用户报障）：模态卡场景（新建 Agent 向导）方向反向——wiz-card 的
  * overflow:hidden 裁掉向下伸出卡底的浮层，而上方空间充足；传 up 向上展开。
  * 缺省向下，设置页零变化。
+ * lines prop（2026-10-26 安装确认模态）：多条逐行呈现（一行一事实）；text 单串用例零变化。
  */
-withDefaults(defineProps<{ text: string; up?: boolean }>(), { up: false })
+withDefaults(defineProps<{ text?: string; lines?: string[]; up?: boolean }>(), {
+  text: '',
+  lines: () => [],
+  up: false,
+})
 </script>
 
 <template>
-  <span class="help-tip" :class="{ up }" tabindex="0" :aria-label="`说明：${text}`" role="note">
+  <span class="help-tip" :class="{ up }" tabindex="0" :aria-label="`说明：${lines.length > 0 ? lines.join('；') : text}`" role="note">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
       <circle cx="12" cy="12" r="9.2" />
       <path d="M12 10.6v6" />
       <circle cx="12" cy="7.4" r="0.4" fill="currentColor" stroke="none" />
     </svg>
-    <span class="help-tip-body">{{ text }}</span>
+    <span class="help-tip-body">
+      <template v-if="lines.length > 0"><div v-for="l in lines" :key="l">· {{ l }}</div></template>
+      <template v-else>{{ text }}</template>
+    </span>
   </span>
 </template>
 
