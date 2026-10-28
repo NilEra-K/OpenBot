@@ -1264,7 +1264,7 @@ const wslRelevant = computed(
       <div class="set-sec-row">
         <div class="set-sec">模型设置</div>
         <HelpTip
-          text="接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个。全场唯一一个「默认」模型：未指定模型的 Agent 直接使用它；其他模型上游失败（额度不足、订阅过期等）时自动回退到它。API key 以系统加密（safeStorage）落盘，不出现在 transcript 与事件流里。"
+          text="接入模型端点（OpenAI 兼容 / Anthropic 协议，DeepSeek / GLM / Moonshot / Claude 等），可同时配置多个。全场唯一一个「默认」模型：未指定模型的 Agent 直接使用它；其他模型上游失败（额度不足、订阅过期等）时自动回退到它。API key 以系统加密（`safeStorage`）落盘，不出现在 transcript 与事件流里。"
         />
       </div>
       <!-- 模型设置主从卡（2026-09-15，对照用户图例 v2）：左供应商列表 + 右详情/内联表单——
@@ -1701,7 +1701,7 @@ const wslRelevant = computed(
       <div class="set-sec-row">
         <div class="set-sec">镜像注册表</div>
         <HelpTip
-          text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机 / 宿主屏幕）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。「扫描可用镜像」按需列出本机 Docker / Podman（含 WSL 发行版内独立安装的 docker——Docker Desktop 的镜像走宿主 CLI）实际在场的镜像，只报告事实；行上「注册」预填表单，保存后才入注册表。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 tools/provision-gui.sh 预置桌面工具集；宿主屏幕载体注入恒经审批确认。"
+          text="注册可被 Agent 绑定的机器载体（容器镜像 / SSH 主机——VMWare、云主机 / 宿主屏幕）。条目 = 载体 + 连接事实 + 控制协议；「测试」做真实连通与工具集探测（如实报告，不假装可用）。「扫描可用镜像」按需列出本机 Docker / Podman（含 WSL 发行版内独立安装的 docker——Docker Desktop 的镜像走宿主 CLI）实际在场的镜像，只报告事实；行上「注册」预填表单，保存后才入注册表。SSH 载体以密钥免密为前提（key-only，无密码输入面）；GUI 面需远端已跑 `tools/provision-gui.sh` 预置桌面工具集；宿主屏幕载体注入恒经审批确认。"
         />
         <button class="btn btn-secondary btn-sm" style="margin-left: auto" data-role="image-scan" :disabled="kernel.imageScanning" @click="scanAvailableImages">{{ kernel.imageScanning ? '扫描中…' : '⟳ 扫描可用镜像' }}</button>
         <button class="btn btn-secondary btn-sm" style="margin-left: 8px" @click="openImageCreate">＋ 添加镜像</button>
@@ -2239,7 +2239,7 @@ const wslRelevant = computed(
       <div class="set-sec">调试信息</div>
       <div class="settings-card">
       <div class="kv">
-        <span class="k">事件流序号<HelpTip text="内核推送事件的最后编号（seq）：断线重连后从下一序号续传，事件不丢失、不重复。仅作诊断用途。" /></span>
+        <span class="k">事件流序号<HelpTip text="内核推送事件的最后编号（`seq`）：断线重连后从下一序号续传，事件不丢失、不重复。仅作诊断用途。" /></span>
         <span class="v mono">{{ kernel.lastSeq }}</span>
       </div>
       <div class="kv"><span class="k">连接状态</span><span class="v">{{ kernel.connected ? '内核已连接' : '内核未连接' }}</span></div>

@@ -42,3 +42,23 @@ export function renderMarkdown(text: string, mentionNames?: ReadonlySet<string>)
     ALLOWED_ATTR: ['href', 'title', 'class'],
   })
 }
+
+/** 浮层 inline 渲染器（2026-10-28 v0.1.95 HelpTip 用）：只开行内强调/代码——链接与图片禁用
+ *  （300px hover 浮层里链接点不到、块级是反模式）；独立实例（不碰消息链的 mention/linkify 配置） */
+const tipMd = new MarkdownIt({ html: false, linkify: false, breaks: false })
+tipMd.disable(['link', 'image', 'autolink'])
+
+/** 单段文案 → inline 级安全 HTML（粗体/行内代码；供 HelpTip v-html——DOMPurify 清洗，
+ *  浏览器 DOM 环境；node 单测用 renderInlineMarkdownRaw 覆盖规则面） */
+export function renderInlineMarkdown(text: string): string {
+  return DOMPurify.sanitize(tipMd.renderInline(text), {
+    ALLOWED_TAGS: ['strong', 'em', 'code'],
+    ALLOWED_ATTR: [],
+  })
+}
+
+/** 同上但未清洗（node 单测用——vitest 无 DOM 环境，DOMPurify 绑定缺席；html:false 已转义
+ *  裸 HTML，清洗面由 E2E 真渲染链覆盖） */
+export function renderInlineMarkdownRaw(text: string): string {
+  return tipMd.renderInline(text)
+}

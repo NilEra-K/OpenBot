@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { renderInlineMarkdown } from '../lib/markdown'
+
 /**
  * HelpTip（0.1.2 设置页改版）：节级解释性文字的收纳位——标题行 ⓘ 图标，hover/键盘聚焦展开
  * 纯 CSS 浮层。实测修两处（2026-09-01 用户报障）：点击图标后 :focus 常驻致提示不消失——
@@ -8,6 +10,9 @@
  * overflow:hidden 裁掉向下伸出卡底的浮层，而上方空间充足；传 up 向上展开。
  * 缺省向下，设置页零变化。
  * lines prop（2026-10-26 安装确认模态）：多条逐行呈现（一行一事实）；text 单串用例零变化。
+ * 行内 markdown（2026-10-28 v0.1.95）：text/lines 经 renderInlineMarkdown 安全渲染——只开
+ * 粗体/行内代码（命令与旗标可读性）；链接与块级不开（300px hover 浮层反模式——链路同消息
+ * 正文：markdown-it + DOMPurify，独立实例零耦合）。aria-label 保持原文（读屏不吃 HTML）。
  */
 withDefaults(defineProps<{ text?: string; lines?: string[]; up?: boolean }>(), {
   text: '',
@@ -24,8 +29,13 @@ withDefaults(defineProps<{ text?: string; lines?: string[]; up?: boolean }>(), {
       <circle cx="12" cy="7.4" r="0.4" fill="currentColor" stroke="none" />
     </svg>
     <span class="help-tip-body">
-      <template v-if="lines.length > 0"><div v-for="l in lines" :key="l">· {{ l }}</div></template>
-      <template v-else>{{ text }}</template>
+      <template v-if="lines.length > 0">
+        <div v-for="l in lines" :key="l" class="help-tip-line">
+          <span class="help-tip-dot" aria-hidden="true">•</span>
+          <span class="help-tip-text" v-html="renderInlineMarkdown(l)"></span>
+        </div>
+      </template>
+      <template v-else><span v-html="renderInlineMarkdown(text)"></span></template>
     </span>
   </span>
 </template>
@@ -79,6 +89,40 @@ withDefaults(defineProps<{ text?: string; lines?: string[]; up?: boolean }>(), {
   opacity: 1;
   visibility: visible;
   transform: translateX(-50%) translateY(0);
+}
+
+/* 多条目（lines）排版（2026-10-28 用户报障「多点说明不整齐」）：项目符独立成列——
+   长句换行的续行对齐文本列（悬挂缩进），不再顶回浮层左缘；条目间留呼吸间距 */
+.help-tip-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.help-tip-line + .help-tip-line {
+  margin-top: 4px;
+}
+.help-tip-dot {
+  flex: none;
+  /* 实心圆点放大（2026-10-28 用户反馈「点太小」——· 间隔号在 11.5px 正文里仅 ~1.5px）：
+     • 字形 14px + line-height 收紧，真字形天然基线对齐（换行/多行条目都稳） */
+  font-size: 14px;
+  line-height: 1;
+}
+.help-tip-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* 行内代码（2026-10-28 v0.1.95 inline markdown）：等宽浅底——浮层内收敛尺寸，
+   不沿用消息气泡的 .md 全套（300px 小浮层里那套过重） */
+.help-tip-body :deep(code) {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg3);
+  border: 1px solid var(--line);
 }
 
 /* 向上展开（up，模态卡场景）：锚点翻转 + 入场位移反向——显式写全展开规则，
