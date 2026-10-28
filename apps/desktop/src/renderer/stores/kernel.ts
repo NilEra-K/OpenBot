@@ -601,7 +601,7 @@ export const useKernelStore = defineStore('kernel', {
       await this.refreshAutomations()
     },
     /** cron 输入即时预览（解析在内核——单一来源） */
-    async previewCron(cron: string): Promise<{ nextAt: number | null; readable: string }> {
+    async previewCron(cron: string): Promise<{ nextAt: number | null; upcomingAt: number[]; readable: string }> {
       return this.call('v1.automations.preview', { cron })
     },
     /** Box 休眠/唤醒（P4 Step 8）：状态转移经 v1.box.state 事件回放（boxes/ctx 灰化同一信号源） */

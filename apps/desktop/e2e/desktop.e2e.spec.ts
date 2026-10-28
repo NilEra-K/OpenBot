@@ -1486,11 +1486,15 @@ test('定时自动化（backlog ②）：规则创建（模态+cron 预览）→
     await page.locator('#pfModel').press('Enter')
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
-    // 新建自动化（模态：cron 预览在场）——先切到自动化分节（切换式导航）
+    // 新建自动化（模态：表单生成器 + cron 预览在场）——先切到自动化分节（切换式导航）。
+    // v0.1.96 表单路径：预设点「每 15 分钟」填表单态 → 改 N=1（E2E 需等分钟边界）→ 生成串断言
     await page.locator('.settings-nav-item', { hasText: '自动化' }).click()
     await page.getByRole('button', { name: '＋ 新建', exact: true }).click()
     await expect(page.locator('.wiz-overlay .wiz-title')).toHaveText('新建自动化')
-    await page.locator('.wiz-overlay input.mono').fill('* * * * *')
+    await page.locator('.cron-preset', { hasText: '每 15 分钟' }).click()
+    await expect(page.locator('.cron-gen')).toContainText('*/15 * * * *')
+    await page.locator('.cron-num').fill('1')
+    await expect(page.locator('.cron-gen')).toContainText('*/1 * * * *')
     await expect(page.locator('.cron-preview')).toContainText('下次触发', { timeout: 20_000 })
     await page.locator('.wiz-overlay input').first().fill('每分钟汇报')
     await page.locator('.wiz-overlay textarea').fill('汇报昨天的任务')

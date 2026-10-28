@@ -245,6 +245,12 @@
   overflow: hidden;
 }
 
+/* 自动化模态专用加宽（v0.1.96 三轮打磨：用户反馈「内容挤」——预设 6 pill + 分段 6 档 +
+   周几多选在 520px 里密度过高；600px 下预设一行、分段每档 ~90px 舒展） */
+.wiz-card.cron-modal {
+  width: 600px;
+}
+
 .wiz-head {
   display: flex;
   align-items: center;
@@ -681,7 +687,8 @@
   background: var(--accent-ink);
 }
 
-/* ---- 自动化（backlog ②）：cron 行内展示 + 预览行 ---- */
+/* ---- 自动化（backlog ②）：cron 行内展示 + 预览行；表单生成器（v0.1.96 用户报障
+     「cron 对用户太困难」——预设 chips + 频率档条件字段单向生成） ---- */
 
 .automation-cron {
   font-size: 11px;
@@ -689,10 +696,185 @@
   margin-left: 6px;
 }
 
+/* 三轮打磨（同上）：层级间距统一由父级 gap 接管；四轮（用户反馈「presets/seg/fields
+   几乎紧贴」）：块间距 10→14px。
+   ⚠ 根因修正（四轮实测诊断）：relay-form/relay-field 的 flex 布局定义在 rooms.css（房间页）
+   ——设置页未加载，借壳类名 display 落初始值 inline、gap 全无效（v0.1.86 approval-modal
+   借壳同款坑）。此处按 rooms.css 原版在设置页落地全套（.cron-modal 作用域） */
+.cron-modal .relay-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cron-modal .relay-field {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cron-modal .relay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink2);
+  cursor: pointer;
+}
+
+.cron-modal .relay-toggle input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
 .cron-preview {
   font-size: 11.5px;
   color: var(--accent);
-  margin: -2px 0 2px;
+  margin: 0;
+}
+
+.cron-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 快捷预设（pill 形；选中态 = 当前表单态与其产物一致——改字段即取消）；
+   四轮：选中/取消的描边与字色变化带过渡（生硬感打磨） */
+.cron-preset {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg1);
+  color: var(--ink2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 140ms var(--ease), color 140ms var(--ease), background-color 140ms var(--ease);
+}
+
+.cron-preset:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.cron-preset.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 频率分段控件（v0.1.96 二轮：六档等宽一体——取代下拉+行文式内联） */
+.cron-seg {
+  display: flex;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.cron-seg-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  border-left: 1px solid var(--line);
+  background: var(--bg1);
+  color: var(--ink3);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease), color 150ms var(--ease);
+}
+
+.cron-seg-btn:first-child {
+  border-left: none;
+}
+
+.cron-seg-btn:hover {
+  color: var(--ink);
+  background: var(--bg3);
+}
+
+.cron-seg-btn.is-on {
+  background: var(--accent);
+  color: var(--accent-ink); /* 主题配方（灰度系）：accent 底配 accent-ink 字——硬编码 #fff 在 dark 主题（accent≈白）下白底白字（用户报障） */
+  font-weight: 600;
+}
+
+/* 条件字段（每行一职：label 定宽 + 控件）。四轮：容器带高度形变过渡（换档行数变化时
+   高度从旧值动画到新值——脚本钉高/量高/回 auto）+ 内容淡入；overflow 收敛过渡期溢出 */
+.cron-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  transition: height 200ms var(--ease), opacity 160ms var(--ease);
+}
+
+.cron-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cron-field-label {
+  width: 44px;
+  flex: none;
+  font-size: 12.5px;
+  color: var(--ink3);
+}
+
+.cron-note {
+  font-size: 12.5px;
+  color: var(--ink3);
+}
+
+.cron-num {
+  width: 64px;
+  flex: none;
+}
+
+.cron-time {
+  width: 104px;
+  flex: none;
+}
+
+.cron-custom {
+  flex: 1;
+}
+
+.cron-weekdays {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* 周几多选（toggle chip）——与 .rt-pf 同族观感 */
+.cron-wd {
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg1);
+  color: var(--ink3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 130ms var(--ease), color 130ms var(--ease), background-color 130ms var(--ease);
+}
+
+.cron-wd:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.cron-wd.is-on {
+  border-color: var(--line-strong);
+  background: var(--bg3);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 生成串展示（表单档——只读事实，手输收纳在高级档） */
+.cron-gen {
+  font-size: 11px;
+  color: var(--ink3);
+  margin: 0;
 }
 
 .settings .field-input[type='textarea'],

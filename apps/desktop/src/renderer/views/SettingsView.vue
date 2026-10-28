@@ -7,11 +7,13 @@
  *   后端选择是装配期决策不热切换）。docker/podman 未实现前只读呈现（不放假选项）。
  * - 权限策略：呈现 Manual 审批闸门现状——不放假开关（内核无对应存储）。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import jsQR from 'jsqr'
 import { useKernelStore } from '../stores/kernel'
 import type { ProviderView, SandboxPref } from '../stores/kernel'
 import HelpTip from '../components/HelpTip.vue'
+import { cronOfForm, formOfCron, DEFAULT_CRON_FORM, CRON_PRESETS } from '../lib/cron-form'
+import type { CronFormState, CronFreq } from '../lib/cron-form'
 import { useUiStore } from '../stores/ui'
 import type { ThemePref } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
@@ -20,14 +22,87 @@ const kernel = useKernelStore()
 const ui = useUiStore()
 const toast = useToastStore()
 
-// ---- 定时自动化（backlog ②）：列表态挂 store；模态新建/编辑（cron 即时预览） ----
+// ---- 定时自动化（backlog ②）：列表态挂 store；模态新建/编辑（表单生成 cron + 即时预览） ----
 const automationModal = ref(false)
 /** 编辑目标（null=新建） */
 const editingAutomation = ref<string | null>(null)
 const automationSaving = ref(false)
 const automationError = ref<string | null>(null)
-const cronPreview = ref<string | null>(null)
+const cronPreview = ref<{ readable: string; upcomingAt: number[] } | null>(null)
 const aForm = reactive({ name: '', cron: '', agentId: '', prompt: '', enabled: true })
+
+// 触发时间表单生成器（2026-10-28 v0.1.96 用户报障「cron 对用户太困难」）：表单态单向生成
+// cron 写入 aForm.cron——落盘/解析零变化（内核仍是权威）；编辑既有规则经 formOfCron 回填，
+// 反解析不了的复杂表达式落在「高级」档原文展示（诚实降级——lib/cron-form.ts 纯函数可测）
+const cronForm = reactive<CronFormState>({ ...DEFAULT_CRON_FORM })
+/** 频率分段控件（v0.1.96 二轮打磨：下拉+行文式内联 → 分段+分行字段——层次清晰不折行） */
+const FREQ_SEGMENTS: Array<{ v: CronFreq; label: string }> = [
+  { v: 'daily', label: '每天' },
+  { v: 'weekly', label: '每周' },
+  { v: 'monthly', label: '每月' },
+  { v: 'minutes', label: '按分钟' },
+  { v: 'hours', label: '按小时' },
+  { v: 'custom', label: '高级' },
+]
+/** 预设选中反馈：当前表单态与某预设产物一致时高亮（改字段即取消——如实反映） */
+const activePreset = computed(
+  () =>
+    CRON_PRESETS.find((p) => cronForm.freq === p.form.freq && cronOfForm({ ...DEFAULT_CRON_FORM, ...p.form }) === aForm.cron)?.label ?? null,
+)
+const WEEKDAYS: Array<{ v: number; label: string }> = [
+  { v: 1, label: '一' }, { v: 2, label: '二' }, { v: 3, label: '三' }, { v: 4, label: '四' },
+  { v: 5, label: '五' }, { v: 6, label: '六' }, { v: 0, label: '日' },
+]
+/** 时刻输入（time input 'HH:MM' ↔ atHour/atMinute 拆装——daily/weekly/monthly 档共用） */
+const dailyTime = computed({
+  get: () => `${String(cronForm.atHour).padStart(2, '0')}:${String(cronForm.atMinute).padStart(2, '0')}`,
+  set: (v: string) => {
+    const [h, m] = v.split(':')
+    if (h !== undefined) cronForm.atHour = Number.parseInt(h, 10) || 0
+    if (m !== undefined) cronForm.atMinute = Number.parseInt(m, 10) || 0
+  },
+})
+const toggleWeekday = (v: number): void => {
+  cronForm.weekdays = cronForm.weekdays.includes(v)
+    ? cronForm.weekdays.filter((d) => d !== v)
+    : [...cronForm.weekdays, v].sort((a, b) => a - b)
+}
+
+/** 频率换档柔和过渡（v0.1.96 四轮：用户反馈「变化生硬」）——容器高度从旧值动画到新值
+ *  （height:auto 无法 transition：钉旧高 → 量新高 → 过渡 → 计时回 auto），内容同步淡入；
+ *  pre-flush 观察器在 DOM 更新前量得旧高，nextTick 后换档内容已就位 */
+const cronFieldsEl = ref<HTMLElement | null>(null)
+let cronHResetTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => cronForm.freq,
+  () => {
+    const el = cronFieldsEl.value
+    if (el === null) return
+    const h0 = el.offsetHeight
+    el.style.opacity = '0.55'
+    void nextTick(() => {
+      el.style.height = `${h0}px`
+      void el.offsetHeight // 强制回流——起始高先生效再过渡
+      el.style.height = `${el.scrollHeight}px`
+      el.style.opacity = '1'
+      if (cronHResetTimer !== null) clearTimeout(cronHResetTimer)
+      cronHResetTimer = setTimeout(() => {
+        el.style.height = 'auto' // 回自适应（后续布局变化不受钉死影响）
+      }, 240)
+    })
+  },
+)
+/** 预设点击填**表单态**（重置默认再覆盖——后续仍可改字段微调） */
+const applyPreset = (p: { label: string; form: Partial<CronFormState> }): void => {
+  Object.assign(cronForm, DEFAULT_CRON_FORM, p.form)
+}
+watch(
+  cronForm,
+  (f) => {
+    if (f.freq !== 'custom') aForm.cron = cronOfForm(f)
+  },
+  { deep: true },
+)
 
 const agentNameOf = (agentId: string): string => kernel.roster.find((a) => a.agentId === agentId)?.name ?? agentId
 const fmtNext = (at: number): string => {
@@ -45,12 +120,14 @@ const openAutomation = (row: { id: string; name: string; cron: string; agentId: 
   editingAutomation.value = row?.id ?? null
   if (row !== null) {
     Object.assign(aForm, { name: row.name, cron: row.cron, agentId: row.agentId, prompt: row.prompt, enabled: row.enabled })
+    Object.assign(cronForm, formOfCron(row.cron))
   } else {
-    Object.assign(aForm, { name: '', cron: '', agentId: kernel.stewardId ?? '', prompt: '', enabled: true })
+    Object.assign(aForm, { name: '', cron: cronOfForm(DEFAULT_CRON_FORM), agentId: kernel.stewardId ?? '', prompt: '', enabled: true })
+    Object.assign(cronForm, DEFAULT_CRON_FORM)
   }
 }
 
-/** cron 输入即时预览（防抖 400ms——解析在内核 v1.automations.preview） */
+/** cron 即时预览（防抖 400ms——解析在内核 v1.automations.preview；含随后 3 次时刻） */
 let cronPreviewTimer: ReturnType<typeof setTimeout> | null = null
 watch(
   () => aForm.cron,
@@ -59,12 +136,19 @@ watch(
     if (cronPreviewTimer !== null) clearTimeout(cronPreviewTimer)
     if (cron.trim() === '') return
     cronPreviewTimer = setTimeout(() => {
-      void kernel.previewCron(cron.trim()).then((r) => (cronPreview.value = r.readable))
+      void kernel.previewCron(cron.trim()).then((r) => (cronPreview.value = { readable: r.readable, upcomingAt: r.upcomingAt }))
     }, 400)
   },
 )
 
-const automationValid = computed(() => aForm.name.trim() !== '' && aForm.cron.trim() !== '' && aForm.agentId !== '' && aForm.prompt.trim() !== '')
+const automationValid = computed(
+  () =>
+    aForm.name.trim() !== '' &&
+    aForm.cron.trim() !== '' &&
+    aForm.agentId !== '' &&
+    aForm.prompt.trim() !== '' &&
+    (cronForm.freq !== 'weekly' || cronForm.weekdays.length > 0), // 周档须选至少一天（生成器空选集会落成每天）
+)
 
 const saveAutomation = async (): Promise<void> => {
   automationSaving.value = true
@@ -2191,9 +2275,9 @@ const wslRelevant = computed(
       </div>
 
       </div>
-      <!-- 自动化模态（新建/编辑共用；cron 即时预览下次触发） -->
+      <!-- 自动化模态（新建/编辑共用；表单生成 cron + 即时预览；v0.1.96 三轮：cron-modal 加宽 600px） -->
       <div v-if="automationModal" class="wiz-overlay" @mousedown.self="automationModal = false">
-        <div class="wiz-card" role="dialog" aria-label="自动化规则" @keydown.escape="automationModal = false">
+        <div class="wiz-card cron-modal" role="dialog" aria-label="自动化规则" @keydown.escape="automationModal = false">
           <div class="wiz-head">
             <span class="wiz-title">{{ editingAutomation === null ? '新建自动化' : '编辑自动化' }}</span>
             <button class="wiz-close" type="button" aria-label="关闭" @click="automationModal = false">✕</button>
@@ -2203,11 +2287,97 @@ const wslRelevant = computed(
               <span class="field-label">规则名</span>
               <input v-model="aForm.name" class="field-input" placeholder="例：每日早报" maxlength="32" />
             </label>
-            <label class="relay-field">
-              <span class="field-label">cron（分 时 日 月 周——例：0 9 * * * 每天 9 点；*/15 * * * 1-5 工作日每 15 分钟）</span>
-              <input v-model="aForm.cron" class="field-input mono" placeholder="0 9 * * *" spellcheck="false" @keydown.enter.prevent />
-            </label>
-            <p v-if="cronPreview !== null" class="cron-preview mono">下次触发：{{ cronPreview }}</p>
+            <!-- 触发时间（2026-10-28 v0.1.96 用户报障「cron 对用户太困难」；同日二轮打磨：
+                 下拉+行文式内联 → 分段控件 + 分行字段——层次清晰、字段不折行错位）。
+                 表单态单向生成 cron（落盘仍是 cron 串，内核仍是解析权威） -->
+            <div class="relay-field">
+              <span class="field-label">触发时间</span>
+              <!-- 快捷预设：点击填表单态（选中态高亮——改字段即取消，如实反映） -->
+              <div class="cron-presets">
+                <button
+                  v-for="p in CRON_PRESETS"
+                  :key="p.label"
+                  type="button"
+                  class="cron-preset"
+                  :class="{ 'is-on': activePreset === p.label }"
+                  @click="applyPreset(p)"
+                >{{ p.label }}</button>
+              </div>
+              <!-- 频率分段控件（六档等宽；选中 accent） -->
+              <div class="cron-seg" role="tablist" aria-label="频率类型">
+                <button
+                  v-for="s in FREQ_SEGMENTS"
+                  :key="s.v"
+                  type="button"
+                  role="tab"
+                  :aria-selected="cronForm.freq === s.v"
+                  class="cron-seg-btn"
+                  :class="{ 'is-on': cronForm.freq === s.v }"
+                  @click="cronForm.freq = s.v"
+                >{{ s.label }}</button>
+              </div>
+              <!-- 条件字段（每行一职：label 定宽 + 控件——不再行文式内联；容器带高度形变过渡） -->
+              <div ref="cronFieldsEl" class="cron-fields">
+                <div v-if="cronForm.freq === 'minutes'" class="cron-field">
+                  <span class="cron-field-label">间隔</span>
+                  <input v-model.number="cronForm.every" type="number" min="1" max="59" class="field-input cron-num" aria-label="间隔分钟数" />
+                  <span class="cron-note">分钟</span>
+                </div>
+                <template v-else-if="cronForm.freq === 'hours'">
+                  <div class="cron-field">
+                    <span class="cron-field-label">间隔</span>
+                    <input v-model.number="cronForm.every" type="number" min="1" max="23" class="field-input cron-num" aria-label="间隔小时数" />
+                    <span class="cron-note">小时</span>
+                  </div>
+                  <div class="cron-field">
+                    <span class="cron-field-label">分钟位</span>
+                    <input v-model.number="cronForm.hourMinute" type="number" min="0" max="59" class="field-input cron-num" aria-label="每小时的第几分" />
+                    <span class="cron-note">分（每小时第几分触发）</span>
+                  </div>
+                </template>
+                <template v-else-if="cronForm.freq === 'weekly'">
+                  <div class="cron-field">
+                    <span class="cron-field-label">周几</span>
+                    <div class="cron-weekdays">
+                      <button
+                        v-for="w in WEEKDAYS"
+                        :key="w.v"
+                        type="button"
+                        class="cron-wd"
+                        :class="{ 'is-on': cronForm.weekdays.includes(w.v) }"
+                        :aria-pressed="cronForm.weekdays.includes(w.v)"
+                        @click="toggleWeekday(w.v)"
+                      >{{ w.label }}</button>
+                    </div>
+                  </div>
+                  <div class="cron-field">
+                    <span class="cron-field-label">时间</span>
+                    <input v-model="dailyTime" type="time" class="field-input cron-time" aria-label="时间" />
+                  </div>
+                </template>
+                <template v-else-if="cronForm.freq === 'monthly'">
+                  <div class="cron-field">
+                    <span class="cron-field-label">几号</span>
+                    <input v-model.number="cronForm.dayOfMonth" type="number" min="1" max="31" class="field-input cron-num" aria-label="几号" />
+                    <span class="cron-note">号（月无此日则该月跳过）</span>
+                  </div>
+                  <div class="cron-field">
+                    <span class="cron-field-label">时间</span>
+                    <input v-model="dailyTime" type="time" class="field-input cron-time" aria-label="时间" />
+                  </div>
+                </template>
+                <div v-else-if="cronForm.freq === 'custom'" class="cron-field">
+                  <span class="cron-field-label">表达式</span>
+                  <input v-model="aForm.cron" class="field-input mono cron-custom" placeholder="0 9 * * *" spellcheck="false" @keydown.enter.prevent />
+                </div>
+                <div v-else class="cron-field">
+                  <span class="cron-field-label">时间</span>
+                  <input v-model="dailyTime" type="time" class="field-input cron-time" aria-label="时间" />
+                </div>
+              </div>
+              <p v-if="cronForm.freq !== 'custom'" class="cron-gen mono">表达式：{{ aForm.cron }}</p>
+            </div>
+            <p v-if="cronPreview !== null" class="cron-preview mono">下次触发：{{ cronPreview.readable }}<template v-if="cronPreview.upcomingAt.length > 0"> · 随后 {{ cronPreview.upcomingAt.map(fmtNext).join(' / ') }}</template></p>
             <label class="relay-field">
               <span class="field-label">目标 Agent</span>
               <select v-model="aForm.agentId" class="field-input">

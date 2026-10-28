@@ -1423,11 +1423,19 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       await automationStore.remove(id)
       return { ok: true }
     }, z.object({ id: z.string() }))
-    // cron 预览（模态输入即时反馈——解析单一来源在内核，renderer 不 import 内核包）
+    // cron 预览（模态输入即时反馈——解析单一来源在内核，renderer 不 import 内核包）。
+    // upcomingAt（v0.1.96 表单生成器配套）：首触发之后的 3 次时刻（原始 ms——渲染层排版；
+    // 周期规则的心智模型一目了然）
     .register('v1.automations.preview', async (payload) => {
       const { cron } = z.object({ cron: z.string() }).parse(payload)
       const next = nextAfter(cron, Date.now())
-      return { nextAt: next, readable: next === null ? '该规则永不触发（如 2 月 30 日）' : new Date(next).toLocaleString('zh-CN') }
+      const upcomingAt: number[] = []
+      let cursor = next
+      while (cursor !== null && upcomingAt.length < 3) {
+        cursor = nextAfter(cron, cursor)
+        if (cursor !== null) upcomingAt.push(cursor)
+      }
+      return { nextAt: next, upcomingAt, readable: next === null ? '该规则永不触发（如 2 月 30 日）' : new Date(next).toLocaleString('zh-CN') }
     }, z.object({ cron: z.string() }))
     // 镜像注册表（plan-image-firstclass P8-3 D3）：CRUD + 连接测试（test = 连通/镜像在场 +
     // GUI 工具集探测的如实报告）。add/update 即时维护路由表（按调用分发，无需重启）
