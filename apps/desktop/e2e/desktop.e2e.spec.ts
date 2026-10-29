@@ -2871,3 +2871,56 @@ test('图片附件（v0.1.102 一期）：视觉模型 → 选择上传 → 待�
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('文件附件（v0.1.102 二期）：上传 .md 文本 → 待发条文件 chip → 全链发送 → mock 断言文件内容已注入消息文本段', async () => {
+  const mock = await startMockOpenAi([
+    { match: (l) => l.role === 'user' && l.content.includes('读读这份'), text: '读到了：markdown 文件内容注入成功' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-att2-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // provider + 模型（文本附件不依赖视觉——无需开视觉开关）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+
+    // 上传 .md（文本类）→ 待发条文件 chip（名+大小）
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    await page.setInputFiles('input[type="file"]', {
+      name: '笔记.md',
+      mimeType: 'text/markdown',
+      buffer: Buffer.from('# 标题\n\n这是 markdown 文件内容注入成功测试正文。', 'utf8'),
+    })
+    const chip = page.locator('.att-chip.is-file')
+    await expect(chip).toBeVisible({ timeout: 15_000 })
+    await expect(chip).toContainText('笔记.md')
+
+    // 发送 → mock 断言：文本段含「--- 附件 笔记.md ---」与文件正文（注入链实证）
+    const input = page.locator('.composer-box input')
+    await input.fill('读读这份')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '读到了：markdown 文件内容注入成功' })).toBeVisible({ timeout: 20_000 })
+    const hit = mock.requests.find((r) => JSON.stringify(r.messages).includes('附件 笔记.md'))
+    expect(hit).toBeDefined()
+    expect(JSON.stringify(hit!.messages)).toContain('markdown 文件内容注入成功测试正文')
+    // 气泡文件 chip 在场
+    await expect(page.locator('.m.user .m-att-file')).toContainText('笔记.md', { timeout: 10_000 })
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

@@ -934,11 +934,12 @@ watch(
 /** 发送（乐观更新在 store；失败态由流内重试按钮处理） */
 const sending = ref(false)
 
-// ---- 图片附件（2026-10-30 v0.1.102 一期）：粘贴 / +菜单选择 / 拖拽三入口——
-// 待发条 chip（缩略图+移除）随消息同发；视觉门控（当前会话模型无视觉 → 拦截提示，不静默降级） ----
+// ---- 附件（2026-10-30 v0.1.102 一期图片 + 同日二期文件类）：粘贴 / +菜单选择 / 拖拽三入口——
+// 待发条 chip（图片缩略 / 文件名+大小）随消息同发；视觉门控仅约束图片部分 ----
 
 interface PendingAtt {
   meta: AttachmentMeta
+  /** 图片：缩略 dataURI；文件类：空（chip 呈现名与大小） */
   uri: string
 }
 const pendingAtts = ref<PendingAtt[]>([])
@@ -964,10 +965,15 @@ const modelSupportsImages = computed(() => {
   return model?.supportsImages === true
 })
 
-const addImageFiles = async (files: File[] | FileList): Promise<void> => {
-  const list = [...files].filter((f) => f.type.startsWith('image/'))
+/** 人性化大小（文件 chip） */
+const fmtSize = (n: number): string => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`)
+
+const addFiles = async (files: File[] | FileList): Promise<void> => {
+  const list = [...files]
   if (list.length === 0) return
-  if (!modelSupportsImages.value) {
+  const hasImage = list.some((f) => f.type.startsWith('image/'))
+  // 门控仅约束图片（文本/存档附件不依赖视觉）——含图且无视觉时拦截
+  if (hasImage && !modelSupportsImages.value) {
     toast.push('当前模型不支持图像输入——先在设置中为模型开启「视觉」，或移除图片', 'warning')
     return
   }
@@ -984,16 +990,17 @@ const addImageFiles = async (files: File[] | FileList): Promise<void> => {
         fr.onerror = () => reject(fr.error)
         fr.readAsDataURL(f)
       })
-      const meta = await kernel.uploadAttachment(f.name, f.type, dataBase64)
-      const uri = await kernel.attachmentUri(meta.id, meta.mime)
+      const meta = await kernel.uploadAttachment(f.name, f.type !== '' ? f.type : 'application/octet-stream', dataBase64)
+      const uri = meta.mime.startsWith('image/') ? await kernel.attachmentUri(meta.id, meta.mime) : ''
       pendingAtts.value = [...pendingAtts.value, { meta, uri }]
     }
   } catch (err) {
-    toast.push(`图片上传失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
+    toast.push(`附件上传失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
   } finally {
     attBusy.value = false
   }
 }
+const addImageFiles = addFiles
 
 const removePendingAtt = (id: string): void => {
   pendingAtts.value = pendingAtts.value.filter((a) => a.meta.id !== id)
@@ -1002,7 +1009,7 @@ const removePendingAtt = (id: string): void => {
 /** + 菜单「上传图片」→ 文件选择落定：读入上传 → 清空控件值（同文件可重选） */
 const onAttFileChange = (): void => {
   const files = attFileEl.value?.files
-  if (files !== null && files !== undefined) void addImageFiles(files)
+  if (files !== null && files !== undefined) void addFiles(files)
   if (attFileEl.value !== null) attFileEl.value.value = ''
 }
 
@@ -1233,7 +1240,8 @@ const send = async (): Promise<void> => {
   const text = ui.draft.trim()
   const atts = pendingAtts.value.length > 0 ? pendingAtts.value.map((a) => a.meta) : undefined
   if ((text === '' && atts === undefined) || sending.value) return
-  if (atts !== undefined && !modelSupportsImages.value) {
+  // 视觉门控只约束图片附件（文本注入/存档不依赖视觉）
+  if (atts !== undefined && atts.some((a) => a.mime.startsWith('image/')) && !modelSupportsImages.value) {
     toast.push('当前模型不支持图像输入——先在设置中为模型开启「视觉」，或移除图片', 'warning')
     return
   }
@@ -1293,7 +1301,7 @@ const send = async (): Promise<void> => {
   ui.draft = ''
   sending.value = true
   try {
-    await kernel.sendUserMessage(to, text !== '' ? text : '（图片）', undefined, pendingRef.value ?? undefined, atts)
+    await kernel.sendUserMessage(to, text !== '' ? text : '（附件）', undefined, pendingRef.value ?? undefined, atts)
     pendingAtts.value = []
     pendingRef.value = null // 引用一次性消费（随这条消息走）
   } catch {
@@ -1453,14 +1461,10 @@ const GROUP_ICON =
                     <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
                     <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
                     <div v-if="kernel.messages[unit.msgIndex]!.attachments" class="m-atts">
-                      <img
-                        v-for="att in kernel.messages[unit.msgIndex]!.attachments"
-                        :key="att.id"
-                        class="m-att"
-                        :src="attUris[att.id]"
-                        :alt="att.name"
-                        :title="att.name"
-                      />
+                      <template v-for="att in kernel.messages[unit.msgIndex]!.attachments" :key="att.id">
+                        <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" />
+                        <span v-else class="m-att-file mono" :title="att.name">📄 {{ att.name }} · {{ fmtSize(att.size) }}</span>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -1515,14 +1519,10 @@ const GROUP_ICON =
                 <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
                 <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
                 <div v-if="kernel.messages[unit.msgIndex!]!.attachments" class="m-atts">
-                  <img
-                    v-for="att in kernel.messages[unit.msgIndex!]!.attachments"
-                    :key="att.id"
-                    class="m-att"
-                    :src="attUris[att.id]"
-                    :alt="att.name"
-                    :title="att.name"
-                  />
+                  <template v-for="att in kernel.messages[unit.msgIndex!]!.attachments" :key="att.id">
+                    <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" />
+                    <span v-else class="m-att-file mono" :title="att.name">📄 {{ att.name }} · {{ fmtSize(att.size) }}</span>
+                  </template>
                 </div>
               </div>
             </div>
@@ -1709,13 +1709,14 @@ const GROUP_ICON =
             <button type="button" aria-label="移除引用" @click="clearPendingRef">✕</button>
           </div>
           <!-- 图片选择（v0.1.102）：+ 菜单触发；粘贴/拖拽走事件面——置 composer-box 外（既有选择器 .composer-box input 单命中不破） -->
-          <input ref="attFileEl" type="file" accept="image/*" multiple hidden @change="onAttFileChange" />
+          <input ref="attFileEl" type="file" multiple hidden @change="onAttFileChange" />
           <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }" @dragover.prevent @drop.prevent="onComposerDrop">
             <!-- 待发附件条（v0.1.102 图片一期）：缩略图 chip + 移除；上传中 spinner -->
             <div v-if="pendingAtts.length > 0 || attBusy" class="att-strip">
-              <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :title="a.meta.name">
-                <img class="att-thumb" :src="a.uri" :alt="a.meta.name" />
-                <button type="button" class="att-x" aria-label="移除图片" @click="removePendingAtt(a.meta.id)">✕</button>
+              <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :class="{ 'is-file': a.uri === '' }" :title="a.meta.name">
+                <img v-if="a.uri !== ''" class="att-thumb" :src="a.uri" :alt="a.meta.name" />
+                <span v-else class="att-file-label">{{ a.meta.name }} · {{ fmtSize(a.meta.size) }}</span>
+                <button type="button" class="att-x" aria-label="移除附件" @click="removePendingAtt(a.meta.id)">✕</button>
               </div>
               <span v-if="attBusy" class="att-busy">上传中…</span>
             </div>
@@ -1759,10 +1760,11 @@ const GROUP_ICON =
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
                       <span class="mt"><span class="ti">使用 @ 添加上下文</span></span>
                     </button>
-                    <!-- 上传图片（v0.1.102 一期）：选择/粘贴/拖拽三入口之一——多选；视觉门控在发送时 -->
+                    <!-- 上传文件（v0.1.102 一期图片 + 二期文件类）：选择/粘贴/拖拽三入口——多选；
+                         图片走视觉注入、文本 ≤200KB 注入全文、其余存档给路径；视觉门控只约束图片 -->
                     <button class="cb-menu-item" @click="attFileEl?.click(); plusMenuOpen = false">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                      <span class="mt"><span class="ti">上传图片</span><span class="ts">随消息发给有视觉能力的模型</span></span>
+                      <span class="mt"><span class="ti">上传图片 / 文件</span><span class="ts">图片走视觉 · 文本注入内容 · 大文件存档给路径</span></span>
                     </button>
                     <button class="cb-menu-item" @click="openQuoteFromMenu()">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>

@@ -30,6 +30,8 @@ export const DEFAULT_MAX_TOOL_ROUNDS = 8
 
 /** session 内组装窗口上限（「会话掌控」裁定 D）：最近 N 条领域消息——会话再长不无限累积 */
 const SESSION_WINDOW_MESSAGES = 50
+/** 文本附件注入上限（v0.1.102 二期）：≤200KB 全文、超出截断加注记（token 纪律） */
+const TEXT_ATTACHMENT_MAX_CHARS = 200_000
 
 /** 引用会话注入预算（字符）：尾部优先 + 总量提示（记忆注入同哲学） */
 const SESSION_REF_CHAR_BUDGET = 4000
@@ -47,10 +49,11 @@ export interface TurnRunnerDeps {
   maxToolRounds?: number
   /**
    * 附件本体读取（v0.1.102 图片一期，装配注入——FsAdapter 只读 utf8 故走专用 dep）：
-   * 用户消息图片附件 → ContentPart image（base64）。null = 文件缺失/不可读——如实降级为
-   * 文本注记（不静默丢图）。缺席 = 装配无文件系统（CLI/测试）——附件一律文本注记
+   * 用户消息图片附件 → ContentPart image（base64）；文本类附件附带 utf8 文本（二期——
+   * runner 保持环境无关，解码归壳层）。null = 文件缺失/不可读——如实降级为文本注记
+   * （不静默丢附件）。缺席 = 装配无文件系统（CLI/测试）——附件一律文本注记
    */
-  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string } | null>
+  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string } | null>
   /**
    * 审批闸门（可选——2026-09-06 预算打穿问用户）：在场时工具轮预算打穿**不再自作主张终止**，
    * 经闸门发起「预算续期」授权请求（tool='tool_budget'，弹窗/自动批准按装配方实现）——
@@ -220,27 +223,41 @@ export class TurnRunner {
   }
 
   /**
-   * 用户消息内容（v0.1.102 图片一期）：无附件 = 纯文本快路径（既有零变化）；有附件按模型
-   *  视觉分流——有视觉：text part + 逐图 image part（loadAttachment 读本体 base64，缺席/
-   *  失败如实降级文本注记不静默丢图）；无视觉：文本 + 「图像内容不可读」注记（与截图回喂
-   *  降级同款语义——部分端点对 image part 会 400）
+   * 用户消息内容（v0.1.102 一期图片 + 二期文件类）：无附件 = 纯文本快路径（既有零变化）。
+   * 分型注入：图片——模型有视觉=ImagePart、无视觉=不可读注记（与截图回喂降级同语义）；
+   * 文本类（loadAttachment 附带 text）——≤200KB 全文代码块注入、超出截断加注记；
+   * 其余——存档注记（路径+大小，agent 可用工具读取——宿主读恒过审批）。
+   * 读取失败一律如实文本注记（不静默丢附件）。
    */
   async #userContent(agentId: string, payload: UserChatRunPayload): Promise<string | ContentPart[]> {
     const attachments = payload.attachments
     if (attachments === undefined || attachments.length === 0) return payload.text
     const vision = this.#deps.supportsImagesOf?.(agentId) ?? true
-    const parts: ContentPart[] = [{ type: 'text', text: payload.text !== '' ? payload.text : '（图片）' }]
+    const parts: ContentPart[] = [{ type: 'text', text: payload.text !== '' ? payload.text : '（附件）' }]
     for (const att of attachments) {
-      if (vision) {
-        const loaded = (await this.#deps.loadAttachment?.({ path: att.path, mime: att.mime })) ?? null
-        if (loaded !== null) {
-          parts.push({ type: 'image', image: { base64: loaded.base64, mime: att.mime } })
-          continue
-        }
-        parts.push({ type: 'text', text: `（图片附件 ${att.name} 读取失败——文件可能已被清理）` })
+      const loaded = (await this.#deps.loadAttachment?.({ path: att.path, mime: att.mime })) ?? null
+      if (loaded === null) {
+        parts.push({ type: 'text', text: `（附件 ${att.name} 读取失败——文件可能已被清理）` })
         continue
       }
-      parts.push({ type: 'text', text: `（图片附件 ${att.name}——当前模型无视觉能力，图像内容不可读）` })
+      if (att.mime.startsWith('image/')) {
+        if (vision) parts.push({ type: 'image', image: { base64: loaded.base64, mime: att.mime } })
+        else parts.push({ type: 'text', text: `（图片附件 ${att.name}——当前模型无视觉能力，图像内容不可读）` })
+        continue
+      }
+      if (loaded.text !== undefined) {
+        const full = loaded.text
+        if (full.length <= TEXT_ATTACHMENT_MAX_CHARS) {
+          parts.push({ type: 'text', text: `--- 附件 ${att.name} ---\n${full}` })
+        } else {
+          parts.push({
+            type: 'text',
+            text: `--- 附件 ${att.name}（超出 ${TEXT_ATTACHMENT_MAX_CHARS} 字符，已截断，原文 ${(att.size / 1024).toFixed(1)}KB）---\n${full.slice(0, TEXT_ATTACHMENT_MAX_CHARS)}\n--- 截断于此 ---`,
+          })
+        }
+        continue
+      }
+      parts.push({ type: 'text', text: `（附件 ${att.name}，${(att.size / 1024).toFixed(1)}KB，已存档：${att.path}——可用工具读取）` })
     }
     return parts
   }

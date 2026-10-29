@@ -75,7 +75,7 @@ export interface AssembleOptions {
    * 用户消息图片附件 → ContentPart image。缺席 = 无文件系统装配（CLI/测试）——附件一律
    * 文本降级注记（TurnRunner.loadAttachment 同语义）。
    */
-  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string } | null>
+  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string } | null>
   /**
    * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
    * 默认每次启动随机；确定性冒烟（CLI）注入固定值。

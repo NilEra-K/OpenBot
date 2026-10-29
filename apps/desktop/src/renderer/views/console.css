@@ -1308,3 +1308,34 @@
   object-fit: contain;
   display: block;
 }
+
+/* 文件类附件 chip（v0.1.102 二期）：待发条与气泡通用——名+大小（图片走缩略） */
+.att-chip.is-file {
+  width: auto;
+  height: 28px;
+  padding: 0 26px 0 8px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.att-file-label {
+  font-size: 11px;
+  color: var(--ink2);
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-att-file {
+  font-size: 11px;
+  color: var(--ink2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4px 9px;
+  background: var(--bg2);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

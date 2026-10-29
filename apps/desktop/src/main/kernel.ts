@@ -482,6 +482,21 @@ function migrateDataDir(oldDir: string, newDir: string): number {
 export async function assembleDesktop(): Promise<DesktopKernel> {
   // NodeFs 路径约定 posix 风格（Windows 同样接受 '/'）
   const userDataRoot = app.getPath('userData').replaceAll('\\', '/')
+
+  /** 文本类附件判定（v0.1.102 二期）：mime 前缀 text/ + 常见结构化/代码扩展名——
+   *  此类 ≤200KB 注入全文（超限截断加注记），其余存档给路径 */
+  const TEXTUAL_EXTS = new Set([
+    'txt', 'md', 'markdown', 'json', 'xml', 'yml', 'yaml', 'toml', 'csv', 'ini', 'env',
+    'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'c', 'h',
+    'cpp', 'hpp', 'cs', 'php', 'sh', 'bash', 'zsh', 'ps1', 'sql', 'html', 'css', 'scss', 'vue', 'log',
+  ])
+  const isTextualAttachment = (mime: string, path: string): boolean => {
+    if (mime.startsWith('text/')) return true
+    if (mime === 'application/json' || mime === 'application/xml' || mime === 'application/yaml' || mime === 'application/toml') return true
+    const ext = path.includes('.') ? (path.split('.').pop() ?? '').toLowerCase() : ''
+    return TEXTUAL_EXTS.has(ext)
+  }
+
   // 数据目录可自定义（UI 优化 0.1.26，用户需求）：userData 根下 data-root.txt 标记承载覆盖路径
   // （标记在数据目录之外——settings.json 随数据目录走，不能自举）；目录探测（建目录+写删探针）
   // 失败如实回退默认。标记读写走 node:fs（userData 根不归数据目录的 NodeFs 实例管）
@@ -1028,7 +1043,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       const resolved = resolve(meta.path).replaceAll('\\', '/')
       if (!resolved.startsWith(`${dir}/`)) return Promise.resolve(null)
       try {
-        return Promise.resolve({ base64: readFileSync(resolved).toString('base64') })
+        const bytes = readFileSync(resolved)
+        const base64 = bytes.toString('base64')
+        // 文本类（二期）：一并给 utf8 文本（runner 注入用——解码归壳层，runner 保持环境无关）
+        const text = isTextualAttachment(meta.mime, meta.path) ? bytes.toString('utf8') : undefined
+        return Promise.resolve({ base64, ...(text !== undefined ? { text } : {}) })
       } catch {
         return Promise.resolve(null)
       }
@@ -1541,31 +1560,36 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // docker）——注册表只含手动条目，此命令补「用户无从得知有哪些镜像」的发现面。
     // 按需触发（设置页按钮），只报告事实不自动入库；装配期已就绪的 platform 从作用域注入
     .register('v1.images.scan', async () => ({ sources: await scanEnvImages({ run: runProcess, platform }) }))
-    // ---- 图片附件（2026-10-30 v0.1.102 一期）：上传落盘（内容寻址去重）+ 读取（dataURI 呈现）。
-    // 本体落 userData/attachments/<sha256>.<ext>——transcript 只存 meta（append-only 铁律）；
-    // 一期只收 image/*（文件类语义待二期裁定）；读取面恒限附件目录（不开放任意盘读） ----
+    // ---- 附件（2026-10-30 v0.1.102 一期图片；同日二期文件类）：上传落盘（内容寻址去重）+
+    // 读取（dataURI 呈现）。本体落 userData/attachments/<sha256>.<ext>——transcript 只存 meta
+    // （append-only 铁律）；读取面恒限附件目录（不开放任意盘读）。
+    // 二期语义（作者默认裁定）：文本类（text/*、json/xml/yaml/toml/csv、代码扩展名）≤200KB
+    // 注入全文、超出截断加注记；图片 ≤8MB 视觉注入；其余 ≤8MB 存档（消息给路径，agent 工具读） ----
     .register('v1.attachments.upload', async (payload) => {
       const { name, mime, dataBase64 } = z
         .object({
           name: z.string().trim().min(1).max(200),
-          mime: z.string().regex(/^image\//, '一期只收图片（image/*）'),
+          mime: z.string().trim().min(3).max(120),
           dataBase64: z.string().min(8).max(12_000_000),
         })
         .parse(payload)
       const bytes = Buffer.from(dataBase64, 'base64')
       if (bytes.length > 8 * 1024 * 1024) {
-        throw new KernelError('ATTACHMENT_TOO_LARGE', `图片超过上限 8MB（${(bytes.length / 1024 / 1024).toFixed(1)}MB）`)
+        throw new KernelError('ATTACHMENT_TOO_LARGE', `附件超过上限 8MB（${(bytes.length / 1024 / 1024).toFixed(1)}MB）`)
       }
       const dir = `${userDataRoot}/attachments`
       mkdirSync(dir, { recursive: true })
       const id = createHash('sha256').update(bytes).digest('hex')
-      const ext = mime === 'image/png' ? 'png' : mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : 'img'
+      // 扩展名：图片按 mime 映射（读命令反查 mime 用）；其余保留原文件扩展名（语法信息）
+      const imgExt = mime === 'image/png' ? 'png' : mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : undefined
+      const nameExt = name.includes('.') ? (name.split('.').pop() ?? '') : ''
+      const ext = imgExt ?? (nameExt !== '' ? nameExt.replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase() : 'bin')
       const path = `${dir}/${id}.${ext}`
-      if (!existsSync(path)) writeFileSync(path, bytes) // 内容寻址：同图重传零拷贝去重
+      if (!existsSync(path)) writeFileSync(path, bytes) // 内容寻址：同文件重传零拷贝去重
       return { id, name, mime, size: bytes.length, path }
     }, z.object({
       name: z.string().trim().min(1).max(200),
-      mime: z.string().regex(/^image\//),
+      mime: z.string().trim().min(3).max(120),
       dataBase64: z.string().min(8).max(12_000_000),
     }))
     .register('v1.attachments.read', async (payload) => {
