@@ -2904,9 +2904,9 @@ test('文件附件（v0.1.102 二期）：上传 .md 文本 → 待发条文件 
       mimeType: 'text/markdown',
       buffer: Buffer.from('# 标题\n\n这是 markdown 文件内容注入成功测试正文。', 'utf8'),
     })
-    const chip = page.locator('.att-chip.is-file')
+    const chip = page.locator('.att-chip', { has: page.locator('svg.file-badge text', { hasText: 'md' }) })
     await expect(chip).toBeVisible({ timeout: 15_000 })
-    await expect(chip).toContainText('笔记.md')
+    await expect(chip).toHaveAttribute('title', /笔记\.md/)
 
     // 发送 → mock 断言：文本段含「--- 附件 笔记.md ---」与文件正文（注入链实证）
     const input = page.locator('.composer-box input')

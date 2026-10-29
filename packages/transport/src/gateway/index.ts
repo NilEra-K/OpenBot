@@ -28,7 +28,10 @@ export const GatewayErrorCodes = {
   TRANSPORT_METHOD_NOT_ALLOWED: 'TRANSPORT_METHOD_NOT_ALLOWED',
 } as const
 
-const MAX_BODY_BYTES = 2 * 1024 * 1024
+// 请求体上限（v0.1.104 附件修正）：附件上传走 base64（×4/3 膨胀）——8MB 文件 ≈ 10.7MB 载荷，
+// 旧 2MB 上限致 TRANSPORT_PAYLOAD_TOO_LARGE（用户报障）。网关恒环回（随机端口 + 一次性
+// token，renderer→main 同机单用户）——非公网面，12MB 上限覆盖附件上限 + JSON 包裹余量。
+const MAX_BODY_BYTES = 12 * 1024 * 1024
 const SSE_HEARTBEAT_MS = 15_000
 
 export interface GatewayOptions {

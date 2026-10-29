@@ -1570,7 +1570,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         .object({
           name: z.string().trim().min(1).max(200),
           mime: z.string().trim().min(3).max(120),
-          dataBase64: z.string().min(8).max(12_000_000),
+          dataBase64: z.string().min(4).max(12_000_000),
         })
         .parse(payload)
       const bytes = Buffer.from(dataBase64, 'base64')
@@ -1590,7 +1590,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }, z.object({
       name: z.string().trim().min(1).max(200),
       mime: z.string().trim().min(3).max(120),
-      dataBase64: z.string().min(8).max(12_000_000),
+      dataBase64: z.string().min(4).max(12_000_000),
     }))
     .register('v1.attachments.read', async (payload) => {
       const { id } = z.object({ id: z.string().regex(/^[0-9a-f]{64}$/) }).parse(payload)

@@ -1251,13 +1251,13 @@
   flex-wrap: wrap;
 }
 
+/* chip（v0.1.104 四轮：无边框常态 + 圆形×悬停浮现 + 文件横排卡——参照图定稿） */
 .att-chip {
   position: relative;
   width: 44px;
   height: 44px;
   border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--line-strong);
+  border: none; /* 常态无边框（用户裁定）——× 悬停浮现即操作提示 */
 }
 
 .att-thumb {
@@ -1265,27 +1265,76 @@
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: 8px;
 }
 
+/* 文件横排卡：图标 + 文件名（用户参照图） */
+.att-chip.is-file {
+  width: auto;
+  max-width: 200px;
+  height: 44px; /* 与图片 chip 同高（v0.1.104 五轮：用户裁定对齐） */
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 26px 0 6px;
+  background: var(--bg3);
+  border-radius: 9px;
+}
+
+.att-mini {
+  flex: none;
+  width: 26px;
+  height: 26px;
+}
+
+.att-name {
+  font-size: 11.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 圆形×：悬停浮现（图片 chip 角标 / 文件卡右缘内嵌） */
 .att-x {
   position: absolute;
-  top: 0;
-  right: 0;
+  top: -5px;
+  right: -5px;
   width: 16px;
   height: 16px;
   border: none;
-  border-radius: 0 0 0 6px;
-  background: rgba(0, 0, 0, 0.62);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.72);
   color: #fff;
   font-size: 9px;
+  line-height: 1;
   cursor: pointer;
   display: grid;
   place-items: center;
   padding: 0;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 120ms var(--ease), transform 120ms var(--ease), background 120ms var(--ease);
+}
+
+.att-chip:hover .att-x {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.att-chip.is-file .att-x {
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%) scale(0.8);
+}
+
+.att-chip.is-file:hover .att-x {
+  opacity: 1; /* 显式（五轮：与图片 chip 同款悬停语义——不可见即不占注意力） */
+  transform: translateY(-50%) scale(1);
 }
 
 .att-x:hover {
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.92);
 }
 
 .att-busy {
@@ -1309,22 +1358,10 @@
   display: block;
 }
 
-/* 文件类附件 chip（v0.1.102 二期）：待发条与气泡通用——名+大小（图片走缩略） */
-.att-chip.is-file {
-  width: auto;
-  height: 28px;
-  padding: 0 26px 0 8px;
-  display: inline-flex;
-  align-items: center;
-}
+/* 文件徽标（v0.1.104 三轮）：FileBadge 组件（SVG 折角纸张）——填充 chip 全域 */
 
-.att-file-label {
-  font-size: 11px;
-  color: var(--ink2);
-  white-space: nowrap;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.att-thumb {
+  cursor: zoom-in;
 }
 
 .m-att-file {
@@ -1338,4 +1375,44 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 气泡文件徽标壳（v0.1.104 三轮）：FileBadge 组件 18px 内嵌 + 名 + 大小 */
+.m-att-badge {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+
+.m-att {
+  cursor: zoom-in;
+}
+
+/* 图片预览遮罩（v0.1.104）：点遮罩即关 */
+.att-view {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: zoom-out;
+}
+
+.att-view img {
+  max-width: 86vw;
+  max-height: 80vh;
+  border-radius: 10px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  cursor: default;
+}
+
+.att-view-name {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
 }

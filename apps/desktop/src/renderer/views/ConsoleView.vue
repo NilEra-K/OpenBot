@@ -18,6 +18,7 @@ import { mentionify } from '../lib/mention'
 import RosterPanel from '../components/RosterPanel.vue'
 import BotBallAvatar from '../components/BotBallAvatar.vue'
 import CtxPanel from '../components/CtxPanel.vue'
+import FileBadge from '../components/FileBadge.vue'
 import BoxScreen from '../components/BoxScreen.vue'
 import MentionMenu from '../components/MentionMenu.vue'
 import SlashMenu from '../components/SlashMenu.vue'
@@ -968,34 +969,52 @@ const modelSupportsImages = computed(() => {
 /** 人性化大小（文件 chip） */
 const fmtSize = (n: number): string => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`)
 
+/** 文件类型徽标（v0.1.104 用户裁定：att-chip 统一 44px 方块——文件以类型色徽标呈现：
+ *  PDF 红 / 表格绿 / 文档蓝 / 压缩黄，其余主题中性色；徽标文字 = 扩展名（≤4 字符大写） */
+/** 文件类型徽标（v0.1.104 三轮：FileBadge 组件——用户 SVG 参照折角纸张形，色板/扩展名逻辑内聚组件） */
+
+/** 图片预览（v0.1.104 用户需求：气泡/待发条图片点击放大）——遮罩点击即关 */
+const attPreview = ref<{ uri: string; name: string } | null>(null)
+
 const addFiles = async (files: File[] | FileList): Promise<void> => {
   const list = [...files]
   if (list.length === 0) return
-  const hasImage = list.some((f) => f.type.startsWith('image/'))
-  // 门控仅约束图片（文本/存档附件不依赖视觉）——含图且无视觉时拦截
-  if (hasImage && !modelSupportsImages.value) {
-    toast.push('当前模型不支持图像输入——先在设置中为模型开启「视觉」，或移除图片', 'warning')
-    return
+  // 门控逐文件（v0.1.104 修正：混批时只拒图片、放行文件——文本/存档附件不依赖视觉）
+  const vision = modelSupportsImages.value
+  const rejected: string[] = []
+  const accepted = list.filter((f) => {
+    if (f.type.startsWith('image/') && !vision) {
+      rejected.push(f.name)
+      return false
+    }
+    return true
+  })
+  if (rejected.length > 0) {
+    toast.push(`当前模型不支持图像输入，已略过图片：${rejected.join('、')}`, 'warning')
   }
+  if (accepted.length === 0) return
   attBusy.value = true
   try {
-    for (const f of list) {
-      if (f.size > 8 * 1024 * 1024) {
-        toast.push(`「${f.name}」超过 8MB 上限`, 'danger')
-        continue
+    for (const f of accepted) {
+      // 逐文件容错（v0.1.104 修正：一个失败不中断同批其余——catch 在循环内）
+      try {
+        if (f.size > 8 * 1024 * 1024) {
+          toast.push(`「${f.name}」超过 8MB 上限`, 'danger')
+          continue
+        }
+        const dataBase64 = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader()
+          fr.onload = () => resolve(String(fr.result).split(',')[1] ?? '')
+          fr.onerror = () => reject(fr.error)
+          fr.readAsDataURL(f)
+        })
+        const meta = await kernel.uploadAttachment(f.name, f.type !== '' ? f.type : 'application/octet-stream', dataBase64)
+        const uri = meta.mime.startsWith('image/') ? await kernel.attachmentUri(meta.id, meta.mime) : ''
+        pendingAtts.value = [...pendingAtts.value, { meta, uri }]
+      } catch (err) {
+        toast.push(`「${f.name}」上传失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
       }
-      const dataBase64 = await new Promise<string>((resolve, reject) => {
-        const fr = new FileReader()
-        fr.onload = () => resolve(String(fr.result).split(',')[1] ?? '')
-        fr.onerror = () => reject(fr.error)
-        fr.readAsDataURL(f)
-      })
-      const meta = await kernel.uploadAttachment(f.name, f.type !== '' ? f.type : 'application/octet-stream', dataBase64)
-      const uri = meta.mime.startsWith('image/') ? await kernel.attachmentUri(meta.id, meta.mime) : ''
-      pendingAtts.value = [...pendingAtts.value, { meta, uri }]
     }
-  } catch (err) {
-    toast.push(`附件上传失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
   } finally {
     attBusy.value = false
   }
@@ -1462,8 +1481,8 @@ const GROUP_ICON =
                     <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
                     <div v-if="kernel.messages[unit.msgIndex]!.attachments" class="m-atts">
                       <template v-for="att in kernel.messages[unit.msgIndex]!.attachments" :key="att.id">
-                        <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" />
-                        <span v-else class="m-att-file mono" :title="att.name">📄 {{ att.name }} · {{ fmtSize(att.size) }}</span>
+                        <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id], name: att.name })" />
+                        <span v-else class="m-att-file mono" :title="att.name"><span class="m-att-badge"><FileBadge :name="att.name" /></span>{{ att.name }} · {{ fmtSize(att.size) }}</span>
                       </template>
                     </div>
                   </div>
@@ -1520,8 +1539,8 @@ const GROUP_ICON =
                 <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
                 <div v-if="kernel.messages[unit.msgIndex!]!.attachments" class="m-atts">
                   <template v-for="att in kernel.messages[unit.msgIndex!]!.attachments" :key="att.id">
-                    <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" />
-                    <span v-else class="m-att-file mono" :title="att.name">📄 {{ att.name }} · {{ fmtSize(att.size) }}</span>
+                    <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id], name: att.name })" />
+                    <span v-else class="m-att-file mono" :title="att.name"><span class="m-att-badge"><FileBadge :name="att.name" /></span>{{ att.name }} · {{ fmtSize(att.size) }}</span>
                   </template>
                 </div>
               </div>
@@ -1713,9 +1732,12 @@ const GROUP_ICON =
           <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }" @dragover.prevent @drop.prevent="onComposerDrop">
             <!-- 待发附件条（v0.1.102 图片一期）：缩略图 chip + 移除；上传中 spinner -->
             <div v-if="pendingAtts.length > 0 || attBusy" class="att-strip">
-              <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :class="{ 'is-file': a.uri === '' }" :title="a.meta.name">
-                <img v-if="a.uri !== ''" class="att-thumb" :src="a.uri" :alt="a.meta.name" />
-                <span v-else class="att-file-label">{{ a.meta.name }} · {{ fmtSize(a.meta.size) }}</span>
+              <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :class="{ 'is-file': a.uri === '' }" :title="`${a.meta.name} · ${fmtSize(a.meta.size)}`">
+                <img v-if="a.uri !== ''" class="att-thumb" :src="a.uri" :alt="a.meta.name" title="点击预览" @click="attPreview = { uri: a.uri, name: a.meta.name }" />
+                <template v-else>
+                  <span class="att-mini"><FileBadge :name="a.meta.name" /></span>
+                  <span class="att-name">{{ a.meta.name }}</span>
+                </template>
                 <button type="button" class="att-x" aria-label="移除附件" @click="removePendingAtt(a.meta.id)">✕</button>
               </div>
               <span v-if="attBusy" class="att-busy">上传中…</span>
@@ -1761,14 +1783,15 @@ const GROUP_ICON =
                       <span class="mt"><span class="ti">使用 @ 添加上下文</span></span>
                     </button>
                     <!-- 上传文件（v0.1.102 一期图片 + 二期文件类）：选择/粘贴/拖拽三入口——多选；
-                         图片走视觉注入、文本 ≤200KB 注入全文、其余存档给路径；视觉门控只约束图片 -->
+                         图片走视觉注入、文本 ≤200KB 注入全文、其余存档给路径；视觉门控只约束图片；
+                         副注清理（v0.1.104 用户裁定：+菜单只留条目名） -->
                     <button class="cb-menu-item" @click="attFileEl?.click(); plusMenuOpen = false">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                      <span class="mt"><span class="ti">上传图片 / 文件</span><span class="ts">图片走视觉 · 文本注入内容 · 大文件存档给路径</span></span>
+                      <span class="mt"><span class="ti">上传图片 / 文件</span></span>
                     </button>
                     <button class="cb-menu-item" @click="openQuoteFromMenu()">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-                      <span class="mt"><span class="ti">引用某个 Agent 的会话</span><span class="ts">随下条消息注入被引会话内容</span></span>
+                      <span class="mt"><span class="ti">引用某个 Agent 的会话</span></span>
                     </button>
                   </div>
                 </div>
@@ -1857,6 +1880,12 @@ const GROUP_ICON =
 
     <!-- 右栏：ctx 实况面板（llm 打字机 + Box 命令输出；原型 #11 标注位） -->
     <CtxPanel />
+
+    <!-- 图片预览遮罩（v0.1.104）：气泡/待发条图片点击放大——点遮罩即关（高于 toast 130） -->
+    <div v-if="attPreview" class="att-view" role="dialog" aria-label="图片预览" @mousedown="attPreview = null">
+      <img :src="attPreview.uri" :alt="attPreview.name" @mousedown.stop />
+      <span class="att-view-name">{{ attPreview.name }}</span>
+    </div>
   </section>
 </template>
 
