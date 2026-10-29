@@ -59,7 +59,7 @@
   gap: 8px;
   height: 30px;
   padding: 0 12px;
-  border-radius: 15px;
+  border-radius: 12px; /* v0.1.99 视觉对齐：15px 孤例归面板卡档 */
   background: var(--bg2);
   border: 1px solid var(--line);
   font-size: 12px;
@@ -147,7 +147,7 @@
   gap: 6px;
   height: 26px;
   padding: 0 10px;
-  border-radius: 13px;
+  border-radius: 12px; /* v0.1.99 视觉对齐：13px 孤例归位 */
   background: var(--bg3);
   border: 1px solid var(--line);
   font-size: 12px;

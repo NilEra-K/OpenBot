@@ -227,8 +227,10 @@ watch(
 .btn {
   display: inline-flex;
   align-items: center;
-  height: 30px;
-  padding: 0 14px;
+  /* v0.1.99 视觉对齐：30px·0 14px → 全局基准 28px·0 12px（审批弹窗钮此前比一切视图都高，
+     同屏浮于控制台上时同一逻辑动作两种高度） */
+  height: 28px;
+  padding: 0 12px;
   border-radius: 7px;
   border: 1px solid var(--line-strong);
   background: var(--bg2);

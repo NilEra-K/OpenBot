@@ -622,6 +622,10 @@ onBeforeUnmount(() => {
 .btn {
   display: inline-flex;
   align-items: center;
+  /* 几何对齐全局基准（v0.1.99：28px·0 12px——此前 auto 无高）；配色保持覆盖层专用
+     （视频栏上恒深色——不取 --bg2/--ink/--accent：日间主题下会翻成浅色系与深 bar 割裂） */
+  height: 28px;
+  padding: 0 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.06);
   color: #eaeaea;
