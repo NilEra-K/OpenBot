@@ -1025,6 +1025,30 @@ const removePendingAtt = (id: string): void => {
   pendingAtts.value = pendingAtts.value.filter((a) => a.meta.id !== id)
 }
 
+/** 附件条滚动态（v0.1.105 八轮：方位感知箭头——按滚动位置显隐 ‹/›） */
+const attScrollEl = ref<HTMLElement | null>(null)
+const attCanLeft = ref(false)
+const attCanRight = ref(false)
+const updateAttScrollState = (): void => {
+  const el = attScrollEl.value
+  if (el === null) {
+    attCanLeft.value = false
+    attCanRight.value = false
+    return
+  }
+  const t = 8 // 容差：亚像素/平滑滚动尾差不闪箭头
+  attCanLeft.value = el.scrollLeft > t
+  attCanRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - t
+}
+watch(pendingAtts, () => void nextTick(() => updateAttScrollState()), { deep: true })
+
+/** 箭头点击 → 按滚动区宽度的 80% 平滑步进（scroll 事件回调自动更新箭头态） */
+const scrollAttStripBy = (dir: 1 | -1): void => {
+  const el = attScrollEl.value
+  if (el === null) return
+  el.scrollBy({ left: dir * Math.max(160, el.clientWidth * 0.8), behavior: 'smooth' })
+}
+
 /** + 菜单「上传图片」→ 文件选择落定：读入上传 → 清空控件值（同文件可重选） */
 const onAttFileChange = (): void => {
   const files = attFileEl.value?.files
@@ -1732,15 +1756,25 @@ const GROUP_ICON =
           <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }" @dragover.prevent @drop.prevent="onComposerDrop">
             <!-- 待发附件条（v0.1.102 图片一期）：缩略图 chip + 移除；上传中 spinner -->
             <div v-if="pendingAtts.length > 0 || attBusy" class="att-strip">
-              <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :class="{ 'is-file': a.uri === '' }" :title="`${a.meta.name} · ${fmtSize(a.meta.size)}`">
-                <img v-if="a.uri !== ''" class="att-thumb" :src="a.uri" :alt="a.meta.name" title="点击预览" @click="attPreview = { uri: a.uri, name: a.meta.name }" />
-                <template v-else>
-                  <span class="att-mini"><FileBadge :name="a.meta.name" /></span>
-                  <span class="att-name">{{ a.meta.name }}</span>
-                </template>
-                <button type="button" class="att-x" aria-label="移除附件" @click="removePendingAtt(a.meta.id)">✕</button>
+              <!-- 左箭头（八轮：仅当已离开首端——中间态/末态在场） -->
+              <button v-if="attCanLeft" type="button" class="att-arrow" aria-label="向左滚动附件" @click="scrollAttStripBy(-1)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+              </button>
+              <div ref="attScrollEl" class="att-scroll" @scroll="updateAttScrollState">
+                <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :class="{ 'is-file': a.uri === '' }" :title="`${a.meta.name} · ${fmtSize(a.meta.size)}`">
+                  <img v-if="a.uri !== ''" class="att-thumb" :src="a.uri" :alt="a.meta.name" title="点击预览" @click="attPreview = { uri: a.uri, name: a.meta.name }" />
+                  <template v-else>
+                    <span class="att-mini"><FileBadge :name="a.meta.name" /></span>
+                    <span class="att-name">{{ a.meta.name }}</span>
+                  </template>
+                  <button type="button" class="att-x" aria-label="移除附件" @click="removePendingAtt(a.meta.id)">✕</button>
+                </div>
+                <span v-if="attBusy" class="att-busy">上传中…</span>
               </div>
-              <span v-if="attBusy" class="att-busy">上传中…</span>
+              <!-- 右箭头（八轮：仅当右侧还有未滚入内容——首态/中间态在场） -->
+              <button v-if="attCanRight" type="button" class="att-arrow" aria-label="向右滚动附件" @click="scrollAttStripBy(1)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+              </button>
             </div>
         <MentionMenu
           v-if="mention.open"

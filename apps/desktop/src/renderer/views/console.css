@@ -1243,12 +1243,48 @@
 }
 
 /* ---- 图片附件（2026-10-30 v0.1.102 一期）：composer 待发条 + 气泡缩略图行 ---- */
+/* 附件条（v0.1.105 七轮：外层行 = 滚动区 + 独立计数泡——泡不覆盖任何附件（六轮 sticky 叠压被否） */
 .att-strip {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 12px 0;
-  flex-wrap: wrap;
+}
+
+.att-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none; /* 滚轮/触控板横滑；滚动条不占视觉（计数泡承担「还有更多」提示） */
+}
+
+.att-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* 滚动箭头（八轮：方位感知——首端只 ›、中间 ‹›、末态只 ‹；独立占位不覆盖附件） */
+.att-arrow {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--bg3);
+  color: var(--ink2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color 120ms var(--ease), border-color 120ms var(--ease);
+}
+
+.att-arrow:hover {
+  color: var(--ink);
+  border-color: var(--ink3);
 }
 
 /* chip（v0.1.104 四轮：无边框常态 + 圆形×悬停浮现 + 文件横排卡——参照图定稿） */
