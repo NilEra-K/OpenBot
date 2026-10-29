@@ -139,79 +139,17 @@
   background: rgba(var(--success-rgb), 0.12);
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 7px;
-  border: 1px solid var(--line-strong);
-  background: var(--bg2);
-  color: var(--ink);
-  font-size: 12.5px;
-  cursor: pointer;
-}
 
-.btn:hover {
-  background: var(--bg3);
-}
 
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 
-.btn-sm {
-  height: 24px;
-  padding: 0 10px;
-  font-size: 11.5px;
-}
 
-.btn-secondary {
-  background: var(--bg2);
-  border-color: rgba(var(--accent-rgb), 0.28);
-  color: var(--accent);
-}
 
-.btn-secondary:hover {
-  background: var(--accent-weak);
-}
 
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 650;
-}
 
-.btn-primary:hover {
-  /* 显式带背景：不带则被 .btn:hover 的 bg3（特异性同 0,2,0 且在其后命中）覆盖成灰白底
-     ——主按钮 hover 失真 bug（2026-09-01 用户实测报障，rooms 空态 CTA 白字白底） */
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-}
 
-.btn-primary:disabled {
-  filter: none;
-  opacity: 0.4;
-}
 
-.btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--ink2);
-}
 
-.btn-ghost:hover {
-  background: var(--bg2);
-  color: var(--ink);
-}
 
-.btn-ghost.btn-danger:hover {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.1);
-}
 
 /* ---- 添加/编辑表单 ---- */
 
@@ -1845,14 +1783,6 @@
   border-color: var(--ink2);
 }
 
-.btn-danger-ghost {
-  background: transparent;
-  border-color: rgba(var(--danger-rgb), 0.35);
-  color: var(--danger);
-}
-.btn-danger-ghost:hover:not(:disabled) {
-  background: rgba(var(--danger-rgb), 0.1);
-}
 .rt-installing {
   border: none;
   background: none;

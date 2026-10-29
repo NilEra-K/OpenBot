@@ -314,67 +314,15 @@
 
 /* ---- 按钮家族（与既有视图 css 同款副本——btn/primary/secondary/ghost） ---- */
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 7px;
-  border: 1px solid var(--line-strong);
-  background: var(--bg2);
-  color: var(--ink);
-  font-size: 12.5px;
-  cursor: pointer;
-}
 
-.btn:hover {
-  background: var(--bg3);
-}
 
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 
-.btn-secondary {
-  background: var(--bg2);
-  border-color: rgba(var(--accent-rgb), 0.28);
-  color: var(--accent);
-}
 
-.btn-secondary:hover {
-  background: var(--accent-weak);
-}
 
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 650;
-}
 
-.btn-primary:hover {
-  /* 显式带背景：不带则被 .btn:hover 的 bg3 覆盖成灰白底（同 settings.css 修法） */
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-}
 
-.btn-primary:disabled {
-  filter: none;
-  opacity: 0.4;
-}
 
-.btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--ink2);
-}
 
-.btn-ghost:hover {
-  background: var(--bg2);
-  color: var(--ink);
-}
 
 /* ---- 表单字段（field-input/field-label——模态内输入框，与设置页同款） ---- */
 
@@ -487,7 +435,3 @@
   border-color: rgba(var(--accent-rgb), 0.35);
 }
 
-.btn-ghost.btn-danger:hover {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.1);
-}

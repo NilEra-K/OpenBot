@@ -618,51 +618,12 @@
   font-family: var(--mono);
 }
 
-.btn {
-  /* v0.1.99 视觉对齐：补齐高度/内边距——此前唯一无高的 .btn 副本（auto≈26px，比其余
-     四视图 28px 矮一截，同屏漂移）；基准=多数派 28px·0 12px */
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--line-strong);
-  background: var(--bg2);
-  color: var(--ink);
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 12.5px;
-  transition: background 140ms var(--ease), border-color 140ms var(--ease);
-}
 
-.btn:hover {
-  background: var(--bg3);
-}
 
-.btn-sm {
-  /* v0.1.99 视觉对齐：26px·0 12px → 基准 24px·0 10px（boxes/graph/rooms/settings 一致） */
-  height: 24px;
-  padding: 0 10px;
-  font-size: 11.5px;
-}
 
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 650;
-}
 
-.btn-primary:hover {
-  background: var(--accent-strong);
-}
 
-.btn-danger-ghost {
-  border-color: rgba(var(--danger-rgb), 0.4);
-  color: var(--danger);
-  background: transparent;
-}
 
-.btn-danger-ghost:hover {
-  background: rgba(var(--danger-rgb), 0.12);
-}
 
 /* ---- 输入区 ---- */
 .composer {

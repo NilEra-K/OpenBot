@@ -616,22 +616,13 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* ---- btn 家族副本（模板 .btn/.btn-secondary/.btn-sm 此前无定义——裸按钮）。
+/* ---- btn 配色覆盖（v0.1.100 二期：几何/字号已下沉全局 common.css，此处仅存覆盖层配色）。
    gui-bar 恒深底（rgba(26,24,21,.85) 不随主题翻转）——配色定死深色方案（同 .gui-idle #8a938e 先例）；
    不取 --bg2/--ink/--accent：日间主题下会翻成浅色系与深 bar 割裂 ---- */
 .btn {
-  display: inline-flex;
-  align-items: center;
-  /* 几何对齐全局基准（v0.1.99：28px·0 12px——此前 auto 无高）；配色保持覆盖层专用
-     （视频栏上恒深色——不取 --bg2/--ink/--accent：日间主题下会翻成浅色系与深 bar 割裂） */
-  height: 28px;
-  padding: 0 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.06);
   color: #eaeaea;
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 12.5px;
   transition: background 140ms var(--ease), border-color 140ms var(--ease);
 }
 
@@ -642,11 +633,6 @@ onBeforeUnmount(() => {
 .btn:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.btn-sm {
-  height: 26px;
-  padding: 0 12px;
 }
 
 .btn-secondary {

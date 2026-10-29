@@ -1,0 +1,99 @@
+/**
+ * 全局通用基座（v0.1.100 视觉对齐二期：按钮族单一事实源）：
+ * 此前 .btn 族是「每视图一份 scoped 副本」（boxes/console/graph/rooms/settings + ApprovalModal
+ * + GuiScreen 七处），副本漂移致同屏不一致（v0.1.99 普查：控制台 26/审批弹窗 30 vs 四视图 28），
+ * 且有变体静默缺失（控制台 secondary/ghost/:disabled 在用无定义、rooms 缺 .btn-sm——
+ * class 在场样式缺席，与 toast 'error' kind 同类静默失效）。本文件为 canonical 全变体并集，
+ * 视图副本全部删除（scoped 特异性天然让位于全局同名规则被删除后的本文件）。
+ * 例外保留：GuiScreen 的配色覆盖（视频栏恒深色——几何已下沉此处）；boxops-overlay 的
+ * .btn-ghost 特化（浮层 ghost 带边框，语义不同）。
+ * 归一裁定（2026-10-29 作者授权）：ghost 字色统一 --ink2；danger-ghost 边框统一 0.4；
+ * 基准几何 = 多数派 28px·0 12px·r7·12.5px（sm 24px·0 10px·11.5px）。
+ * ⚠ 规则顺序不可随意调整：.btn-primary:hover 必须在 .btn:hover 之后（同特异性后者胜——
+ * 显式带背景防主按钮 hover 被灰白底覆盖，2026-09-01 实测报障注释随迁）。
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg2);
+  color: var(--ink);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 140ms var(--ease), border-color 140ms var(--ease);
+}
+
+.btn:hover {
+  background: var(--bg3);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-sm {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+
+.btn-secondary {
+  background: var(--bg2);
+  border-color: rgba(var(--accent-rgb), 0.28);
+  color: var(--accent);
+}
+
+.btn-secondary:hover {
+  background: var(--accent-weak);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+
+.btn-primary:hover {
+  /* 显式带背景：不带则被 .btn:hover 的 bg3（特异性同 0,2,0 且在其后命中）覆盖成灰白底
+     ——主按钮 hover 失真 bug（2026-09-01 用户实测报障，rooms 空态 CTA 白字白底） */
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.btn-primary:disabled {
+  filter: none;
+  opacity: 0.4;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink2);
+}
+
+.btn-ghost:hover {
+  background: var(--bg2);
+  color: var(--ink);
+}
+
+.btn-danger-ghost {
+  background: transparent;
+  border-color: rgba(var(--danger-rgb), 0.4);
+  color: var(--danger);
+}
+
+.btn-danger-ghost:hover {
+  background: rgba(var(--danger-rgb), 0.12);
+}
+
+/* 组合态（v0.1.100 自 rooms/settings 副本迁入——btn-ghost btn-danger 并用时的危险 hover） */
+.btn-ghost.btn-danger:hover {
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.1);
+}

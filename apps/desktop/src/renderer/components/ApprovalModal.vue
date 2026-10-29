@@ -224,58 +224,11 @@ watch(
   font-family: var(--mono);
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  /* v0.1.99 视觉对齐：30px·0 14px → 全局基准 28px·0 12px（审批弹窗钮此前比一切视图都高，
-     同屏浮于控制台上时同一逻辑动作两种高度） */
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 7px;
-  border: 1px solid var(--line-strong);
-  background: var(--bg2);
-  color: var(--ink);
-  font-size: 12.5px;
-  cursor: pointer;
-}
 
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 650;
-}
 
-/* hover 提亮（同族修法：显式背景——防各处 .btn:hover 的 bg3 覆盖成灰白底） */
-.btn-primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-}
 
-.btn-danger-ghost {
-  background: transparent;
-  border-color: rgba(var(--danger-rgb), 0.35);
-  color: var(--danger);
-}
 
-.btn-danger-ghost:hover:not(:disabled) {
-  background: rgba(var(--danger-rgb), 0.1);
-}
 
-.btn-ghost {
-  margin-left: auto;
-  background: transparent;
-  border-color: transparent;
-  color: var(--ink3);
-}
 
-.btn-ghost:hover:not(:disabled) {
-  background: var(--bg2);
-  color: var(--ink);
-}
 </style>
