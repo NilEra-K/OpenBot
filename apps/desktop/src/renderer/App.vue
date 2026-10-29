@@ -313,6 +313,14 @@ onUnmounted(() => kernel.shutdown())
   --mono: 'Cascadia Code', Consolas, ui-monospace, monospace;
   --ease: cubic-bezier(0.25, 1, 0.5, 1);
   --radius: 10px;
+  /* toast 图标徽章（v0.1.98 方案 C+，预览页定稿）：恒鲜活色（小面积不随文字语义色
+     加深走——日间文字色是白底对比加深版，徽章直接用会偏暗）；勾/叹号字色随主题
+     （夜间黑对比最强、日间白与红叉同族） */
+  --icon-success: #73ce95;
+  --icon-danger: #ea6a64;
+  --icon-warning: #e3ce5c;
+  --icon-check: #0c0c0c;
+  --icon-bang: #0c0c0c;
 }
 
 /* 日间主题（夜间为默认态；data-theme 由 ui store 依偏好/系统解析挂到 <html>）。
@@ -344,6 +352,9 @@ onUnmounted(() => kernel.shutdown())
   /* info 日间加深（原型 light 同值） */
   --info: #3a6fb5;
   --info-rgb: 58, 111, 181;
+  /* toast 徽章字色日间翻转（白勾/白叹号——与红圆白叉同族） */
+  --icon-check: #ffffff;
+  --icon-bang: #ffffff;
 }
 
 /* ---- 浅色主题对称补强（v0.1.42 UI 精雕——设计审查：深色打磨多于浅色） ---- */

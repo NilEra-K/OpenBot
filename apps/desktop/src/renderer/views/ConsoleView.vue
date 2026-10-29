@@ -412,7 +412,7 @@ const submitEdit = async (regenerate: boolean): Promise<void> => {
     toast.push(regenerate ? '已修订并重新生成' : '已修订（后续对话生效）', 'success')
     editModal.open = false
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 const toggleTombstone = async (m: { messageId: string; from?: string; tombstoned?: boolean }): Promise<void> => {
@@ -421,7 +421,7 @@ const toggleTombstone = async (m: { messageId: string; from?: string; tombstoned
     if (m.tombstoned === true) await kernel.sessionRevive(agentId, m.messageId)
     else await kernel.sessionTombstone(agentId, m.messageId)
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 /** 发送前拦截：/clear /resume 不进消息流——直接走命令面（菜单关闭时的兜底路径）。
@@ -570,7 +570,7 @@ const pickSlash = (i: number): void => {
     if (it.key === '/clear') {
       removeSlashToken()
       closeSlash()
-      void doSlashClear().catch((err: unknown) => toast.push(String(err), 'error'))
+      void doSlashClear().catch((err: unknown) => toast.push(String(err), 'danger'))
       return
     }
     if (it.key === '/resume') {
@@ -584,7 +584,7 @@ const pickSlash = (i: number): void => {
           refPickerSessions.value = list
         })
         .catch((err: unknown) => {
-          toast.push(err instanceof Error ? err.message : String(err), 'error')
+          toast.push(err instanceof Error ? err.message : String(err), 'danger')
           closeSlash()
         })
         .finally(() => {
@@ -606,7 +606,7 @@ const pickSlash = (i: number): void => {
         refPickerSessions.value = list
       })
       .catch((err: unknown) => {
-        toast.push(err instanceof Error ? err.message : String(err), 'error')
+        toast.push(err instanceof Error ? err.message : String(err), 'danger')
         closeSlash()
       })
       .finally(() => {
@@ -621,7 +621,7 @@ const pickSlash = (i: number): void => {
     void kernel
       .sessionResume(ui.activeAgentId, target)
       .then(() => toast.push(target !== undefined ? `已回到会话：${it.label}` : '已恢复上一会话上下文', 'success'))
-      .catch((err: unknown) => toast.push(err instanceof Error ? err.message : String(err), 'error'))
+      .catch((err: unknown) => toast.push(err instanceof Error ? err.message : String(err), 'danger'))
     return
   }
   // session 级（quote）：设置待发引用（胶囊呈现——所见即所发）

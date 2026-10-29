@@ -41,7 +41,7 @@ const install = async (plugin: { id: string; name: string; description: string; 
     await kernel.installPlugin(plugin)
     toast.push(`「${plugin.name}」已安装`, 'success')
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 
@@ -49,7 +49,7 @@ const toggle = async (plugin: { id: string; name: string; enabled: boolean }): P
   try {
     await kernel.setPluginEnabled(plugin.id, !plugin.enabled)
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 
@@ -63,7 +63,7 @@ const uninstall = async (plugin: { id: string; name: string }): Promise<void> =>
     await kernel.uninstallPlugin(plugin.id)
     toast.push(`「${plugin.name}」已卸载`, 'success')
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 

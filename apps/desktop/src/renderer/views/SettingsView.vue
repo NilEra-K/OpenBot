@@ -248,7 +248,7 @@ const scanAdbDevices = async (): Promise<void> => {
   try {
     adbDevices.value = await kernel.scanAdbDevices()
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   } finally {
     adbScanning.value = false
   }
@@ -350,7 +350,7 @@ const enumHostWindows = async (): Promise<void> => {
   try {
     hostWindows.value = await kernel.listHostWindows()
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   } finally {
     hostWindowsLoading.value = false
   }
@@ -495,7 +495,7 @@ const removeImage = async (img: { id: string; name: string }): Promise<void> => 
     await kernel.removeImage(img.id)
     toast.push('镜像条目已删除：' + img.name, 'success')
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   } finally {
     imageConfirmRemove.value = null
   }
@@ -551,7 +551,7 @@ const scanAvailableImages = async (): Promise<void> => {
   try {
     await kernel.scanImages()
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 /** 该镜像引用是否已在注册表（已注册的扫描行不再给注册按钮——不重复入库） */
@@ -729,7 +729,7 @@ const confirmModelModal = (): void => {
     void kernel.upsertProvider({ name: profile.name, baseUrl: profile.baseUrl, models, protocol: profile.protocol }).then(() => {
       toast.push(`模型已保存：${profile.name} · ${id}`, 'success')
     }).catch((err: unknown) => {
-      toast.push(err instanceof Error ? err.message : String(err), 'error')
+      toast.push(err instanceof Error ? err.message : String(err), 'danger')
     })
   } else if (modelModal.editingId !== null) {
     const idx = form.models.findIndex((m) => m.id === modelModal.editingId)
@@ -754,7 +754,7 @@ const removeSavedModel = (p: ProviderView, id: string): void => {
   }).then(() => {
     toast.push(`模型已删除：${p.name} · ${id}`, 'info')
   }).catch((err: unknown) => {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   })
 }
 
@@ -837,7 +837,7 @@ const makeDefault = (providerName: string, modelId: string): void => {
   void kernel.setDefaultProvider(providerName, modelId).then(() => {
     toast.push(`已设为默认模型：${providerName} · ${modelId}`, 'success')
   }).catch((err: unknown) => {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   })
 }
 /** 详情态「当前默认」kv 呈现：供应商 · 模型（无模型 id 时只呈现供应商名） */
@@ -859,7 +859,7 @@ const dropOn = (target: string): void => {
   if (fromIdx === -1 || toIdx === -1) return
   names.splice(toIdx, 0, names.splice(fromIdx, 1)[0] ?? names[toIdx]!)
   void kernel.reorderProviders(names).catch((err: unknown) => {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   })
 }
 
@@ -1029,7 +1029,7 @@ const openDirModal = async (runtimeId: 'wsl2' | 'nspawn', name: string): Promise
     dirModal.value = dirs[runtimeId] ?? ''
     dirModal.busy = false
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 const saveDirModal = async (): Promise<void> => {
@@ -1040,7 +1040,7 @@ const saveDirModal = async (): Promise<void> => {
     dirModal.open = false
     toast.push(dirModal.value.trim() === '' ? '已恢复默认——重启生效' : `「${dirModal.name}」数据目录已保存——重启生效`, 'success')
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   } finally {
     dirModal.busy = false
   }
@@ -1061,7 +1061,7 @@ const resetDirModal = async (): Promise<void> => {
     dirModal.open = false
     toast.push('已恢复默认——重启生效', 'success')
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   } finally {
     dirModal.busy = false
   }
@@ -1198,7 +1198,7 @@ const doCancelInstall = async (): Promise<void> => {
     }
     await kernel.cancelRuntimeInstall()
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 
@@ -1215,7 +1215,7 @@ const doLaunchRuntime = async (inst: typeof kernel.runtimeInstallers[number]): P
   try {
     await kernel.launchRuntime(inst.id)
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 
@@ -1240,7 +1240,7 @@ const doLaunchConfirmed = async (): Promise<void> => {
   try {
     await kernel.launchRuntime(target.id)
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 
@@ -1249,7 +1249,7 @@ const doCancelLaunch = async (id: string): Promise<void> => {
   try {
     await kernel.cancelRuntimeLaunch(id)
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 
@@ -1295,7 +1295,7 @@ const refreshRuntimeStatus = async (): Promise<void> => {
   try {
     await Promise.all([kernel.refreshSandbox(), kernel.refreshRuntimeInstallers()])
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   } finally {
     runtimeRefreshing.value = false
   }
@@ -1312,7 +1312,7 @@ const doInstall = async (): Promise<void> => {
     })
     installModal.stage = 'installing' // 弹窗原位转进度模态（说明内容不再漏到行下）
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 

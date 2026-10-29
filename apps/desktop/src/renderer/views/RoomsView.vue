@@ -118,7 +118,7 @@ const copyInvite = async (r: RelayRoomStatus): Promise<void> => {
     await navigator.clipboard.writeText(text)
     toast.push('邀请信息已复制——发给好友在其 OpenBot「跨用户房间」配置接入', 'success')
   } catch {
-    toast.push('复制失败（剪贴板不可用）——邀请信息见「房间设置」', 'error')
+    toast.push('复制失败（剪贴板不可用）——邀请信息见「房间设置」', 'danger')
   }
 }
 

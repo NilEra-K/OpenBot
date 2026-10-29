@@ -39,7 +39,7 @@ const savePersona = async (): Promise<void> => {
     personaEdit.open = false
     toast.push('人设已更新（即时生效）', 'success')
   } catch (err) {
-    toast.push(err instanceof Error ? err.message : String(err), 'error')
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 

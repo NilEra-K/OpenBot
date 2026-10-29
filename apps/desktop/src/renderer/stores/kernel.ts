@@ -1265,7 +1265,7 @@ export const useKernelStore = defineStore('kernel', {
             if (p.phase === 'failed') {
               // 稳定码前缀分流文案（同一通道承载安装/启动两条链）
               const launchFail = (p.detail ?? '').startsWith('RUNTIME_LAUNCH')
-              useToastStore().push(`${launchFail ? '运行时启动失败' : '运行时安装失败'}：${p.detail ?? '未知原因'}`, 'error')
+              useToastStore().push(`${launchFail ? '运行时启动失败' : '运行时安装失败'}：${p.detail ?? '未知原因'}`, 'danger')
             }
             // 就绪成功面（v0.1.90）：后台等待转就绪也有感知（不只失败有 toast）
             if (p.phase === 'ready') {
@@ -1284,7 +1284,7 @@ export const useKernelStore = defineStore('kernel', {
           const label = p.engine === 'docker' ? 'Docker' : 'Podman'
           useToastStore().push(
             p.running ? `沙箱引擎已恢复：${label}` : `沙箱引擎已停止：${label}——容器操作将失败`,
-            p.running ? 'success' : 'error',
+            p.running ? 'success' : 'danger',
           )
           void this.refreshRuntimeInstallers().catch(() => {})
           return
