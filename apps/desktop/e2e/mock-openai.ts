@@ -34,6 +34,12 @@ interface WireMessage {
   tool_calls?: Array<{ function: { name: string } }>
 }
 
+function normalizeContent(c: unknown): string {
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) return c.map((p) => (typeof p === 'object' && p !== null && (p as { text?: unknown }).text !== undefined ? String((p as { text?: string }).text) : '')).join('')
+  return ''
+}
+
 export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> {
   const requests: MockOpenAi['requests'] = []
   let responseSeq = 0
@@ -74,7 +80,9 @@ export async function startMockOpenAi(steps: ScriptStep[]): Promise<MockOpenAi> 
       const last = messages[messages.length - 1] ?? { role: '', content: '' }
       const lastAssistantWithCalls = [...messages].reverse().find((m) => m.tool_calls?.length)
       const lastToolName = lastAssistantWithCalls?.tool_calls?.[0]?.function.name ?? null
-      const step = steps.find((s) => s.match(last, lastToolName))
+      // match 收到的 content 归一（v0.1.102 图片附件）：ContentPart 数组 → 拼 text 段——
+      // 既有剧本匹配零感知（requests 留痕仍存原始形态，image_url 断言用原体）
+      const step = steps.find((s) => s.match({ role: last.role, content: normalizeContent(last.content) }, lastToolName))
       if (!step) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: `mock 剧本无匹配步：last.role=${last.role} lastTool=${lastToolName}` }))

@@ -11,7 +11,7 @@ import type { TranscriptStore } from '@openbot/state'
 import type { A2aRunPayload, GroupTurnPayload, UserChatRunPayload } from '@openbot/messaging'
 import { GROUP_CONTEXT_CLEAR_MARKER, GROUP_PASS_TOKEN } from '@openbot/messaging'
 import { LlmError } from '@openbot/llm'
-import type { ChatMessage, ChatProvider, ToolSpec } from '@openbot/llm'
+import type { ChatMessage, ChatProvider, ContentPart, ToolSpec } from '@openbot/llm'
 import type { RunStreamEvent } from '../stream/index.js'
 import type { ToolContext, ToolRegistry } from '../tools/index.js'
 import { MAX_THINKING_CHARS, truncateForTranscript } from '../tools/index.js'
@@ -45,6 +45,12 @@ export interface TurnRunnerDeps {
   nextMessageId: () => string
   systemPrompt?: string | ((agentId: string) => string)
   maxToolRounds?: number
+  /**
+   * 附件本体读取（v0.1.102 图片一期，装配注入——FsAdapter 只读 utf8 故走专用 dep）：
+   * 用户消息图片附件 → ContentPart image（base64）。null = 文件缺失/不可读——如实降级为
+   * 文本注记（不静默丢图）。缺席 = 装配无文件系统（CLI/测试）——附件一律文本注记
+   */
+  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string } | null>
   /**
    * 审批闸门（可选——2026-09-06 预算打穿问用户）：在场时工具轮预算打穿**不再自作主张终止**，
    * 经闸门发起「预算续期」授权请求（tool='tool_budget'，弹窗/自动批准按装配方实现）——
@@ -102,7 +108,7 @@ export class TurnRunner {
     if (run.kind === 'chat') {
       const payload = run.payload as UserChatRunPayload
       return this.#runTurn(run, {
-        userMessage: { role: 'user', content: payload.text },
+        userMessage: { role: 'user', content: await this.#userContent(run.agentId, payload) },
         originMessageId: payload.messageId,
       })
     }
@@ -211,6 +217,32 @@ export class TurnRunner {
     void viewerId
     void touched
     return out
+  }
+
+  /**
+   * 用户消息内容（v0.1.102 图片一期）：无附件 = 纯文本快路径（既有零变化）；有附件按模型
+   *  视觉分流——有视觉：text part + 逐图 image part（loadAttachment 读本体 base64，缺席/
+   *  失败如实降级文本注记不静默丢图）；无视觉：文本 + 「图像内容不可读」注记（与截图回喂
+   *  降级同款语义——部分端点对 image part 会 400）
+   */
+  async #userContent(agentId: string, payload: UserChatRunPayload): Promise<string | ContentPart[]> {
+    const attachments = payload.attachments
+    if (attachments === undefined || attachments.length === 0) return payload.text
+    const vision = this.#deps.supportsImagesOf?.(agentId) ?? true
+    const parts: ContentPart[] = [{ type: 'text', text: payload.text !== '' ? payload.text : '（图片）' }]
+    for (const att of attachments) {
+      if (vision) {
+        const loaded = (await this.#deps.loadAttachment?.({ path: att.path, mime: att.mime })) ?? null
+        if (loaded !== null) {
+          parts.push({ type: 'image', image: { base64: loaded.base64, mime: att.mime } })
+          continue
+        }
+        parts.push({ type: 'text', text: `（图片附件 ${att.name} 读取失败——文件可能已被清理）` })
+        continue
+      }
+      parts.push({ type: 'text', text: `（图片附件 ${att.name}——当前模型无视觉能力，图像内容不可读）` })
+    }
+    return parts
   }
 
   async #runTurn(run: ActiveRun, input: TurnInput): Promise<{ text: string }> {
@@ -529,7 +561,13 @@ export function toChatMessages(records: { kind: string; payload: unknown }[], vi
     const payload = typeof record.payload === 'object' && record.payload !== null ? (record.payload as Record<string, unknown>) : {}
     const text = typeof payload['text'] === 'string' ? payload['text'] : ''
     if (record.kind === 'user') {
-      messages.push({ role: 'user', content: text })
+      // 附件历史回放（v0.1.102）：历史轮不重读图片本体（token 纪律 + 反复读盘）——文本注记在册
+      const atts = payload['attachments']
+      const attNote =
+        Array.isArray(atts) && atts.length > 0
+          ? `（附件：${atts.map((a) => (typeof (a as { name?: unknown })?.name === 'string' ? (a as { name: string }).name : '?')).join('、')}）`
+          : ''
+      messages.push({ role: 'user', content: attNote !== '' && text !== '' ? `${text}\n${attNote}` : text + attNote })
     } else if (record.kind === 'agent') {
       messages.push({ role: 'assistant', content: text })
     } else if (record.kind === 'a2a-in') {

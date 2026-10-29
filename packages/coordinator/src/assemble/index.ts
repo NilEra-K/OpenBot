@@ -71,6 +71,12 @@ export interface AssembleOptions {
    *  （慢模型长轮次不被误杀），CLI/测试缺省 DEFAULT_RUN_POLICY */
   runPolicy?: Partial<RunPolicy>
   /**
+   * 附件本体读取（v0.1.102 图片一期，desktop 注入——FsAdapter 只读 utf8 故走专用通道）：
+   * 用户消息图片附件 → ContentPart image。缺席 = 无文件系统装配（CLI/测试）——附件一律
+   * 文本降级注记（TurnRunner.loadAttachment 同语义）。
+   */
+  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string } | null>
+  /**
    * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
    * 默认每次启动随机；确定性冒烟（CLI）注入固定值。
    */
@@ -361,6 +367,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     // 视觉能力（P8-4 后 UI 优化）：截图回喂分流——provider.capabilities.supportsImages 决定
     // 图像 part 或文本降级（未声明按有视觉处理——向后兼容）
     supportsImagesOf: (agentId) => llms.get(agentId)?.capabilities?.supportsImages === true,
+    // 附件本体读取（v0.1.102）：desktop 注入的文件系统通道原样透传（缺席=文本降级）
+    ...(options.loadAttachment !== undefined ? { loadAttachment: options.loadAttachment } : {}),
     tools,
     boxOf: (agentId) => boxes.get(agentId) ?? null,
     nextMessageId,
@@ -470,7 +478,13 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     })
     .register('v1.message.sendUser', async (payload) =>
       messaging.sendUserMessage(
-        payload as { toAgentId: string; text: string; nonce: string; sessionRef?: { agentId: string; sessionId: string | null } },
+        payload as {
+          toAgentId: string
+          text: string
+          nonce: string
+          sessionRef?: { agentId: string; sessionId: string | null }
+          attachments?: import('@openbot/core').AttachmentMeta[]
+        },
       ),
     )
     // ---- 「会话掌控」命令族（sessionView 元事件的写入面；组装解释在 runner） ----

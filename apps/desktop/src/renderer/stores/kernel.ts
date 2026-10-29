@@ -109,6 +109,8 @@ export interface ChatMessage {
   groupId?: string
   /** 群发言模式（2026-10-18 模式体系）：group-user 在场——徽标（独立作答/汇总/点名） */
   groupMode?: 'independent' | 'summary' | 'mention' | 'debate'
+  /** 图片附件（v0.1.102 一期）：user 消息在场——气泡缩略图行（dataURI 经 attachmentUri 取） */
+  attachments?: AttachmentMeta[]
   /** 乐观占位：命令响应/事件到达前为 true（UI 显示发送中态） */
   pending?: boolean
   /** 发送失败（网络/领域错误）：UI 显示重试 */
@@ -202,6 +204,15 @@ export interface GraphEdge {
   from: string
   to: string
   count: number
+}
+
+/** 附件元数据（v0.1.102 图片一期——与内核协议同形） */
+export interface AttachmentMeta {
+  id: string
+  name: string
+  mime: string
+  size: number
+  path: string
 }
 
 /** 供应商下的模型条目（v2 供应商 1:N 模型，2026-09-15） */
@@ -362,6 +373,8 @@ const loadedHistory = new Set<string>()
 export const useKernelStore = defineStore('kernel', {
   state: () => ({
     connected: false,
+    /** 附件缩略 dataURI 缓存（v0.1.102——id → data:image/...;base64,；气泡/待发条共用） */
+    attCache: {} as Record<string, string>,
     /** 引导错误（网关不可达/装配失败）——空缺态提示的数据来源 */
     bootError: null as string | null,
     roster: [] as RosterEntry[],
@@ -707,12 +720,16 @@ export const useKernelStore = defineStore('kernel', {
     /**
      * 发送用户消息（乐观更新 + nonce 幂等）：本地占位 → 命令受理（messageId 升级占位）→
      * 事件镜像去重。事件先到/响应先到两个顺序都收敛到单条正式消息（at-most-one 呈现）。
+     * 附件（v0.1.102）：本体已先经 uploadAttachment 落盘——此处只随消息带 meta（零字节搬运）。
      */
-    async sendUserMessage(toAgentId: string, text: string, reuseNonce?: string, sessionRef?: { agentId: string; sessionId: string | null }): Promise<void> {
+    async sendUserMessage(toAgentId: string, text: string, reuseNonce?: string, sessionRef?: { agentId: string; sessionId: string | null }, attachments?: AttachmentMeta[]): Promise<void> {
       const nonce = reuseNonce ?? crypto.randomUUID()
       const placeholderId = `~${nonce}`
+      const atts = attachments !== undefined && attachments.length > 0 ? attachments : undefined
+      // 附件缩略预取（v0.1.102）：气泡渲染不等网络——发送/事件/历史三路径同款
+      if (atts !== undefined) for (const a of atts) void this.attachmentUri(a.id, a.mime).catch(() => {})
       if (!this.messages.some((m) => m.messageId === placeholderId)) {
-        this.messages.push({ messageId: placeholderId, kind: 'user', from: 'user', to: toAgentId, text, at: Date.now(), pending: true, ...(sessionRef !== undefined ? { sessionRef } : {}) })
+        this.messages.push({ messageId: placeholderId, kind: 'user', from: 'user', to: toAgentId, text, at: Date.now(), pending: true, ...(sessionRef !== undefined ? { sessionRef } : {}), ...(atts !== undefined ? { attachments: atts } : {}) })
       } else {
         // 重试：复用占位条目，翻回发送中态
         const idx = this.messages.findIndex((m) => m.messageId === placeholderId)
@@ -721,7 +738,7 @@ export const useKernelStore = defineStore('kernel', {
       try {
         const acceptance = await this.call<{ messageId: string; runId: string | null; first: boolean }>(
           'v1.message.sendUser',
-          { toAgentId, text, nonce, ...(sessionRef !== undefined ? { sessionRef } : {}) },
+          { toAgentId, text, nonce, ...(sessionRef !== undefined ? { sessionRef } : {}), ...(atts !== undefined ? { attachments: atts } : {}) },
         )
         const idx = this.messages.findIndex((m) => m.messageId === placeholderId)
         if (idx >= 0) {
@@ -737,6 +754,19 @@ export const useKernelStore = defineStore('kernel', {
         throw err
       }
     },
+    /** 图片附件上传（v0.1.102 一期）：base64 上行 → 壳层 sha256 落盘（内容寻址去重）→ meta */
+    async uploadAttachment(name: string, mime: string, dataBase64: string): Promise<AttachmentMeta> {
+      return this.call('v1.attachments.upload', { name, mime, dataBase64 })
+    },
+    /** 附件缩略 dataURI（内存缓存——气泡与待发条共用；读面恒经内核附件目录校验） */
+    async attachmentUri(id: string, mime: string): Promise<string> {
+      if (this.attCache[id] !== undefined) return this.attCache[id]
+      const r = await this.call<{ dataBase64: string; mime: string }>('v1.attachments.read', { id })
+      const uri = `data:${mime};base64,${r.dataBase64}`
+      this.attCache = { ...this.attCache, [id]: uri }
+      return uri
+    },
+
     /**
      * 审批决议（弹窗/流内 gate 卡/角标共用）：成功后本地立即移除——与 SSE resolved 事件
      * 幂等双保险。传输失败（网关不可达）抛错保留条目供重试；领域失败（已决议/不存在）
@@ -1138,9 +1168,11 @@ export const useKernelStore = defineStore('kernel', {
         const msg = p as { messageId?: string; text?: string; from?: string; to?: string }
         if (typeof msg.messageId !== 'string' || typeof msg.text !== 'string') continue
         if (this.messages.some((m) => m.messageId === msg.messageId)) continue // 事件流已覆盖
+        const userAtts = record.kind === 'user' ? (p as { attachments?: AttachmentMeta[] }).attachments : undefined
+        if (userAtts !== undefined) for (const a of userAtts) void this.attachmentUri(a.id, a.mime).catch(() => {})
         const mapped: ChatMessage | null =
           record.kind === 'user'
-            ? { messageId: msg.messageId, kind: 'user', from: 'user', to: agentId, text: msg.text, at: record.at }
+            ? { messageId: msg.messageId, kind: 'user', from: 'user', to: agentId, text: msg.text, at: record.at, ...(userAtts !== undefined ? { attachments: userAtts } : {}) }
             : record.kind === 'agent'
               ? { messageId: msg.messageId, kind: 'agent', from: agentId, to: 'user', text: msg.text, at: record.at }
               : record.kind === 'a2a-out' && typeof msg.to === 'string'
@@ -1178,6 +1210,8 @@ export const useKernelStore = defineStore('kernel', {
         }
         case 'v1.message.user': {
           const { messageId, toAgentId, text } = event.payload
+          const atts = (event.payload as { attachments?: AttachmentMeta[] }).attachments
+          if (atts !== undefined) for (const a of atts) void this.attachmentUri(a.id, a.mime).catch(() => {})
           this.bumpEdge('user', toAgentId)
           if (this.messages.some((m) => m.messageId === messageId)) return // 响应先到已升级——去重
           // 事件先到（受理即 emit）：升级同目标的 pending 占位（顺序配对第一个）
@@ -1185,7 +1219,7 @@ export const useKernelStore = defineStore('kernel', {
           if (idx >= 0) {
             this.messages[idx] = { ...this.messages[idx]!, messageId, pending: false, failed: false }
           } else {
-            this.messages.push({ messageId, kind: 'user', from: 'user', to: toAgentId, text, at: event.at })
+            this.messages.push({ messageId, kind: 'user', from: 'user', to: toAgentId, text, at: event.at, ...(atts !== undefined ? { attachments: atts } : {}) })
           }
           return
         }

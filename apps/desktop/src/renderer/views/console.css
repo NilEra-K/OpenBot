@@ -1241,3 +1241,70 @@
   color: var(--ink);
   background: var(--bg3);
 }
+
+/* ---- 图片附件（2026-10-30 v0.1.102 一期）：composer 待发条 + 气泡缩略图行 ---- */
+.att-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 0;
+  flex-wrap: wrap;
+}
+
+.att-chip {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+}
+
+.att-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.att-x {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 0 0 0 6px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 9px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.att-x:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.att-busy {
+  font-size: 11.5px;
+  color: var(--ink3);
+}
+
+.m-atts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.m-att {
+  max-width: 180px;
+  max-height: 130px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  object-fit: contain;
+  display: block;
+}

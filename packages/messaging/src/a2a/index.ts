@@ -6,6 +6,7 @@
  */
 import { KernelError } from '@openbot/core'
 import type { AgentScheduler, EventBus, RunTicket } from '@openbot/core'
+import type { AttachmentMeta } from '@openbot/core'
 import { digestOf } from '@openbot/state'
 import type { IdempotencyLedger, TranscriptStore } from '@openbot/state'
 
@@ -33,6 +34,8 @@ export interface UserChatRunPayload {
   text: string
   /** 引用会话（「会话掌控」）：runner 组装注入（同 SendUserMessageInput.sessionRef） */
   sessionRef?: { agentId: string; sessionId: string | null }
+  /** 图片附件（v0.1.102）：runner 按模型视觉能力注入 image part 或文本降级 */
+  attachments?: AttachmentMeta[]
 }
 
 /** agent lane run 负载（runner 解释执行） */
@@ -62,6 +65,9 @@ export interface SendUserMessageInput {
   /** 引用会话（「会话掌控」composer 引用按钮）：随消息落盘 + run payload——组装层注入被引
    *  会话内容（TurnRunner.#injectSessionRefs） */
   sessionRef?: { agentId: string; sessionId: string | null }
+  /** 图片附件（v0.1.102 一期）：meta 随消息全链流动（transcript/run/事件）——本体已先经
+   *  v1.attachments.upload 落盘（内容寻址），此处零字节搬运 */
+  attachments?: AttachmentMeta[]
 }
 
 export interface SendA2aInput {
@@ -91,19 +97,38 @@ export class A2aService {
   /** 用户 → agent（默认路由后的定向投递；user lane，永不抢他人也不被抢） */
   async sendUserMessage(input: SendUserMessageInput): Promise<MessageAcceptance> {
     const { bus, transcript, ledger, schedulerOf, nextMessageId, now } = this.#deps
-    const digest = digestOf({ to: input.toAgentId, text: input.text })
+    const attachments = input.attachments !== undefined && input.attachments.length > 0 ? input.attachments : undefined
+    const digest = digestOf({ to: input.toAgentId, text: input.text, att: attachments?.map((a) => a.id) ?? [] })
     const begin = await ledger.begin(`user:${input.nonce}`, digest)
     if (!begin.first) {
       const stored = begin.entry.outcome as MessageAcceptance | undefined
       return stored ? { ...stored, first: false } : { messageId: '', runId: null, first: false }
     }
     const messageId = nextMessageId()
-    await transcript.append(input.toAgentId, 'user', { messageId, text: input.text, at: now(), ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}) })
-    bus.emit('v1.message.user', { messageId, toAgentId: input.toAgentId, text: input.text, ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}) })
+    await transcript.append(input.toAgentId, 'user', {
+      messageId,
+      text: input.text,
+      at: now(),
+      ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}),
+      // 附件 meta 随记录落盘（v0.1.102）：本体不进 transcript（append-only 只存事实引用）
+      ...(attachments !== undefined ? { attachments } : {}),
+    })
+    bus.emit('v1.message.user', {
+      messageId,
+      toAgentId: input.toAgentId,
+      text: input.text,
+      ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}),
+      ...(attachments !== undefined ? { attachments } : {}),
+    })
     const ticket: RunTicket = schedulerOf(input.toAgentId).enqueue({
       lane: 'user',
       kind: 'chat',
-      payload: { messageId, text: input.text, ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}) } satisfies UserChatRunPayload,
+      payload: {
+        messageId,
+        text: input.text,
+        ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}),
+        ...(attachments !== undefined ? { attachments } : {}),
+      } satisfies UserChatRunPayload,
       summary: summarizeRun(input.text),
     })
     const acceptance: MessageAcceptance = { messageId, runId: ticket.runId, first: true }

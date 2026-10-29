@@ -2809,3 +2809,65 @@ test('运行时状态分层与启动引导（v0.1.89）：mock-runtime 全生命
     await rm(userData, { recursive: true, force: true }).catch(() => {})
   }
 })
+
+test('图片附件（v0.1.102 一期）：视觉模型 → 选择上传 → 待发条缩略图 → 全链发送 → mock 断言 image_url data URI 在场', async () => {
+  const mock = await startMockOpenAi([
+    { match: (l) => l.role === 'user' && l.content.includes('看看这张'), text: '看到了：图片已收到' },
+  ])
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-att-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 配 provider + 模型，并给模型开「视觉」（附件门控与 image part 注入都依赖 supportsImages）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('button', { name: '＋ 添加供应商' }).click()
+    await page.locator('#pfName').fill('E2E mock')
+    await page.locator('#pfUrl').fill(`http://127.0.0.1:${mock.port}/v1`)
+    await page.getByRole('button', { name: '＋ 添加模型' }).click()
+    await page.locator('#pfModel').fill('mock-model')
+    await page.locator('#pfModel').press('Enter')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    // 详情页 → 编辑进表单 → 模型行「视觉」chip 点亮（chip-click 在编辑表单；详情页是静态徽标）
+    await page.locator('.llm-nav-item', { hasText: 'E2E mock' }).click()
+    await page.getByRole('button', { name: '编辑', exact: true }).click()
+    const visionChip = page.locator('.llm-model-row[data-form-model="mock-model"] .chip-click', { hasText: '视觉' })
+    await visionChip.click()
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+
+    // 控制台：隐藏 file input 上传（1×1 PNG）；+ 菜单入口同源（此处直 setInputFiles 走同链路）
+    await page.getByRole('button', { name: '控制台', exact: true }).click()
+    const PNG_1X1 = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64',
+    )
+    await page.setInputFiles('input[type="file"]', { name: 'red-dot.png', mimeType: 'image/png', buffer: PNG_1X1 })
+    const chip = page.locator('.att-chip')
+    await expect(chip).toBeVisible({ timeout: 15_000 })
+    await expect(chip.locator('img.att-thumb')).toHaveAttribute('src', /^data:image\/png;base64,/, { timeout: 10_000 })
+
+    // 发送 → mock 收到 ContentPart 数组（text + image_url data URI）——全链实证
+    const input = page.locator('.composer-box input:not([type="file"])')
+    await input.fill('看看这张')
+    await input.press('Enter')
+    await expect(page.locator('.m-text', { hasText: '看到了：图片已收到' })).toBeVisible({ timeout: 20_000 })
+    const withImage = mock.requests.find((r) =>
+      Array.isArray((r.messages as Array<{ content?: unknown }>)[r.messages.length - 1]?.content) &&
+      JSON.stringify(r.messages).includes('image_url'),
+    )
+    expect(withImage).toBeDefined()
+    expect(JSON.stringify(withImage!.messages)).toContain('data:image/png;base64,')
+    // 气泡缩略图行在场（store 预取 → attUris 同步）
+    await expect(page.locator('.m.user .m-atts img.m-att')).toBeVisible({ timeout: 10_000 })
+  } finally {
+    await app.close()
+    await mock.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})

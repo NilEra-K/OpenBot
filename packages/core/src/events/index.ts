@@ -57,11 +57,28 @@ export interface LifecycleIdlePayload {
   agentId: string
 }
 
+/** 附件元数据（2026-10-30 v0.1.102 图片一期）：transcript 只存 meta（append-only 铁律不破），
+ *  本体落 userData/attachments/<sha256>.<ext>（内容寻址——同图重传天然去重）；
+ *  渲染层经 v1.attachments.read 取 dataURI 呈现缩略图 */
+export interface AttachmentMeta {
+  /** 内容 sha256（去重键 + 文件名前缀） */
+  id: string
+  /** 原文件名（展示用） */
+  name: string
+  /** image/*（一期只收图片——文件类语义待二期裁定） */
+  mime: string
+  size: number
+  /** 宿主侧绝对路径（读取面恒经 v1.attachments.read 校验——渲染层不直读盘） */
+  path: string
+}
+
 /** 用户消息入站（默认路由或显式 @） */
 export interface MessageUserPayload {
   messageId: string
   toAgentId: string
   text: string
+  /** 图片附件（v0.1.102）：随消息同链路（transcript/run/事件全链 additive） */
+  attachments?: AttachmentMeta[]
 }
 
 /** 「会话掌控」事件族（sessionView 元事件写入面 → renderer 呈现刷新） */

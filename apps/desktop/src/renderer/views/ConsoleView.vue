@@ -10,6 +10,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useKernelStore } from '../stores/kernel'
 import type { GroupEntry } from '../stores/kernel'
+import type { AttachmentMeta } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
 import { renderMarkdown } from '../lib/markdown'
@@ -933,6 +934,101 @@ watch(
 /** 发送（乐观更新在 store；失败态由流内重试按钮处理） */
 const sending = ref(false)
 
+// ---- 图片附件（2026-10-30 v0.1.102 一期）：粘贴 / +菜单选择 / 拖拽三入口——
+// 待发条 chip（缩略图+移除）随消息同发；视觉门控（当前会话模型无视觉 → 拦截提示，不静默降级） ----
+
+interface PendingAtt {
+  meta: AttachmentMeta
+  uri: string
+}
+const pendingAtts = ref<PendingAtt[]>([])
+const attBusy = ref(false)
+const attFileEl = ref<HTMLInputElement | null>(null)
+
+/** 模型视觉判定（发送门控）：档案 modelProvider（'供应商::模型'）→ 默认模型对
+ *  （llmStatus）→ 唯一供应商回退（首供即用场景：llmStatus 可能未刷新/未设默认）→ 视觉声明 */
+const modelSupportsImages = computed(() => {
+  const agentId = ui.activeAgentId
+  const override = agentId !== null ? kernel.roster.find((a) => a.agentId === agentId)?.modelProvider : undefined
+  let provName: string
+  let modelId: string
+  if (override !== undefined && override !== '') {
+    ;[provName, modelId] = override.includes('::') ? (override.split('::') as [string, string]) : [override, '']
+  } else {
+    provName = kernel.llmStatus?.primary ?? kernel.providers[0]?.name ?? ''
+    modelId = kernel.llmStatus?.primaryModel ?? ''
+  }
+  if (provName === '') return false
+  const prov = kernel.providers.find((p) => p.name === provName)
+  const model = modelId !== '' ? prov?.models.find((m) => m.id === modelId) : prov?.models[0]
+  return model?.supportsImages === true
+})
+
+const addImageFiles = async (files: File[] | FileList): Promise<void> => {
+  const list = [...files].filter((f) => f.type.startsWith('image/'))
+  if (list.length === 0) return
+  if (!modelSupportsImages.value) {
+    toast.push('当前模型不支持图像输入——先在设置中为模型开启「视觉」，或移除图片', 'warning')
+    return
+  }
+  attBusy.value = true
+  try {
+    for (const f of list) {
+      if (f.size > 8 * 1024 * 1024) {
+        toast.push(`「${f.name}」超过 8MB 上限`, 'danger')
+        continue
+      }
+      const dataBase64 = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader()
+        fr.onload = () => resolve(String(fr.result).split(',')[1] ?? '')
+        fr.onerror = () => reject(fr.error)
+        fr.readAsDataURL(f)
+      })
+      const meta = await kernel.uploadAttachment(f.name, f.type, dataBase64)
+      const uri = await kernel.attachmentUri(meta.id, meta.mime)
+      pendingAtts.value = [...pendingAtts.value, { meta, uri }]
+    }
+  } catch (err) {
+    toast.push(`图片上传失败：${err instanceof Error ? err.message : String(err)}`, 'danger')
+  } finally {
+    attBusy.value = false
+  }
+}
+
+const removePendingAtt = (id: string): void => {
+  pendingAtts.value = pendingAtts.value.filter((a) => a.meta.id !== id)
+}
+
+/** + 菜单「上传图片」→ 文件选择落定：读入上传 → 清空控件值（同文件可重选） */
+const onAttFileChange = (): void => {
+  const files = attFileEl.value?.files
+  if (files !== null && files !== undefined) void addImageFiles(files)
+  if (attFileEl.value !== null) attFileEl.value.value = ''
+}
+
+const onComposerPaste = (e: ClipboardEvent): void => {
+  const files = e.clipboardData?.files
+  if (files !== undefined && files.length > 0) {
+    e.preventDefault()
+    void addImageFiles(files)
+  }
+}
+
+const onComposerDrop = (e: DragEvent): void => {
+  const files = e.dataTransfer?.files
+  if (files !== undefined && files.length > 0) void addImageFiles(files)
+}
+
+/** 气泡缩略 dataURI：store 三路径（发送/事件/历史装载）预取进 attCache——此处同步到本地响应式 */
+const attUris = reactive({} as Record<string, string>)
+watch(
+  () => kernel.attCache,
+  (c) => {
+    for (const [k, v] of Object.entries(c)) if (attUris[k] === undefined) attUris[k] = v
+  },
+  { immediate: true },
+)
+
 // ---- @提及（P4 Step 4 + P5 Step 2 广播）：补全菜单 + 单提及路由 + @全员/多提及扇出 + 名册命中高亮 ----
 
 /** @全员补全 token（P5 Step 2）：保留字——全员判定优先于名册同名命中（语义明确不歧义） */
@@ -1135,7 +1231,12 @@ const mentionsAll = (text: string): boolean =>
 
 const send = async (): Promise<void> => {
   const text = ui.draft.trim()
-  if (text === '' || sending.value) return
+  const atts = pendingAtts.value.length > 0 ? pendingAtts.value.map((a) => a.meta) : undefined
+  if ((text === '' && atts === undefined) || sending.value) return
+  if (atts !== undefined && !modelSupportsImages.value) {
+    toast.push('当前模型不支持图像输入——先在设置中为模型开启「视觉」，或移除图片', 'warning')
+    return
+  }
   // 群会话（P5 Step 4）：直达群命令（内核有界轮转——supersede/上限/幂等在编排层）；
   // 群内 @提及是轮转优先信号（内核识别），不做单发路由
   if (ui.activeGroupId !== null) {
@@ -1192,7 +1293,8 @@ const send = async (): Promise<void> => {
   ui.draft = ''
   sending.value = true
   try {
-    await kernel.sendUserMessage(to, text, undefined, pendingRef.value ?? undefined)
+    await kernel.sendUserMessage(to, text !== '' ? text : '（图片）', undefined, pendingRef.value ?? undefined, atts)
+    pendingAtts.value = []
     pendingRef.value = null // 引用一次性消费（随这条消息走）
   } catch {
     // 失败已标记在消息条目上（流内显示重试）——不弹全局错误
@@ -1349,6 +1451,17 @@ const GROUP_ICON =
                       <button v-else-if="kernel.messages[unit.msgIndex]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
                     </div>
                     <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
+                    <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
+                    <div v-if="kernel.messages[unit.msgIndex]!.attachments" class="m-atts">
+                      <img
+                        v-for="att in kernel.messages[unit.msgIndex]!.attachments"
+                        :key="att.id"
+                        class="m-att"
+                        :src="attUris[att.id]"
+                        :alt="att.name"
+                        :title="att.name"
+                      />
+                    </div>
                   </div>
                 </div>
                 <div v-else class="m">
@@ -1400,6 +1513,17 @@ const GROUP_ICON =
                 </div>
                 <div v-if="kernel.messages[unit.msgIndex!]!.sessionRef" class="m-ref-chip">引用日期 {{ kernel.messages[unit.msgIndex!]!.sessionRef!.agentId }} · {{ kernel.messages[unit.msgIndex!]!.sessionRef!.sessionId ?? '初始会话' }}</div>
                 <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
+                <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
+                <div v-if="kernel.messages[unit.msgIndex!]!.attachments" class="m-atts">
+                  <img
+                    v-for="att in kernel.messages[unit.msgIndex!]!.attachments"
+                    :key="att.id"
+                    class="m-att"
+                    :src="attUris[att.id]"
+                    :alt="att.name"
+                    :title="att.name"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1584,7 +1708,17 @@ const GROUP_ICON =
             <span>将引用 <b>{{ nameOf(pendingRef.agentId) }}</b> 的会话 <b class="mono">{{ pendingRef.sessionId ?? '初始' }}</b></span>
             <button type="button" aria-label="移除引用" @click="clearPendingRef">✕</button>
           </div>
-          <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }">
+          <!-- 图片选择（v0.1.102）：+ 菜单触发；粘贴/拖拽走事件面——置 composer-box 外（既有选择器 .composer-box input 单命中不破） -->
+          <input ref="attFileEl" type="file" accept="image/*" multiple hidden @change="onAttFileChange" />
+          <div class="composer-box" :class="{ disabled: !kernel.connected || remotePeer !== null }" @dragover.prevent @drop.prevent="onComposerDrop">
+            <!-- 待发附件条（v0.1.102 图片一期）：缩略图 chip + 移除；上传中 spinner -->
+            <div v-if="pendingAtts.length > 0 || attBusy" class="att-strip">
+              <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :title="a.meta.name">
+                <img class="att-thumb" :src="a.uri" :alt="a.meta.name" />
+                <button type="button" class="att-x" aria-label="移除图片" @click="removePendingAtt(a.meta.id)">✕</button>
+              </div>
+              <span v-if="attBusy" class="att-busy">上传中…</span>
+            </div>
         <MentionMenu
           v-if="mention.open"
           :items="mention.items"
@@ -1608,6 +1742,7 @@ const GROUP_ICON =
               @input="onComposerInput"
               @blur="onComposerBlur"
               @keydown="onComposerKeydown"
+              @paste="onComposerPaste"
             />
             <!-- 工具行（2026-09-06 按 Claude/智谱图例重构）：上输入区 / 下工具行——
                  左：@提及（真实功能）+ 审批模式真值；右：主力模型真值 + 圆形上箭头发送 -->
@@ -1623,6 +1758,11 @@ const GROUP_ICON =
                     <button class="cb-menu-item" @click="insertMentionTrigger(); plusMenuOpen = false">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
                       <span class="mt"><span class="ti">使用 @ 添加上下文</span></span>
+                    </button>
+                    <!-- 上传图片（v0.1.102 一期）：选择/粘贴/拖拽三入口之一——多选；视觉门控在发送时 -->
+                    <button class="cb-menu-item" @click="attFileEl?.click(); plusMenuOpen = false">
+                      <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                      <span class="mt"><span class="ti">上传图片</span><span class="ts">随消息发给有视觉能力的模型</span></span>
                     </button>
                     <button class="cb-menu-item" @click="openQuoteFromMenu()">
                       <svg class="mi" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>

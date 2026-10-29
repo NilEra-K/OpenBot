@@ -11,9 +11,11 @@
  * - 崩溃恢复：审批账本 pending 项重发 requested 事件（UI 重新弹窗）
  */
 import { app, desktopCapturer, safeStorage, screen as electronScreen } from 'electron'
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { stat, statfs } from 'node:fs/promises'
 import { assembleKernel, chooseBackend } from '@openbot/coordinator'
 import type { AssembledKernel, ChooseResult, DiskFact } from '@openbot/coordinator'
@@ -1019,6 +1021,18 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
+    // 附件本体读取（v0.1.102 图片一期）：FsAdapter 只读 utf8——图片 base64 走 node:fs 直读；
+    // 读取面恒限 attachments 目录（渲染层传来的 path 先校验再读——不开放任意盘读）
+    loadAttachment: (meta) => {
+      const dir = `${userDataRoot}/attachments`
+      const resolved = resolve(meta.path).replaceAll('\\', '/')
+      if (!resolved.startsWith(`${dir}/`)) return Promise.resolve(null)
+      try {
+        return Promise.resolve({ base64: readFileSync(resolved).toString('base64') })
+      } catch {
+        return Promise.resolve(null)
+      }
+    },
     // 会话记录独立根（v0.1.63）：缺省 undefined = 随 dataRoot（现行为零变化）
     transcriptRoot: transcriptRootOverride,
     // 镜像路由后端（P8-3）：镜像条目 id → 后端实例的多路 facade——services/工具族零改动
@@ -1527,6 +1541,42 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // docker）——注册表只含手动条目，此命令补「用户无从得知有哪些镜像」的发现面。
     // 按需触发（设置页按钮），只报告事实不自动入库；装配期已就绪的 platform 从作用域注入
     .register('v1.images.scan', async () => ({ sources: await scanEnvImages({ run: runProcess, platform }) }))
+    // ---- 图片附件（2026-10-30 v0.1.102 一期）：上传落盘（内容寻址去重）+ 读取（dataURI 呈现）。
+    // 本体落 userData/attachments/<sha256>.<ext>——transcript 只存 meta（append-only 铁律）；
+    // 一期只收 image/*（文件类语义待二期裁定）；读取面恒限附件目录（不开放任意盘读） ----
+    .register('v1.attachments.upload', async (payload) => {
+      const { name, mime, dataBase64 } = z
+        .object({
+          name: z.string().trim().min(1).max(200),
+          mime: z.string().regex(/^image\//, '一期只收图片（image/*）'),
+          dataBase64: z.string().min(8).max(12_000_000),
+        })
+        .parse(payload)
+      const bytes = Buffer.from(dataBase64, 'base64')
+      if (bytes.length > 8 * 1024 * 1024) {
+        throw new KernelError('ATTACHMENT_TOO_LARGE', `图片超过上限 8MB（${(bytes.length / 1024 / 1024).toFixed(1)}MB）`)
+      }
+      const dir = `${userDataRoot}/attachments`
+      mkdirSync(dir, { recursive: true })
+      const id = createHash('sha256').update(bytes).digest('hex')
+      const ext = mime === 'image/png' ? 'png' : mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : 'img'
+      const path = `${dir}/${id}.${ext}`
+      if (!existsSync(path)) writeFileSync(path, bytes) // 内容寻址：同图重传零拷贝去重
+      return { id, name, mime, size: bytes.length, path }
+    }, z.object({
+      name: z.string().trim().min(1).max(200),
+      mime: z.string().regex(/^image\//),
+      dataBase64: z.string().min(8).max(12_000_000),
+    }))
+    .register('v1.attachments.read', async (payload) => {
+      const { id } = z.object({ id: z.string().regex(/^[0-9a-f]{64}$/) }).parse(payload)
+      const dir = `${userDataRoot}/attachments`
+      const hit = readdirSync(dir).find((f) => f.startsWith(id))
+      if (hit === undefined) throw new KernelError('ATTACHMENT_NOT_FOUND', `附件不存在：${id.slice(0, 12)}…`)
+      const ext = hit.split('.').pop() ?? 'img'
+      const mime = ext === 'png' ? 'image/png' : ext === 'jpg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : 'image/png'
+      return { dataBase64: readFileSync(`${dir}/${hit}`).toString('base64'), mime }
+    }, z.object({ id: z.string().regex(/^[0-9a-f]{64}$/) }))
     .register('v1.sandbox.status', async () => ({
       ...(await settings.getSandboxDataDir()) !== null ? { sandboxDataDir: await settings.getSandboxDataDir() } : {},
       preference: sandboxStatus.preference,
