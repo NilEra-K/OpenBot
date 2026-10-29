@@ -12,10 +12,22 @@
 import { useToastStore } from '../stores/toast'
 
 const toast = useToastStore()
+
+/** 离场前钉几何（v0.1.101 修复，视口参照）：离场项转 fixed——堆叠容器在失去唯一在流子项时
+ *  高度塌为 0 且自身顶部下移（bottom 锚定），absolute/offsetTop 怎么钉都跟着容器掉
+ *  （四轮实测 y 686→718 压状态栏）；fixed + 视口坐标三钉（top/right/width）彻底冻结
+ *  离场几何，只做原地淡出 */
+const onBeforeLeave = (el: Element): void => {
+  const e = el as HTMLElement
+  const r = e.getBoundingClientRect()
+  e.style.top = `${r.y}px`
+  e.style.right = `${window.innerWidth - r.right}px`
+  e.style.width = `${r.width}px`
+}
 </script>
 
 <template>
-  <TransitionGroup name="toast" tag="div" class="toast-stack" aria-live="polite">
+  <TransitionGroup name="toast" tag="div" class="toast-stack" aria-live="polite" @before-leave="onBeforeLeave">
     <button
       v-for="t in toast.items"
       :key="t.id"
@@ -156,19 +168,27 @@ const toast = useToastStore()
 }
 
 /* 出场（TransitionGroup）：离场项淡出+下滑+微缩（绝对定位不挤占余项——右缘锚定对齐
-   堆叠右缘）；余项平移让位（move）；进入态由上面的 CSS 动画承担（enter 类无需过渡） */
+   堆叠右缘）；余项平移让位（move）；进入态由上面的 CSS 动画承担（enter 类无需过渡）。
+   v0.1.101 修复两根因：①animation: none——入场动画 fill both 持续持有 opacity/transform
+   （CSS 动画优先级高于过渡），出场淡出从未生效；②宽度由 before-leave 钩子钉住
+   （absolute 后 shrink-to-fit 塌缩成方块——见 script 注释） */
 .toast-leave-active {
-  position: absolute;
-  right: 0;
-  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+  /* fixed（视口参照）+ 钩子钉 top/right/width：堆叠容器塌缩不影响离场项（absolute 时
+     连钉 top 都随容器掉——见 script 注释）；几何冻结后只做原地淡出 */
+  position: fixed;
+  animation: none;
+  /* 曲线修正（v0.1.101 三轮实测）：--ease 是前重曲线（46% 时间点淡出已完成 97%——
+     中段帧实测 opacity 0.029），读作闪没；换匀称 ease-in-out（中点≈50%）+ 260ms */
+  transition: opacity 260ms cubic-bezier(0.4, 0, 0.2, 1), transform 260ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .toast-leave-to {
+  /* 原地渐隐（v0.1.101 四轮：下滑会压向状态栏——用户裁定改渐没；轻微收缩塑「消散」感，零位移） */
   opacity: 0;
-  transform: translateY(8px) scale(0.97);
+  transform: scale(0.97);
 }
 
 .toast-move {
-  transition: transform 260ms var(--ease);
+  transition: transform 260ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 </style>
