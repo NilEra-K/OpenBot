@@ -1286,6 +1286,21 @@ watch(activeSection, (s) => {
   }
 })
 
+/** 手动重探（v0.1.97：容器与镜像头「⟳ 刷新状态」——分节进入双刷的同款逻辑提成按钮，
+ *  停留在设置页期间外部启停引擎也能立刻拿新事实；与注册表「⟳ 扫描可用镜像」同款交互语言） */
+const runtimeRefreshing = ref(false)
+const refreshRuntimeStatus = async (): Promise<void> => {
+  if (runtimeRefreshing.value) return
+  runtimeRefreshing.value = true
+  try {
+    await Promise.all([kernel.refreshSandbox(), kernel.refreshRuntimeInstallers()])
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'error')
+  } finally {
+    runtimeRefreshing.value = false
+  }
+}
+
 const doInstall = async (): Promise<void> => {
   const target = installModal.installer
   if (target === null) return
@@ -1539,12 +1554,14 @@ const wslRelevant = computed(
 
       </div>
       <div v-show="activeSection === 'runtime'" class="settings-section">
-      <!-- 容器与镜像（v0.1.53 语义）：Agent 经镜像条目选载体（屏幕一等公民）；默认沙箱卡退役 -->
+      <!-- 容器与镜像（v0.1.53 语义）：Agent 经镜像条目选载体（屏幕一等公民）；默认沙箱卡退役。
+           「⟳ 刷新状态」（v0.1.97）：手动重探矩阵+探测卡——停在页面也能拿外部启停后的新事实 -->
       <div class="set-sec-row">
         <div class="set-sec">容器与镜像</div>
         <HelpTip
           text="各执行载体的可用性与能力一览（探测事实驱动）。Agent 通过绑定镜像条目选择载体（向导/ctx 均可）——容器条目按声明的运行时（Docker/Podman）自持路由；装配期底座不可用时降级模拟保启动并在此告警。"
         />
+        <button class="btn btn-secondary btn-sm" style="margin-left: auto" data-role="runtime-refresh" :disabled="runtimeRefreshing" @click="refreshRuntimeStatus">{{ runtimeRefreshing ? '刷新中…' : '⟳ 刷新状态' }}</button>
       </div>
       <template v-if="kernel.sandbox">
         <!-- 装配降级如实告警（v0.1.51 防线的呈现面——默认沙箱卡退役后独立保留） -->

@@ -2728,6 +2728,12 @@ test('运行时状态分层与启动引导（v0.1.89）：mock-runtime 全生命
     await expect(row.locator('.ri-note')).toHaveCount(0)
     await expect(row.locator('.appearance-desc')).toHaveCount(0)
 
+    // 手动重探（v0.1.97）：头部「⟳ 刷新状态」在场且可点回——busy 态收敛后按钮复可用
+    const refreshBtn = page.locator('[data-role="runtime-refresh"]')
+    await expect(refreshBtn).toBeVisible()
+    await refreshBtn.click()
+    await expect(refreshBtn).toBeEnabled({ timeout: 15_000 })
+
     // —— 取消链先行（2026-10-27 重排：mock 未装——取消不落台账，行回一键安装；
     //    确认弹窗断言（提权告知/ⓘ 收纳/位置输入）原样保留）——
     await row.getByRole('button', { name: '一键安装' }).click()
