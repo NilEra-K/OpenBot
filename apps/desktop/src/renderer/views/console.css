@@ -132,8 +132,17 @@
   flex: 1;
   overflow-y: auto;
   /* 左 padding 38px：为左侧映射条（基准 16px + 波浪伸展峰值 ~35px）让位——永不遮挡 avatar
-     （2026-09-06 用户反馈：stream-rail 不能挡到 avatar） */
-  padding: 18px 18px 26px 38px;
+     （2026-09-06 用户反馈：stream-rail 不能挡到 avatar）；右 38px（v0.1.108 对齐修正：
+     与 composer 右 padding 同值——旧 18px 致消息流右缘比输入框宽 20px，实测实锤） */
+  padding: 18px 38px 26px 38px;
+  /* 滚动条隐藏（v0.1.109 二改）：自定义细滚动条 10px 在内容溢出时占位——stream-inner 右缘
+     被挤进 10px（放大后不对齐的根因，实测 dr=-10）。IM 形态零滚动条：滚轮 + jump-btn
+     （回到底部）承担导航（att-strip 同先例）——滚动条零占位、对齐恒成立 */
+  scrollbar-width: none;
+}
+
+.stream::-webkit-scrollbar {
+  display: none;
 }
 
 /* 空态垂直居中（2026-10-15 用户需求）：流区无内容时 .stream 加 stream-empty（ConsoleView 条件类）
