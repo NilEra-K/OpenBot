@@ -1063,6 +1063,17 @@ const attScrollStop = (): void => {
     if (remain > 0 && remain <= SNAP) el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
   }
 }
+/** 滚轮横滚（v0.1.108 用户需求）：悬停附件条时纵向滚轮增量转横向滚动（触控板 deltaX 原生已通）。
+ *  preventDefault 阻断页面纵向滚动（滚轮悬停在条上时整页不该动）；deltaY×1.2 步进手感 */
+const onAttWheel = (e: WheelEvent): void => {
+  const el = attScrollEl.value
+  if (el === null) return
+  const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY * 1.2
+  if (delta === 0) return
+  e.preventDefault()
+  el.scrollLeft += delta
+}
+
 const onAttArrowDown = (dir: 1 | -1): void => {
   attScrollStop()
   const el = attScrollEl.value
@@ -1784,7 +1795,7 @@ const GROUP_ICON =
               <button v-if="attCanLeft" type="button" class="att-arrow is-left" aria-label="向左滚动附件" @pointerdown.prevent="onAttArrowDown(-1)" @pointerup="attScrollStop" @pointerleave="attScrollStop" @pointercancel="attScrollStop">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
               </button>
-              <div ref="attScrollEl" class="att-scroll" @scroll="updateAttScrollState">
+              <div ref="attScrollEl" class="att-scroll" @scroll="updateAttScrollState" @wheel="onAttWheel">
                 <div v-for="a in pendingAtts" :key="a.meta.id" class="att-chip" :class="{ 'is-file': a.uri === '' }" :title="`${a.meta.name} · ${fmtSize(a.meta.size)}`">
                   <img v-if="a.uri !== ''" class="att-thumb" :src="a.uri" :alt="a.meta.name" title="点击预览" @click="attPreview = { uri: a.uri, name: a.meta.name }" />
                   <template v-else>
