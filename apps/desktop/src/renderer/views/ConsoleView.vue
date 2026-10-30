@@ -1052,6 +1052,16 @@ const attScrollStop = (): void => {
     clearInterval(attScrollTimer)
     attScrollTimer = null
   }
+  // 边缘吸附（v0.1.107 四改）：箭头在 ≤8px 就隐身，用户见隐即松手会停在 0–8px 带——
+  // 留白比初始态大（用户报障）。松手时若在端点吸附带内（≤16px）平滑贴齐精确端点
+  const el = attScrollEl.value
+  if (el === null) return
+  const SNAP = 16
+  if (el.scrollLeft > 0 && el.scrollLeft <= SNAP) el.scrollTo({ left: 0, behavior: 'smooth' })
+  else {
+    const remain = el.scrollWidth - (el.scrollLeft + el.clientWidth)
+    if (remain > 0 && remain <= SNAP) el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
+  }
 }
 const onAttArrowDown = (dir: 1 | -1): void => {
   attScrollStop()
@@ -1771,7 +1781,7 @@ const GROUP_ICON =
             <!-- 待发附件条（v0.1.102 图片一期）：缩略图 chip + 移除；上传中 spinner -->
             <div v-if="pendingAtts.length > 0 || attBusy" class="att-strip">
               <!-- 左箭头（八轮：仅当已离开首端——中间态/末态在场） -->
-              <button v-if="attCanLeft" type="button" class="att-arrow" aria-label="向左滚动附件" @pointerdown.prevent="onAttArrowDown(-1)" @pointerup="attScrollStop" @pointerleave="attScrollStop" @pointercancel="attScrollStop">
+              <button v-if="attCanLeft" type="button" class="att-arrow is-left" aria-label="向左滚动附件" @pointerdown.prevent="onAttArrowDown(-1)" @pointerup="attScrollStop" @pointerleave="attScrollStop" @pointercancel="attScrollStop">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
               </button>
               <div ref="attScrollEl" class="att-scroll" @scroll="updateAttScrollState">
@@ -1786,7 +1796,7 @@ const GROUP_ICON =
                 <span v-if="attBusy" class="att-busy">上传中…</span>
               </div>
               <!-- 右箭头（八轮：仅当右侧还有未滚入内容——首态/中间态在场） -->
-              <button v-if="attCanRight" type="button" class="att-arrow" aria-label="向右滚动附件" @pointerdown.prevent="onAttArrowDown(1)" @pointerup="attScrollStop" @pointerleave="attScrollStop" @pointercancel="attScrollStop">
+              <button v-if="attCanRight" type="button" class="att-arrow is-right" aria-label="向右滚动附件" @pointerdown.prevent="onAttArrowDown(1)" @pointerup="attScrollStop" @pointerleave="attScrollStop" @pointercancel="attScrollStop">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
               </button>
             </div>

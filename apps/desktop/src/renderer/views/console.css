@@ -1245,10 +1245,14 @@
 /* ---- 图片附件（2026-10-30 v0.1.102 一期）：composer 待发条 + 气泡缩略图行 ---- */
 /* 附件条（v0.1.105 七轮：外层行 = 滚动区 + 独立计数泡——泡不覆盖任何附件（六轮 sticky 叠压被否） */
 .att-strip {
+  position: relative; /* 箭头浮层锚（v0.1.107 二改：绝对定位浮于内容——增删不挤压滚动区） */
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px 0;
+  /* 水平 0（v0.1.107 定稿）：composer-box 已有 14px——chip 与输入文字同线；
+     底距走 margin 不走 padding（v0.1.107 四改：条内容盒归 44px——箭头 top:50% 精确居中 chip 中线，
+     原 6px padding 使 60% 定到 30px 偏心 8px） */
+  padding: 0;
+  margin-bottom: 6px;
 }
 
 .att-scroll {
@@ -1266,21 +1270,41 @@
   display: none;
 }
 
-/* 滚动箭头（八轮：方位感知——首端只 ›、中间 ‹›、末态只 ‹；独立占位不覆盖附件） */
+/* 滚动箭头（v0.1.107 二改：浮层——绝对定位于条缘之上，显隐零布局位移（八轮 flex 占位挤压被否）。
+   实底+投影保证浮在任何附件上可读；首/末端只现一枚，中间 ‹› */
 .att-arrow {
-  flex: none;
+  position: absolute;
+  top: 50%; /* 四改：条高=chip 44px（底距已让位 margin）——精确居中 chip 中线 */
+  transform: translateY(-50%);
+  z-index: 5;
   width: 22px;
   height: 22px;
   padding: 0;
   border: 1px solid var(--line-strong);
   border-radius: 50%;
-  background: var(--bg3);
+  background: var(--bg2);
   color: var(--ink2);
   display: grid;
   place-items: center;
   cursor: pointer;
   user-select: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
   transition: color 120ms var(--ease), border-color 120ms var(--ease);
+  animation: att-arrow-in 140ms var(--ease);
+}
+
+.att-arrow.is-left {
+  left: 16px;
+}
+
+.att-arrow.is-right {
+  right: 16px;
+}
+
+@keyframes att-arrow-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .att-arrow:hover {
@@ -1291,6 +1315,7 @@
 /* chip（v0.1.104 四轮：无边框常态 + 圆形×悬停浮现 + 文件横排卡——参照图定稿） */
 .att-chip {
   position: relative;
+  flex: none; /* v0.1.107 五改：flex 子项默认收缩——多附件时 44px 方块被挤扁/文件卡挤成胶囊（用户报障）；不收缩，超出走横向滚动 */
   width: 44px;
   height: 44px;
   border-radius: 8px;
@@ -1313,7 +1338,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 26px 0 6px;
+  padding: 0 8px 0 6px; /* × 浮右上角（v0.1.107）——右内边距不再为其预留 */
   background: var(--bg3);
   border-radius: 9px;
 }
@@ -1359,16 +1384,7 @@
   transform: scale(1);
 }
 
-.att-chip.is-file .att-x {
-  top: 50%;
-  right: 5px;
-  transform: translateY(-50%) scale(0.8);
-}
-
-.att-chip.is-file:hover .att-x {
-  opacity: 1; /* 显式（五轮：与图片 chip 同款悬停语义——不可见即不占注意力） */
-  transform: translateY(-50%) scale(1);
-}
+/* 文件卡 × 同浮右上角（v0.1.107 用户裁定）——撤垂直居中定位覆盖，落基类角标位（-5,-5 圆形悬停浮现） */
 
 .att-x:hover {
   background: rgba(0, 0, 0, 0.92);
