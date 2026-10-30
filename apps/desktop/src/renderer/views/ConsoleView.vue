@@ -977,6 +977,27 @@ const fmtSize = (n: number): string => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).
 /** 图片预览（v0.1.104 用户需求：气泡/待发条图片点击放大）——遮罩点击即关 */
 const attPreview = ref<{ uri: string; name: string } | null>(null)
 
+/** 气泡附件收纳（v0.1.110 用户裁定）：行内最多 2 个 + 「+N 个」泡（点开全览模态）——
+ *  附件再多也不撑高消息卡；48px 统一方块不拉高（图片 object-fit cover 裁切预览、点击看原图） */
+const BUBBLE_ATT_MAX = 2
+const visibleAttsOf = (msgIndex: number): AttachmentMeta[] => {
+  const atts = kernel.messages[msgIndex]?.attachments
+  return atts === undefined ? [] : atts.slice(0, BUBBLE_ATT_MAX)
+}
+const hiddenAttCount = (msgIndex: number): number => {
+  const atts = kernel.messages[msgIndex]?.attachments
+  return atts === undefined ? 0 : Math.max(0, atts.length - BUBBLE_ATT_MAX)
+}
+/** 附件全览模态（v0.1.110）：+N 泡点开——消息全部附件一屏（图可预览/文件名+大小） */
+const attListFor = ref<number | null>(null)
+const attListAtts = computed(() => (attListFor.value !== null ? (kernel.messages[attListFor.value]?.attachments ?? []) : []))
+
+/** 复制消息文本（v0.1.110 操作排）：markdown 源文（m-text 是渲染后 HTML——复制原文才是可用文本） */
+const copyMessageText = async (text: string): Promise<void> => {
+  await navigator.clipboard.writeText(text).catch(() => {})
+  toast.push('已复制消息文本', 'success')
+}
+
 const addFiles = async (files: File[] | FileList): Promise<void> => {
   const list = [...files]
   if (list.length === 0) return
@@ -1536,14 +1557,15 @@ const GROUP_ICON =
                       <span v-if="kernel.messages[unit.msgIndex]!.pending" class="m-state">发送中…</span>
                       <button v-else-if="kernel.messages[unit.msgIndex]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
                     </div>
-                    <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
-                    <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
+                    <!-- 附件行（v0.1.110 同步：meta 下、气泡上 + 收纳 + 48px） -->
                     <div v-if="kernel.messages[unit.msgIndex]!.attachments" class="m-atts">
-                      <template v-for="att in kernel.messages[unit.msgIndex]!.attachments" :key="att.id">
-                        <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id], name: att.name })" />
-                        <span v-else class="m-att-file mono" :title="att.name"><span class="m-att-badge"><FileBadge :name="att.name" /></span>{{ att.name }} · {{ fmtSize(att.size) }}</span>
+                      <template v-for="att in visibleAttsOf(unit.msgIndex!)" :key="att.id">
+                        <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id]!, name: att.name })" />
+                        <span v-else class="m-att-file mono" :title="att.name"><span class="m-att-badge"><FileBadge :name="att.name" /></span>{{ att.name }}</span>
                       </template>
+                      <button v-if="hiddenAttCount(unit.msgIndex!) > 0" type="button" class="m-att-more" @click="attListFor = unit.msgIndex!">+{{ hiddenAttCount(unit.msgIndex!) }} 个</button>
                     </div>
+                    <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
                   </div>
                 </div>
                 <div v-else class="m">
@@ -1581,26 +1603,28 @@ const GROUP_ICON =
             <!-- user 消息（右对齐气泡；「会话掌控」hover 编辑 + 引用胶囊） -->
             <div v-else-if="unit.kind === 'msg-user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
               <div class="m-body">
+                <!-- meta 纯净化（v0.1.110 用户裁定）：只留署名+时间——操作钮全部下移气泡下 -->
                 <div class="m-meta">
                   <span class="m-name">你</span>
                   <span class="m-time">{{ fmtTime(unit.at) }}</span>
                   <span v-if="kernel.messages[unit.msgIndex!]!.pending" class="m-state">发送中…</span>
                   <button v-else-if="kernel.messages[unit.msgIndex!]!.failed" class="m-retry" @click="retry(unit.msgIndex!)">发送失败 · 重试</button>
-                  <button
-                    v-if="!kernel.messages[unit.msgIndex!]!.pending && !kernel.messages[unit.msgIndex!]!.failed"
-                    class="m-act"
-                    title="编辑这条消息"
-                    @click="openEdit(kernel.messages[unit.msgIndex!]!)"
-                  >编辑</button>
                 </div>
                 <div v-if="kernel.messages[unit.msgIndex!]!.sessionRef" class="m-ref-chip">引用日期 {{ kernel.messages[unit.msgIndex!]!.sessionRef!.agentId }} · {{ kernel.messages[unit.msgIndex!]!.sessionRef!.sessionId ?? '初始会话' }}</div>
-                <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
-                <!-- 图片附件缩略图行（v0.1.102）：dataURI 由 store 预取同步（attUris） -->
+                <!-- 附件行上移（v0.1.110 用户裁定）：meta 下、气泡上；缩略统一 48px 方块（不再拉高）；
+                     溢出收纳：最多 2 个 + 「+N 个」泡 → 点开附件全览模态 -->
                 <div v-if="kernel.messages[unit.msgIndex!]!.attachments" class="m-atts">
-                  <template v-for="att in kernel.messages[unit.msgIndex!]!.attachments" :key="att.id">
-                    <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id], name: att.name })" />
-                    <span v-else class="m-att-file mono" :title="att.name"><span class="m-att-badge"><FileBadge :name="att.name" /></span>{{ att.name }} · {{ fmtSize(att.size) }}</span>
+                  <template v-for="att in visibleAttsOf(unit.msgIndex!)" :key="att.id">
+                    <img v-if="att.mime.startsWith('image/')" class="m-att" :src="attUris[att.id]" :alt="att.name" :title="att.name" @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id]!, name: att.name })" />
+                    <span v-else class="m-att-file mono" :title="att.name"><span class="m-att-badge"><FileBadge :name="att.name" /></span>{{ att.name }}</span>
                   </template>
+                  <button v-if="hiddenAttCount(unit.msgIndex!) > 0" type="button" class="m-att-more" @click="attListFor = unit.msgIndex!">+{{ hiddenAttCount(unit.msgIndex!) }} 个</button>
+                </div>
+                <div class="m-text" v-html="mentionify(kernel.messages[unit.msgIndex!]!.text, mentionNames)"></div>
+                <!-- 操作排（v0.1.110 用户裁定）：编辑/复制移到气泡下——行内轻钮 -->
+                <div v-if="!kernel.messages[unit.msgIndex!]!.pending && !kernel.messages[unit.msgIndex!]!.failed" class="m-acts">
+                  <button type="button" class="m-act" @click="openEdit(kernel.messages[unit.msgIndex!]!)">编辑</button>
+                  <button type="button" class="m-act" @click="copyMessageText(kernel.messages[unit.msgIndex!]!.text)">复制</button>
                 </div>
               </div>
             </div>
@@ -1954,6 +1978,29 @@ const GROUP_ICON =
     <div v-if="attPreview" class="att-view" role="dialog" aria-label="图片预览" @mousedown="attPreview = null">
       <img :src="attPreview.uri" :alt="attPreview.name" @mousedown.stop />
       <span class="att-view-name">{{ attPreview.name }}</span>
+    </div>
+
+    <!-- 附件全览模态（v0.1.110）：气泡 +N 泡点开——该消息全部附件一屏（图可点预览；Esc/外点关） -->
+    <div v-if="attListFor !== null" class="att-list-scrim" role="presentation" @mousedown.self="attListFor = null">
+      <div class="att-list-modal" role="dialog" aria-label="附件全览" @keydown.escape="attListFor = null">
+        <div class="am-head"><span class="am-title">附件（{{ attListAtts.length }} 个）</span></div>
+        <div class="att-list-body">
+          <div v-for="att in attListAtts" :key="att.id" class="att-list-row">
+            <span class="att-list-badge"><FileBadge :name="att.name" /></span>
+            <img
+              v-if="att.mime.startsWith('image/')"
+              class="att-list-thumb"
+              :src="attUris[att.id]"
+              :alt="att.name"
+              title="点击预览"
+              @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id]!, name: att.name })"
+            />
+            <span class="att-list-name mono">{{ att.name }}</span>
+            <span class="att-list-size">{{ fmtSize(att.size) }}</span>
+          </div>
+        </div>
+        <div class="am-actions"><button type="button" class="btn btn-ghost" @click="attListFor = null">关闭</button></div>
+      </div>
     </div>
   </section>
 </template>
