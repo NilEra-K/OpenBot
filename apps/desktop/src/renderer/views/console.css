@@ -1279,6 +1279,7 @@
   display: grid;
   place-items: center;
   cursor: pointer;
+  user-select: none;
   transition: color 120ms var(--ease), border-color 120ms var(--ease);
 }
 

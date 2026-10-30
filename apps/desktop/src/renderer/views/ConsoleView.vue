@@ -917,6 +917,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', closeMenus)
   consoleEl.value?.removeEventListener('transitionend', onCtxGridEnd)
   ctxAnimReset()
+  attScrollStop() // 按住连滚定时器不留孤儿
 })
 
 // 会话历史懒加载：切换会话或连接就绪时拉一次 transcript（内核重启后的持久真相；已覆盖时幂等跳过）。
@@ -1042,11 +1043,24 @@ const updateAttScrollState = (): void => {
 }
 watch(pendingAtts, () => void nextTick(() => updateAttScrollState()), { deep: true })
 
-/** 箭头点击 → 按滚动区宽度的 80% 平滑步进（scroll 事件回调自动更新箭头态） */
-const scrollAttStripBy = (dir: 1 | -1): void => {
+/** 箭头按住连滚（v0.1.105 八轮二改：按下持续移动、松开即停——步进/单次大跳被作者否）。
+ *  16ms 帧步 9px ≈ 560px/s 匀速；scrollLeft 赋值天然触发 scroll 事件 → 箭头态实时跟随；
+ *  松开三路兜底（钮上 pointerup/leave/cancel + 窗口级 pointerup——按住移出钮也不失控） */
+let attScrollTimer: ReturnType<typeof setInterval> | null = null
+const attScrollStop = (): void => {
+  if (attScrollTimer !== null) {
+    clearInterval(attScrollTimer)
+    attScrollTimer = null
+  }
+}
+const onAttArrowDown = (dir: 1 | -1): void => {
+  attScrollStop()
   const el = attScrollEl.value
   if (el === null) return
-  el.scrollBy({ left: dir * Math.max(160, el.clientWidth * 0.8), behavior: 'smooth' })
+  attScrollTimer = setInterval(() => {
+    el.scrollLeft += dir * 9
+  }, 16)
+  window.addEventListener('pointerup', attScrollStop, { once: true })
 }
 
 /** + 菜单「上传图片」→ 文件选择落定：读入上传 → 清空控件值（同文件可重选） */
@@ -1757,7 +1771,7 @@ const GROUP_ICON =
             <!-- 待发附件条（v0.1.102 图片一期）：缩略图 chip + 移除；上传中 spinner -->
             <div v-if="pendingAtts.length > 0 || attBusy" class="att-strip">
               <!-- 左箭头（八轮：仅当已离开首端——中间态/末态在场） -->
-              <button v-if="attCanLeft" type="button" class="att-arrow" aria-label="向左滚动附件" @click="scrollAttStripBy(-1)">
+              <button v-if="attCanLeft" type="button" class="att-arrow" aria-label="向左滚动附件" @pointerdown.prevent="onAttArrowDown(-1)" @pointerup="attScrollStop" @pointerleave="attScrollStop" @pointercancel="attScrollStop">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
               </button>
               <div ref="attScrollEl" class="att-scroll" @scroll="updateAttScrollState">
@@ -1772,7 +1786,7 @@ const GROUP_ICON =
                 <span v-if="attBusy" class="att-busy">上传中…</span>
               </div>
               <!-- 右箭头（八轮：仅当右侧还有未滚入内容——首态/中间态在场） -->
-              <button v-if="attCanRight" type="button" class="att-arrow" aria-label="向右滚动附件" @click="scrollAttStripBy(1)">
+              <button v-if="attCanRight" type="button" class="att-arrow" aria-label="向右滚动附件" @pointerdown.prevent="onAttArrowDown(1)" @pointerup="attScrollStop" @pointerleave="attScrollStop" @pointercancel="attScrollStop">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
               </button>
             </div>
