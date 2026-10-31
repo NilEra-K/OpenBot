@@ -363,6 +363,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
   const runner = new TurnRunner({
     bus,
     transcript,
+    // 时钟（v0.1.113 顺序修复）：与 transcript envelope at 同源——thinking startedAt 量纲一致
+    now,
     llmOf: (agentId) => llms.get(agentId) ?? new MockChatProvider({ steps: [] }),
     // 视觉能力（P8-4 后 UI 优化）：截图回喂分流——provider.capabilities.supportsImages 决定
     // 图像 part 或文本降级（未声明按有视觉处理——向后兼容）

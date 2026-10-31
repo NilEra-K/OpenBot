@@ -428,50 +428,76 @@
   max-height: 300px;
 }
 
-/* ---- 思考块（agent 聚合单元内；live 展开 / 完成后收起可点开） ---- */
+/* ---- 思考块（B 版 v0.1.113 四轮裁定：无框行式思考条）----
+   live = 盲文转帧（JS 驱动，ConsoleView BRAILLE_FRAMES）；完成 = 满点 ⠿ 静止
+   ——同一个符号家族的两种生命状态（原边框卡 + 「思考」灰标被用户裁定难看） */
 .think {
   margin: 4px 0 8px;
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--line-strong);
-  border-radius: 8px;
   color: var(--ink2);
   font-size: 11.5px;
   line-height: 1.6;
   animation: fade-in-up 180ms var(--ease);
 }
 
-.think.is-live {
-  border-left-color: rgba(var(--accent-rgb), 0.55);
-}
-
 .think-head {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  padding: 5px 9px;
+  width: auto;
+  max-width: 100%;
+  padding: 3px 8px;
+  margin-left: -8px;
   border: none;
+  border-radius: 6px;
   background: none;
   font: inherit;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background-color 120ms var(--ease);
+}
+
+.think-head:hover {
+  background: var(--bg2);
+}
+
+/* 图标位：盲文家族（mono 定宽）——进行中轻呼吸 */
+.think-spin {
+  flex: none;
+  width: 1.1em;
+  text-align: center;
+  color: var(--ink2);
+}
+
+.think.is-live .think-spin {
+  animation: think-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes think-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .think-tag {
   flex: none;
-  font-size: 11px;
-  color: var(--ink3);
-  letter-spacing: 0.04em;
-}
-
-.think.is-live .think-tag {
-  /* 2026-09-06 用户裁定：思考标签中性化 */
+  font-size: 11.5px;
   color: var(--ink2);
 }
 
+/* 时长徽记（mono 时间戳气质）——历史回放块无 durationMs 不渲染 */
+.think-dur {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink3);
+}
+
 .think-sum {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   color: var(--ink3);
   font-size: 11px;
@@ -492,8 +518,11 @@
   transform: rotate(180deg);
 }
 
+/* 展开正文（B 版）：纯缩进挂于头部之下（无线无框——用户裁定去引用线）；
+   限高滚动沿用（长思考不撑爆会话） */
 .think-body-wrap {
-  padding: 0 9px 6px;
+  margin: 5px 0 0 18px;
+  padding: 0 0 6px;
   max-height: 200px;
   overflow-y: auto;
 }

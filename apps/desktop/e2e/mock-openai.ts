@@ -155,6 +155,13 @@ function respondSse(res: import('node:http').ServerResponse, step: ScriptStep, s
     res.write(`data: ${JSON.stringify(obj)}\n\n`)
   }
   sse({ id: `mock-${seq}`, choices: [{ index: 0, delta: { role: 'assistant' } }] })
+  // 思考增量先于工具/正文（真实语序：先推理再行动——v0.1.113 起 toolCalls 步骤也带 reasoning，
+  // 供「思考先于工具」回放顺序断言；此前 toolCalls 分支静默丢弃 reasoning）
+  if (step.reasoning !== undefined) {
+    for (let i = 0; i < step.reasoning.length; i += 4) {
+      sse({ choices: [{ index: 0, delta: { reasoning_content: step.reasoning.slice(i, i + 4) } }] })
+    }
+  }
   if (step.toolCalls?.length) {
     // arguments 分两块：覆盖客户端的增量拼装路径
     for (const call of step.toolCalls) {
@@ -177,11 +184,6 @@ function respondSse(res: import('node:http').ServerResponse, step: ScriptStep, s
       })
     }
   } else {
-    if (step.reasoning !== undefined) {
-      for (let i = 0; i < step.reasoning.length; i += 4) {
-        sse({ choices: [{ index: 0, delta: { reasoning_content: step.reasoning.slice(i, i + 4) } }] })
-      }
-    }
     if (step.text !== undefined) {
       for (let i = 0; i < step.text.length; i += 3) {
         sse({ choices: [{ index: 0, delta: { content: step.text.slice(i, i + 3) } }] })

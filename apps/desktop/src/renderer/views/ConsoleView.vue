@@ -14,6 +14,7 @@ import type { AttachmentMeta } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
 import { failureText } from '../lib/llm-failure'
+import { isPreviewDup } from '../lib/preview-dup'
 import { renderMarkdown } from '../lib/markdown'
 import { mentionify } from '../lib/mention'
 import RosterPanel from '../components/RosterPanel.vue'
@@ -282,6 +283,7 @@ interface RawRow {
 const streamUnits = computed<StreamUnit[]>(() => {
   const active = ui.activeAgentId
   const raw: RawRow[] = []
+  let liveBodySeen = false // 正文实况单元是否在场（空 pending 的 typing 抑制——v0.1.113 双 m-text 报障）
   kernel.messages.forEach((m, i) => {
     // 群维度消息（group-*）只归群视图（groupUnits 按 groupId 过滤）——私聊流零群痕迹：
     // 此前 group-agent 落 from===active 分支被当 relay 行渲染（群里说的话漏进 1:1 会话，
@@ -318,12 +320,19 @@ const streamUnits = computed<StreamUnit[]>(() => {
       raw.push({ key: `t-${block.key}`, at: block.at, kind: 'think', block })
       continue
     }
-    // 正文预览幂等让位（v0.1.43）：同 agent 已有文本与预览全文一致的终答 → 不渲染（内容判据
-    // 精确且时序无关；中间轮正文不等任何消息文本 → 保留为过程事实）
-    if (kernel.messages.some((m) => m.kind === 'agent' && m.from === active && m.text === block.stdout)) continue
+    // 正文预览幂等让位（v0.1.43）：同 agent 已有文本与预览一致的终答 → 不渲染（内容判据
+    // 时序无关；中间轮正文不等任何消息文本 → 保留为过程事实）。
+    // v0.1.113 放宽为双向前缀（trim 边界）：WS 流断线丢 chunk 时预览是终答的前缀（用户报障
+    // 「一段输出被切割成两段」——精确全等判据下前缀不让位，双气泡并存）；重连重放超集同理。
+    // 中间轮文本不是终答前缀（独立叙述）→ 不受影响，仍按设计保留
+    if (kernel.messages.some((m) => m.kind === 'agent' && m.from === active && isPreviewDup(m.text, block.stdout))) continue
     raw.push({ key: `p-${block.key}`, at: block.at, kind: 'live-msg', block })
   }
-  raw.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key))
+  // 排序：at 主键；同刻平局按领域事实定序（v0.1.113 顺序修复）——思考恒先于工具
+  // （同轮推理→调用的因果序；E2E mock 瞬时轮 startedAt 与 exec 事件同毫秒，key 字典序
+  // 会把 t- 排到 e- 后致倒序）。其余回落 key 稳定序。
+  const partOrder = (r: RawRow): number => (r.kind === 'think' ? 0 : r.kind === 'exec' ? 1 : 2)
+  raw.sort((a, b) => a.at - b.at || partOrder(a) - partOrder(b) || a.key.localeCompare(b.key))
 
   const units: StreamUnit[] = []
   let pendingParts: UnitPart[] = []
@@ -339,15 +348,15 @@ const streamUnits = computed<StreamUnit[]>(() => {
     } else if (row.kind === 'think') {
       pendingParts.push({ kind: 'think', block: row.block! })
     } else if (row.kind === 'live-msg') {
-      // 正文 live 预览：独立单元以 agent 气泡形态呈现（store 在真消息到达时去重让位——
-      // 无终答的 run（预算/失败/中止）它就是本轮正文的最后事实，保留）
-      if (pendingParts.length > 0) {
-        units.push({ key: `f-${row.key}`, at: partAt(pendingParts.at(-1)!), kind: 'agent', parts: pendingParts })
-        pendingParts = []
-      }
+      // 正文 live 预览：独立单元以 agent 气泡形态流式呈现。v0.1.113 收编改版：不再 flush
+      // 过程块（多轮工具场景每轮拆一个「署名+思考」空气泡——用户报障拆散观感）；终答行
+      // 到达时统一收编移除（见 msg-agent 分支）；无终答的 run（预算/失败/中止）保留为最后事实
       units.push({ key: row.key, at: row.at, kind: 'live-msg', block: row.block!, parts: [] })
+      liveBodySeen = true // 正文实况在场：空 pending 的 typing 让位（双 m-text 报障修复保持）
     } else if (row.kind === 'msg-agent') {
-      // agent 消息：吸收前置块——聚合单元
+      // agent 终答：收编本轮全部正文实况（多轮中间叙述/断线前缀预览——过程由思考卡承载，
+      // 一次回复一个气泡；v0.1.43 起原为内容判据逐块让位，中间轮残留+flush 拆散是双气泡根因）
+      for (let k = units.length - 1; k >= 0; k--) if (units[k].kind === 'live-msg') units.splice(k, 1)
       units.push({ key: row.key, at: row.at, kind: 'agent', msgIndex: row.msgIndex, parts: pendingParts })
       pendingParts = []
     } else if (row.kind === 'msg-user') {
@@ -374,7 +383,9 @@ const streamUnits = computed<StreamUnit[]>(() => {
       kind: agentBusy.value ? 'pending' : 'ended',
       parts: pendingParts,
     })
-  } else if (agentBusy.value) {
+  } else if (agentBusy.value && !liveBodySeen) {
+    // 无过程块且忙 → 三点占位；正文实况已在流（live-msg 单元在场）时不占——
+    // 否则 typing 与流式正文双 m-text 并存（v0.1.113 用户报障「同时显示两个 m-text」）
     units.push({ key: 'pending', at: Date.now(), kind: 'pending', parts: [] })
   }
   return units
@@ -668,6 +679,32 @@ const thinkSummary = (block: LiveStreamBlock): string => {
     .replace(/^#+\s*/, '')
     .trim()
   return plain.length > 60 ? `${plain.slice(0, 60)}…` : plain
+}
+
+/* ---- 思考头 B 版（v0.1.113 用户四轮裁定）：盲文同族图标位 + 时长 + 进行中实时摘要 ---- */
+
+/** 盲文转帧（进行中思考块图标位）：JS 驱动（Chromium 不支持 keyframes content）；
+ *  完成后停在满点 ⠿——同一个符号的两种生命状态（转动=在想，停满=想完），无跨族跳跃 */
+const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
+const brailleFrame = ref(0)
+let brailleTimer: number | undefined
+onMounted(() => {
+  brailleTimer = window.setInterval(() => {
+    brailleFrame.value = (brailleFrame.value + 1) % BRAILLE_FRAMES.length
+  }, 90)
+})
+onBeforeUnmount(() => {
+  if (brailleTimer !== undefined) window.clearInterval(brailleTimer)
+})
+
+/** 思考时长（头部「· 12s」）：<10s 一位小数、否则取整秒；历史回放块无 durationMs 不显示（诚实降级） */
+const fmtThinkDur = (ms: number): string => (ms < 10_000 ? (ms / 1000).toFixed(1) : `${Math.round(ms / 1000)}`) + 's'
+
+/** 进行中实时摘要：首行净文本截 24 字（完成态走 thinkSummary 60 字逻辑） */
+const liveThinkSum = (block: LiveStreamBlock): string => {
+  const firstLine = block.stdout.split('\n')[0] ?? ''
+  const plain = firstLine.replaceAll('**', '').replaceAll('`', '').trim()
+  return plain === '' ? '' : `${plain.slice(0, 24)}…`
 }
 
 /** 流滚动到底（会话切换/历史加载——双 rAF 保险：等图片/流卡撑高 DOM 后再定一次，否则
@@ -1689,21 +1726,18 @@ const GROUP_ICON =
                   <!-- 已终结的无终答块组（run aborted/failed）：终态事实行，不再冒充进行中 -->
                   <span v-else-if="unit.kind === 'ended' && endedOutcomeLabel" class="m-state">{{ endedOutcomeLabel }}</span>
                   <span v-else-if="unit.msgIndex !== undefined" class="m-time">{{ fmtTime(unit.at) }}</span>
-                  <button
-                    v-if="unit.msgIndex !== undefined && kernel.messages[unit.msgIndex]!.kind === 'agent' && unit.kind !== 'pending'"
-                    class="m-act"
-                    :title="kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复进上下文' : '移出上下文（保留记录）'"
-                    @click="toggleTombstone(kernel.messages[unit.msgIndex!]!)"
-                  >{{ kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复' : '移出' }}</button>
                 </div>
 
                 <!-- 单元内按时间序交错：思考块与 task 卡不分层（think→task→think→…如实还原轮次） -->
                 <template v-for="part in unit.parts" :key="part.kind === 'think' ? part.block.key : kernel.execs[part.index]!.key">
-                  <!-- 思考块：live 展开实时增量，完成后收起（摘要 + 展开箭头） -->
+                  <!-- 思考块（B 版：live 盲文转帧/完成满点静止 + 已思考·Ns + 摘要；点击头展开） -->
                   <div v-if="part.kind === 'think'" class="think" :class="{ 'is-live': part.block.state === 'live' }">
                     <button class="think-head" type="button" @click="toggleThink(part.block.key)">
-                      <span class="think-tag">{{ part.block.state === 'live' ? '思考中' : '思考' }}</span>
+                      <span class="think-spin mono" aria-hidden="true">{{ part.block.state === 'live' ? BRAILLE_FRAMES[brailleFrame] : '⠿' }}</span>
+                      <span class="think-tag">{{ part.block.state === 'live' ? '思考中' : '已思考' }}</span>
+                      <span v-if="part.block.state !== 'live' && part.block.durationMs !== undefined" class="think-dur mono">· {{ fmtThinkDur(part.block.durationMs) }}</span>
                       <span v-if="part.block.state !== 'live'" class="think-sum mono">{{ thinkSummary(part.block) }}</span>
+                      <span v-else-if="liveThinkSum(part.block) !== ''" class="think-sum mono">{{ liveThinkSum(part.block) }}</span>
                       <span class="think-chev" :class="{ open: isThinkOpen(part.block) }" aria-hidden="true">
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"></path></svg>
                       </span>
@@ -1739,6 +1773,16 @@ const GROUP_ICON =
                 <div v-if="unit.msgIndex !== undefined && kernel.messages[unit.msgIndex]!.tombstoned" class="m-tomb-note">已移出上下文（记录保留，后续对话不再携带）</div>
                 <div v-else-if="unit.kind === 'pending' && unit.parts.length === 0" class="m-text typing" aria-label="正在生成回复">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                </div>
+                <!-- 操作排（v0.1.110 user 气泡同款语汇，agent 侧对齐）：复制 + 移出/恢复——meta 纯净化后归位气泡下 -->
+                <div v-if="unit.msgIndex !== undefined && kernel.messages[unit.msgIndex]!.kind === 'agent' && unit.kind !== 'pending'" class="m-acts">
+                  <button type="button" class="m-act" @click="copyMessageText(kernel.messages[unit.msgIndex!]!.text)">复制</button>
+                  <button
+                    type="button"
+                    class="m-act"
+                    :title="kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复进上下文' : '移出上下文（保留记录）'"
+                    @click="toggleTombstone(kernel.messages[unit.msgIndex!]!)"
+                  >{{ kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复' : '移出' }}</button>
                 </div>
               </div>
             </div>

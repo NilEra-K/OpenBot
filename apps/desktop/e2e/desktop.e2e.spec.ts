@@ -92,10 +92,12 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
       match: (l) => l.role === 'user' && !l.content.startsWith('[A2A'),
       toolCalls: [{ id: 'c1', name: 'send_message', args: { toAgentId: 'worker1', text: '列出 /work 目录' } }],
     },
-    // 2. worker1 收 A2A（content 前缀 [A2A ]）→ Box 内 exec
+    // 2. worker1 收 A2A（content 前缀 [A2A ]）→ Box 内 exec（v0.1.113 加 reasoning：
+    // 工具前思考——重启回放「思考先于工具」顺序断言的场景前提，startedAt/tiebreak 回归）
     {
       match: (l) => l.role === 'user' && l.content.startsWith('[A2A'),
       toolCalls: [{ id: 'c2', name: 'exec', args: { command: ['ls', '/work'] } }],
+      reasoning: '先看看目录里有什么',
     },
     // 3. worker1 收 exec 结果 → 文本完成（reasoning 供思考卡断言——v0.1.48 thinking 存真思考）
     { match: (_l, t) => t === 'exec', text: '目录是空的', reasoning: '执行结果回来了，目录是空的。' },
@@ -180,6 +182,10 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     // —— 对话流聚合（P3 调整）：worker1 会话——思考块在流内（llm 增量全部轮次留痕），
     // task 卡内嵌输出区（$ 命令行 + mock 输出一体），ctx 右栏纯化为一块显示器 ——
     await expect(page.locator('.think', { hasText: '执行结果回来了' }).first()).toBeVisible({ timeout: 15_000 }) // v0.1.48：思考卡显示真思考（reasoning；.first 容双块镜像）
+    // v0.1.113 思考头 B 版：完成态 = 满点 ⠿ + 「已思考」+ mono 时长（live→end 回写 durationMs）
+    await expect(page.locator('.think .think-spin', { hasText: '⠿' }).first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.think .think-tag', { hasText: '已思考' }).first()).toBeVisible()
+    await expect(page.locator('.think .think-dur').first()).toBeVisible()
     await expect(page.locator('.task .bt-line', { hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.task .bt-line', { hasText: 'mock: ls /work' })).toBeVisible()
     const screen = page.locator('.ctx-screen')
@@ -237,6 +243,15 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
       await expect(page2.locator('.think', { hasText: '目录是空的' })).toBeVisible({ timeout: 15_000 })
       await expect(page2.locator('.task .bt-line', { hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
       await expect(page2.locator('.task .bt-line', { hasText: 'mock: ls /work' })).toBeVisible()
+      // v0.1.113 顺序修复：重启回放中思考先于同轮工具（thinking 落盘在轮末 at 失真——startedAt 还原真实序）。
+      // mock round1 带 reasoning（工具前思考）——首条思考应先于首个 task 卡；round2 思考（'目录是空的'前的推理）本就在工具后
+      const thinkY = (await page2.locator('.think').first().boundingBox())?.y ?? -1
+      const taskY = (await page2.locator('.task').first().boundingBox())?.y ?? -1
+      expect(thinkY, '回放顺序：思考应在工具之前').toBeGreaterThan(-1)
+      expect(taskY, '回放顺序：工具应在思考之后').toBeGreaterThan(thinkY)
+      // v0.1.113 agent 气泡对齐：meta 纯净化（无操作钮）+ 气泡下 m-acts 操作排（复制/移出）
+      await expect(page2.locator('.m-meta .m-act')).toHaveCount(0)
+      await expect(page2.locator('.m .m-acts .m-act', { hasText: '复制' }).first()).toBeVisible()
       // ctx 屏幕同步恢复（伪流块走同一渲染路径——任意时刻接管不受重启影响）
       const screen2 = page2.locator('.ctx-screen')
       await expect(screen2.filter({ hasText: '$ ls /work' })).toBeVisible()

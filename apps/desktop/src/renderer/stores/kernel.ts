@@ -358,6 +358,9 @@ export interface LiveStreamBlock {
   stderr: string
   state: 'live' | 'end' | 'abort'
   abortReason?: string
+  /** 思考块时长（v0.1.113 思考头改版）：live→end 转换时算得（now - at）；
+   *  历史回放块无此值（起点未存）——头部不显时长（诚实降级） */
+  durationMs?: number
   at: number
 }
 
@@ -1120,7 +1123,7 @@ export const useKernelStore = defineStore('kernel', {
             stdout: p['text'],
             stderr: '',
             state: 'end',
-            at: record.at,
+            at: typeof p['startedAt'] === 'number' ? p['startedAt'] : record.at, // v0.1.113 顺序修复：优先轮开始时刻（落盘 at 在轮末，晚于轮内 exec——回放会把思考挤到工具后）
           })
           continue
         }
@@ -1637,6 +1640,8 @@ export const useKernelStore = defineStore('kernel', {
       )
       for (const block of live) {
         block.state = reason === undefined ? 'end' : 'abort'
+        // 思考块时长回写（v0.1.113 思考头「已思考 · Ns」）——此刻即结束时刻
+        if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
         if (reason !== undefined) block.abortReason = reason
       }
     },

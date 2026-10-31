@@ -119,6 +119,9 @@ export interface TurnRunnerDeps {
    * llm 轮次 open/chunk/end（onText 增量）；exec 流由工具层（BoxToolDeps.onStream）同型上报。
    */
   onStream?: (event: RunStreamEvent) => void
+  /** 时钟（v0.1.113 顺序修复）：thinking 记录 startedAt 须与 transcript envelope at 同源
+   *  （装配注入 assemble 的统一 now；测试 mock 时钟注入——真实 Date.now 与 mock at 量纲错位会乱序）。缺省 Date.now */
+  now?: () => number
   /**
    * 每 agent 的视觉能力（P8-4 后 UI 优化，可选注入）：截图回喂分流——有视觉喂 image part，
    * 无视觉降级为文本说明（部分端点对 image part 会 400）。缺席 = 视为有视觉（向后兼容）。
@@ -374,6 +377,9 @@ export class TurnRunner {
       }
       // llm 流：open（轮次序号）→ onText/onThinking 双通道增量 chunk → end/abort（聚合终态在返回值）
       chatRound += 1
+      const roundStartedAt = this.#deps.now?.() ?? Date.now() // 轮开始时刻（v0.1.113 顺序修复）：thinking 记录落盘在轮末，
+      // 其 envelope at 失真（晚于轮内 exec）——重启回放排序会把思考挤到工具后；startedAt 供投影还原真实序。
+      // 须用与 transcript 同源时钟（deps.now——装配统一注入；真实 Date.now 会与 mock 测试时钟量纲错位）
       emit({ type: 'open', stream: 'llm', meta: { round: chatRound } })
       let response: Awaited<ReturnType<ChatProvider['chat']>>
       let thinkingText = '' // 本轮思考聚合（v0.1.48：真思考持久化——落 transcript thinking 记录）
@@ -404,6 +410,7 @@ export class TurnRunner {
       await this.#deps.transcript.append(sessionKey, 'thinking', {
         runId: run.runId,
         round: chatRound,
+        startedAt: roundStartedAt,
         text: truncateForTranscript(thinkingText, MAX_THINKING_CHARS),
         final: response.toolCalls.length === 0,
       })

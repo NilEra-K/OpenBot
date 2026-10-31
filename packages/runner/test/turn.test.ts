@@ -120,6 +120,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
   const runner = new TurnRunner({
     bus,
     transcript,
+    now: () => t, // 与 harness transcript 同源 mock 时钟（v0.1.113 startedAt 量纲一致）
     llmOf: (agentId) => {
       const p = llms.get(agentId)
       if (!p) throw new KernelError('LLM_FAILED', `agent 无模型：${agentId}`)
