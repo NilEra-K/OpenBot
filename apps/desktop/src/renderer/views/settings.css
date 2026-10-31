@@ -668,6 +668,38 @@
   font-size: 11.5px;
   color: var(--accent);
   margin: 0;
+  /* 恒高（v0.1.111 报障修复）：骨架/文案同容器切换，行高占住——模态 center 布局不随预览态跳 */
+  min-height: 19px;
+}
+
+/* 预览骨架条（加载 shimmer）：两段宽模拟「下次触发：… · 随后 …」文案节奏。
+ * 配方（v0.1.111 用户报障"效果不明显"修复）：底 bg3 与卡片底拉开、高光峰值 ink3
+ * （中性灰无彩——灰度系纪律），dark 下 34→116 差 82 / light 下 232→140 差 92，
+ * 亮带占 30% 扫过更锐利；原 bg2→bg3 配差仅 8/13 灰阶肉眼无感 */
+.cron-skel {
+  display: inline-block;
+  width: 132px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--bg3) 35%, var(--ink3) 50%, var(--bg3) 65%);
+  background-size: 200% 100%;
+  animation: cron-shimmer 0.9s linear infinite;
+  vertical-align: middle;
+}
+
+.cron-skel.skel-b {
+  width: 168px;
+  margin-right: 0;
+}
+
+@keyframes cron-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
 }
 
 .cron-presets {
@@ -763,15 +795,12 @@
   color: var(--ink3);
 }
 
-.cron-num {
-  width: 64px;
-  flex: none;
-}
+/* 数字步进器（v0.1.111 撤原生 spinner）：cron-num 输入改用 NumStepper 连体三段
+   [−] input [＋]——样式与定宽（94px）在组件 scoped 内；.cron-num 类保留在内部
+   input 上仅供 E2E fill 选择器，不再承担样式职责 */
 
-.cron-time {
-  width: 104px;
-  flex: none;
-}
+/* 时间选择器（v0.1.111 撤原生 time picker 弹层）：cron-time 输入改用 TimePicker
+   （输入框 + 双列滚轮弹层）——样式在组件 scoped 内，此规则退役 */
 
 .cron-custom {
   flex: 1;

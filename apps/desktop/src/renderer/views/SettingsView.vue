@@ -12,6 +12,8 @@ import jsQR from 'jsqr'
 import { useKernelStore } from '../stores/kernel'
 import type { ProviderView, SandboxPref } from '../stores/kernel'
 import HelpTip from '../components/HelpTip.vue'
+import NumStepper from '../components/NumStepper.vue'
+import TimePicker from '../components/TimePicker.vue'
 import { cronOfForm, formOfCron, DEFAULT_CRON_FORM, CRON_PRESETS } from '../lib/cron-form'
 import type { CronFormState, CronFreq } from '../lib/cron-form'
 import { useUiStore } from '../stores/ui'
@@ -29,6 +31,9 @@ const editingAutomation = ref<string | null>(null)
 const automationSaving = ref(false)
 const automationError = ref<string | null>(null)
 const cronPreview = ref<{ readable: string; upcomingAt: number[] } | null>(null)
+/* 预览加载态（v0.1.111 报障修复）：值变更期间骨架 shimmer 占行——容器恒高，
+ * 模态 place-items:center 布局不再因预览行消失/出现而整体跳动（原 null 置空 = 抽搐根因） */
+const cronPreviewLoading = ref(false)
 const aForm = reactive({ name: '', cron: '', agentId: '', prompt: '', enabled: true })
 
 // 触发时间表单生成器（2026-10-28 v0.1.96 用户报障「cron 对用户太困难」）：表单态单向生成
@@ -117,6 +122,7 @@ const openAutomation = (row: { id: string; name: string; cron: string; agentId: 
   automationModal.value = true
   automationError.value = null
   cronPreview.value = null
+  cronPreviewLoading.value = false
   editingAutomation.value = row?.id ?? null
   if (row !== null) {
     Object.assign(aForm, { name: row.name, cron: row.cron, agentId: row.agentId, prompt: row.prompt, enabled: row.enabled })
@@ -127,16 +133,30 @@ const openAutomation = (row: { id: string; name: string; cron: string; agentId: 
   }
 }
 
-/** cron 即时预览（防抖 400ms——解析在内核 v1.automations.preview；含随后 3 次时刻） */
+/** cron 即时预览（防抖 400ms——解析在内核 v1.automations.preview；含随后 3 次时刻）。
+ *  变更即刻入 loading（骨架占行保高度），落定回填后退场；失败兜底出骨架防永闪 */
 let cronPreviewTimer: ReturnType<typeof setTimeout> | null = null
 watch(
   () => aForm.cron,
   (cron) => {
-    cronPreview.value = null
     if (cronPreviewTimer !== null) clearTimeout(cronPreviewTimer)
-    if (cron.trim() === '') return
+    if (cron.trim() === '') {
+      cronPreview.value = null
+      cronPreviewLoading.value = false
+      return
+    }
+    cronPreviewLoading.value = true
     cronPreviewTimer = setTimeout(() => {
-      void kernel.previewCron(cron.trim()).then((r) => (cronPreview.value = { readable: r.readable, upcomingAt: r.upcomingAt }))
+      void kernel
+        .previewCron(cron.trim())
+        .then((r) => {
+          cronPreview.value = { readable: r.readable, upcomingAt: r.upcomingAt }
+          cronPreviewLoading.value = false
+        })
+        .catch(() => {
+          cronPreview.value = null
+          cronPreviewLoading.value = false
+        })
     }, 400)
   },
 )
@@ -2355,18 +2375,18 @@ const wslRelevant = computed(
               <div ref="cronFieldsEl" class="cron-fields">
                 <div v-if="cronForm.freq === 'minutes'" class="cron-field">
                   <span class="cron-field-label">间隔</span>
-                  <input v-model.number="cronForm.every" type="number" min="1" max="59" class="field-input cron-num" aria-label="间隔分钟数" />
+                  <NumStepper v-model="cronForm.every" :min="1" :max="59" aria-label="间隔分钟数" />
                   <span class="cron-note">分钟</span>
                 </div>
                 <template v-else-if="cronForm.freq === 'hours'">
                   <div class="cron-field">
                     <span class="cron-field-label">间隔</span>
-                    <input v-model.number="cronForm.every" type="number" min="1" max="23" class="field-input cron-num" aria-label="间隔小时数" />
+                    <NumStepper v-model="cronForm.every" :min="1" :max="23" aria-label="间隔小时数" />
                     <span class="cron-note">小时</span>
                   </div>
                   <div class="cron-field">
                     <span class="cron-field-label">分钟位</span>
-                    <input v-model.number="cronForm.hourMinute" type="number" min="0" max="59" class="field-input cron-num" aria-label="每小时的第几分" />
+                    <NumStepper v-model="cronForm.hourMinute" :min="0" :max="59" aria-label="每小时的第几分" />
                     <span class="cron-note">分（每小时第几分触发）</span>
                   </div>
                 </template>
@@ -2387,18 +2407,18 @@ const wslRelevant = computed(
                   </div>
                   <div class="cron-field">
                     <span class="cron-field-label">时间</span>
-                    <input v-model="dailyTime" type="time" class="field-input cron-time" aria-label="时间" />
+                    <TimePicker v-model="dailyTime" />
                   </div>
                 </template>
                 <template v-else-if="cronForm.freq === 'monthly'">
                   <div class="cron-field">
                     <span class="cron-field-label">几号</span>
-                    <input v-model.number="cronForm.dayOfMonth" type="number" min="1" max="31" class="field-input cron-num" aria-label="几号" />
+                    <NumStepper v-model="cronForm.dayOfMonth" :min="1" :max="31" aria-label="几号" />
                     <span class="cron-note">号（月无此日则该月跳过）</span>
                   </div>
                   <div class="cron-field">
                     <span class="cron-field-label">时间</span>
-                    <input v-model="dailyTime" type="time" class="field-input cron-time" aria-label="时间" />
+                    <TimePicker v-model="dailyTime" />
                   </div>
                 </template>
                 <div v-else-if="cronForm.freq === 'custom'" class="cron-field">
@@ -2407,12 +2427,15 @@ const wslRelevant = computed(
                 </div>
                 <div v-else class="cron-field">
                   <span class="cron-field-label">时间</span>
-                  <input v-model="dailyTime" type="time" class="field-input cron-time" aria-label="时间" />
+                  <TimePicker v-model="dailyTime" />
                 </div>
               </div>
               <p v-if="cronForm.freq !== 'custom'" class="cron-gen mono">表达式：{{ aForm.cron }}</p>
             </div>
-            <p v-if="cronPreview !== null" class="cron-preview mono">下次触发：{{ cronPreview.readable }}<template v-if="cronPreview.upcomingAt.length > 0"> · 随后 {{ cronPreview.upcomingAt.map(fmtNext).join(' / ') }}</template></p>
+            <p v-if="aForm.cron.trim() !== ''" class="cron-preview mono">
+              <template v-if="cronPreviewLoading"><i class="cron-skel"></i><i class="cron-skel skel-b"></i></template>
+              <template v-else-if="cronPreview !== null">下次触发：{{ cronPreview.readable }}<template v-if="cronPreview.upcomingAt.length > 0"> · 随后 {{ cronPreview.upcomingAt.map(fmtNext).join(' / ') }}</template></template>
+            </p>
             <label class="relay-field">
               <span class="field-label">目标 Agent</span>
               <select v-model="aForm.agentId" class="field-input">
