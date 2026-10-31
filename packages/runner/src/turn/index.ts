@@ -30,8 +30,13 @@ export const DEFAULT_MAX_TOOL_ROUNDS = 8
 
 /** session 内组装窗口上限（「会话掌控」裁定 D）：最近 N 条领域消息——会话再长不无限累积 */
 const SESSION_WINDOW_MESSAGES = 50
-/** 文本附件注入上限（v0.1.102 二期）：≤200KB 全文、超出截断加注记（token 纪律） */
+/** 文本附件逐文件上限（v0.1.102 二期）：已并入总预算制（v0.1.111 二改——1M 档单文件可全量）；
+ *  常量保留供预算缺省时的参考档位文档（128k 档总量 180k < 单文件 200k，实际不再触达） */
 const TEXT_ATTACHMENT_MAX_CHARS = 200_000
+/** 附件总预算缺省（v0.1.111）：128k 档 ≈ 128×1000 token × 2 字符/token × 70% 余量 */
+export const ATTACHMENT_BUDGET_128K = 180_000
+/** 1M 档预算（模型勾选「1M」后）：≈ 1.4M 字符 */
+export const ATTACHMENT_BUDGET_1M = 1_400_000
 
 /** 引用会话注入预算（字符）：尾部优先 + 总量提示（记忆注入同哲学） */
 const SESSION_REF_CHAR_BUDGET = 4000
@@ -47,6 +52,12 @@ export interface TurnRunnerDeps {
   nextMessageId: () => string
   systemPrompt?: string | ((agentId: string) => string)
   maxToolRounds?: number
+  /**
+   * 附件注入预算（v0.1.111 上下文档位）：模型声明 1M 档 → ~1.4M 字符；缺省 128k 档 → ~180k 字符
+   *  （窗口k × 1000 token × 2 字符/token × 70% 余量留给历史/系统/作答）。缺省函数 = 128k 档。
+   *  背景：v0.1.103 逐文件 200k 无总量——4 个大文件 ≈ 64 万字符打爆 128k 档端点（用户 400 报障实测）
+   */
+  attachmentBudgetOf?: (agentId: string) => number
   /**
    * 附件本体读取（v0.1.102 图片一期，装配注入——FsAdapter 只读 utf8 故走专用 dep）：
    * 用户消息图片附件 → ContentPart image（base64）；文本类附件附带 utf8 文本（二期——
@@ -233,6 +244,8 @@ export class TurnRunner {
     const attachments = payload.attachments
     if (attachments === undefined || attachments.length === 0) return payload.text
     const vision = this.#deps.supportsImagesOf?.(agentId) ?? true
+    // 总预算（v0.1.111）：模型窗口档位决定——超预算的文本附件降级存档注记（图片不计预算，走 part）
+    let budget = this.#deps.attachmentBudgetOf?.(agentId) ?? ATTACHMENT_BUDGET_128K
     const parts: ContentPart[] = [{ type: 'text', text: payload.text !== '' ? payload.text : '（附件）' }]
     for (const att of attachments) {
       const loaded = (await this.#deps.loadAttachment?.({ path: att.path, mime: att.mime })) ?? null
@@ -245,19 +258,27 @@ export class TurnRunner {
         else parts.push({ type: 'text', text: `（图片附件 ${att.name}——当前模型无视觉能力，图像内容不可读）` })
         continue
       }
-      if (loaded.text !== undefined) {
+      if (loaded.text !== undefined && budget > 0) {
+        // 逐文件上限=当前预算余量（v0.1.111 二改：1M 档单文件可全量——固定 200k 封顶会架空
+        // 1M 档；总量预算本身已防单文件霸占——超了后续附件自动降级存档注记）
+        const room = budget
         const full = loaded.text
-        if (full.length <= TEXT_ATTACHMENT_MAX_CHARS) {
+        if (full.length <= room) {
+          budget -= full.length
           parts.push({ type: 'text', text: `--- 附件 ${att.name} ---\n${full}` })
         } else {
+          budget = 0
           parts.push({
             type: 'text',
-            text: `--- 附件 ${att.name}（超出 ${TEXT_ATTACHMENT_MAX_CHARS} 字符，已截断，原文 ${(att.size / 1024).toFixed(1)}KB）---\n${full.slice(0, TEXT_ATTACHMENT_MAX_CHARS)}\n--- 截断于此 ---`,
+            text: `--- 附件 ${att.name}（超注入预算，已截断 ${room} 字符，原文 ${(att.size / 1024).toFixed(1)}KB——完整文件已存档可分段读取）---\n${full.slice(0, room)}\n--- 截断于此 ---`,
           })
         }
         continue
       }
-      parts.push({ type: 'text', text: `（附件 ${att.name}，${(att.size / 1024).toFixed(1)}KB，已存档：${att.path}——可用工具读取）` })
+      parts.push({
+        type: 'text',
+        text: `（附件 ${att.name}，${(att.size / 1024).toFixed(1)}KB，已存档：${att.path}${loaded.text !== undefined ? '——超注入预算未注入内容' : ''}，可用工具读取）`,
+      })
     }
     return parts
   }

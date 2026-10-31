@@ -13,7 +13,7 @@ import type { ChatProvider } from '@openbot/llm'
 import { BoxRegistry, BoxesErrorCodes, MockBoxBackend, X11ScreenControl } from '@openbot/boxes'
 import type { BoxBackend, ScreenControl } from '@openbot/boxes'
 import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
-import { AutoApprovalGate, computerTools, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner } from '@openbot/runner'
+import { AutoApprovalGate, computerTools, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner, ATTACHMENT_BUDGET_1M, ATTACHMENT_BUDGET_128K } from '@openbot/runner'
 import type { GuiTakeoverLock, RunStreamEvent } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
@@ -367,6 +367,9 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     // 视觉能力（P8-4 后 UI 优化）：截图回喂分流——provider.capabilities.supportsImages 决定
     // 图像 part 或文本降级（未声明按有视觉处理——向后兼容）
     supportsImagesOf: (agentId) => llms.get(agentId)?.capabilities?.supportsImages === true,
+    // 附件注入预算随模型窗口档位（v0.1.111 1M 勾选）：声明 1M → 1.4M 字符；缺省 128k 档
+    attachmentBudgetOf: (agentId) =>
+      llms.get(agentId)?.capabilities?.context1M === true ? ATTACHMENT_BUDGET_1M : ATTACHMENT_BUDGET_128K,
     // 附件本体读取（v0.1.102）：desktop 注入的文件系统通道原样透传（缺席=文本降级）
     ...(options.loadAttachment !== undefined ? { loadAttachment: options.loadAttachment } : {}),
     tools,

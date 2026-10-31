@@ -221,6 +221,8 @@ export interface ProviderModelView {
   id: string
   /** 视觉（图像输入）声明——模型级（0.1.28 截图回喂格式语义随模型走） */
   supportsImages?: boolean
+  /** 1M 上下文档位（v0.1.111 附件注入预算）：勾选=1M 档；缺省 128k 档 */
+  context1M?: boolean
 }
 
 /** provider 展示形状（v1.settings.list 返回；协议保证无 key 材料） */

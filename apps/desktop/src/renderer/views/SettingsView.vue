@@ -674,7 +674,7 @@ const openEdit = (p: ProviderView): void => {
     apiKey: '', // 留空 = 保留原密文（服务端约定）
     proxyUrl: p.proxyUrl ?? '',
     protocol: p.protocol ?? 'openai-compat',
-    models: p.models.map((m) => ({ id: m.id, supportsImages: m.supportsImages === true })),
+    models: p.models.map((m) => ({ id: m.id, supportsImages: m.supportsImages === true, context1M: m.context1M === true })),
   })
   formError.value = null
   modelTestResults.value = {}
@@ -688,12 +688,13 @@ const closeForm = (): void => {
 }
 
 // ---- 模型弹窗（添加/编辑模型行——图例交互）：模型 ID + 视觉声明，Enter/保存双确认 ----
-const modelModal = reactive<{ open: boolean; editingId: string | null; provider: string | null; id: string; supportsImages: boolean }>({
+const modelModal = reactive<{ open: boolean; editingId: string | null; provider: string | null; id: string; supportsImages: boolean; context1M: boolean }>({
   open: false,
   editingId: null,
   provider: null,
   id: '',
   supportsImages: false,
+  context1M: false,
 })
 const modelModalValid = computed(() => {
   const id = modelModal.id.trim()
@@ -707,25 +708,26 @@ const openModelModal = (editingId: string | null, provider: string | null): void
   if (provider !== null) {
     const m = kernel.providers.find((p) => p.name === provider)?.models.find((x) => x.id === editingId)
     if (m === undefined) return
-    Object.assign(modelModal, { open: true, editingId, provider, id: m.id, supportsImages: m.supportsImages === true })
+    Object.assign(modelModal, { open: true, editingId, provider, id: m.id, supportsImages: m.supportsImages === true, context1M: m.context1M === true })
   } else if (editingId !== null) {
     const m = form.models.find((x) => x.id === editingId)
     if (m === undefined) return
-    Object.assign(modelModal, { open: true, editingId, provider: null, id: m.id, supportsImages: m.supportsImages })
+    Object.assign(modelModal, { open: true, editingId, provider: null, id: m.id, supportsImages: m.supportsImages, context1M: m.context1M === true })
   } else {
-    Object.assign(modelModal, { open: true, editingId: null, provider: null, id: '', supportsImages: false })
+    Object.assign(modelModal, { open: true, editingId: null, provider: null, id: '', supportsImages: false, context1M: false })
   }
 }
 const confirmModelModal = (): void => {
   const id = modelModal.id.trim()
   if (id === '' || !modelModalValid.value) return
   const supportsImages = modelModal.supportsImages
+  const context1M = modelModal.context1M
   if (modelModal.provider !== null) {
     // 已存档供应商：改模型 = 档案全量重写（key 省略保留）
     const profile = kernel.providers.find((p) => p.name === modelModal.provider)
     if (profile === undefined) return
-    const models = profile.models.map((m) => (m.id === modelModal.editingId ? { id, supportsImages } : { id: m.id, supportsImages: m.supportsImages === true }))
-    if (modelModal.editingId === null && !models.some((m) => m.id === id)) models.push({ id, supportsImages })
+    const models = profile.models.map((m) => (m.id === modelModal.editingId ? { id, supportsImages, context1M } : { id: m.id, supportsImages: m.supportsImages === true, context1M: m.context1M === true }))
+    if (modelModal.editingId === null && !models.some((m) => m.id === id)) models.push({ id, supportsImages, context1M })
     void kernel.upsertProvider({ name: profile.name, baseUrl: profile.baseUrl, models, protocol: profile.protocol }).then(() => {
       toast.push(`模型已保存：${profile.name} · ${id}`, 'success')
     }).catch((err: unknown) => {
@@ -733,9 +735,9 @@ const confirmModelModal = (): void => {
     })
   } else if (modelModal.editingId !== null) {
     const idx = form.models.findIndex((m) => m.id === modelModal.editingId)
-    if (idx !== -1) form.models.splice(idx, 1, { id, supportsImages })
+    if (idx !== -1) form.models.splice(idx, 1, { id, supportsImages, context1M })
   } else {
-    form.models.push({ id, supportsImages })
+    form.models.push({ id, supportsImages, context1M })
   }
   modelModal.open = false
 }
@@ -749,7 +751,7 @@ const removeSavedModel = (p: ProviderView, id: string): void => {
   void kernel.upsertProvider({
     name: p.name,
     baseUrl: p.baseUrl,
-    models: p.models.filter((m) => m.id !== id).map((m) => ({ id: m.id, supportsImages: m.supportsImages === true })),
+    models: p.models.filter((m) => m.id !== id).map((m) => ({ id: m.id, supportsImages: m.supportsImages === true, context1M: m.context1M === true })),
     protocol: p.protocol,
   }).then(() => {
     toast.push(`模型已删除：${p.name} · ${id}`, 'info')
@@ -1420,6 +1422,7 @@ const wslRelevant = computed(
                 <div class="llm-model-box">
                   <span class="llm-model-id mono">{{ m.id }}</span>
                   <span v-if="m.supportsImages" class="chip">视觉</span>
+                  <span v-if="m.context1M" class="chip">1M</span>
                   <span v-if="isSelectedDefault && isDefaultPair(selected.name, m.id)" class="chip chip-accent">默认</span>
                   <span
                     v-if="modelTestResults[`saved:${selected.name}:${m.id}`]"
@@ -1496,6 +1499,13 @@ const wslRelevant = computed(
                     title="视觉（图像输入）——点击切换"
                     @click="m.supportsImages = !m.supportsImages"
                   >视觉</button>
+                  <button
+                    type="button"
+                    class="chip chip-click"
+                    :class="{ 'chip-success': m.context1M }"
+                    title="1M 上下文档位（附件注入预算）——点击切换"
+                    @click="m.context1M = !m.context1M"
+                  >1M</button>
                   <span
                     v-if="modelTestResults[`form:${m.id}`]"
                     class="chip"
@@ -1542,6 +1552,14 @@ const wslRelevant = computed(
                 视觉（图像输入）
               </label>
               <p class="field-note">勾选后该模型的对话可回喂 GUI 截图（图像 part）；不勾则截图降级为文本说明。</p>
+            </div>
+            <!-- 1M 上下文档位（v0.1.111 用户裁定：视觉旁新增）：附件注入预算随窗口档——勾=1M 档（~1.4M 字符），缺省 128k 档（~180k） -->
+            <div class="field">
+              <label class="proto-opt" :class="{ 'is-on': modelModal.context1M }" for="pfCtx1M">
+                <input id="pfCtx1M" type="checkbox" v-model="modelModal.context1M" />
+                1M 上下文
+              </label>
+              <p class="field-note">长上下文档位声明——决定附件注入预算（1M 档约 140 万字符，缺省 128k 档约 18 万）；仅影响附件注入量，不改请求参数。</p>
             </div>
           </div>
           <div class="wiz-foot">

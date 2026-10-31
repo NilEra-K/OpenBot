@@ -181,6 +181,8 @@ const providerModelSchema = z.object({
   id: z.string().min(1),
   /** 视觉（图像输入）声明——模型级（v2，0.1.28 截图回喂格式语义随模型走）：缺省 false */
   supportsImages: z.boolean().optional(),
+  /** 1M 上下文档位（v0.1.111 附件注入预算）：勾选=1M 档；缺省 128k 档 */
+  context1M: z.boolean().optional(),
 })
 const providerInputSchema = z.object({
   name: z.string().min(1),
@@ -1052,6 +1054,8 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         return Promise.resolve(null)
       }
     },
+    // 附件注入预算分档（v0.1.111）：随模型窗口档位（capabilities.context1M）——在 coordinator
+    // 装配处与 supportsImagesOf 同位直算（llms 能力注册表在那），desktop 不另注入
     // 会话记录独立根（v0.1.63）：缺省 undefined = 随 dataRoot（现行为零变化）
     transcriptRoot: transcriptRootOverride,
     // 镜像路由后端（P8-3）：镜像条目 id → 后端实例的多路 facade——services/工具族零改动
@@ -1171,6 +1175,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     }
     const capabilities = {
       ...(resolved.supportsImages !== undefined ? { supportsImages: resolved.supportsImages } : {}),
+      ...(resolved.context1M !== undefined ? { context1M: resolved.context1M } : {}),
     }
     return resolved.protocol === 'anthropic'
       ? new AnthropicProvider({ config, capabilities })

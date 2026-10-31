@@ -59,6 +59,8 @@ export interface ChatMessage {
 export interface ProviderCapabilities {
   /** 图像输入（截图→多模态模型）——档案级声明，缺省 false（不放假能力） */
   supportsImages?: boolean
+  /** 1M 上下文档位（v0.1.111 附件注入预算）：true=1M 档；缺省=128k 档（预算随窗口走） */
+  context1M?: boolean
 }
 
 /** 工具描述（argsSchema 为 JSON Schema 形状的可选约束，openai-compat 映射为 parameters） */

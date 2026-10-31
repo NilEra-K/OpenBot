@@ -25,6 +25,8 @@ export interface ProviderModel {
   id: string
   /** 视觉（图像输入）声明——从供应商级下沉到模型级（0.1.28 截图回喂格式语义随迁）；缺省 false */
   supportsImages?: boolean
+  /** 1M 上下文档位声明（v0.1.111 附件注入预算）：勾选=1M 档（预算 ~1.4M 字符）；缺省=128k 档（~180k 字符） */
+  context1M?: boolean
 }
 
 /** 存储形状：apiKey 恒为密文 */
@@ -131,12 +133,16 @@ export interface ResolvedProvider {
   protocol?: ProviderProtocol
   /** 视觉（图像输入）声明——computer 工具族生产注册门的事实源之一（模型级，v2 起随模型走） */
   supportsImages?: boolean
+  /** 1M 上下文档位声明（v0.1.111 附件注入预算）：模型级，resolve 透传 */
+  context1M?: boolean
 }
 
 export interface ProviderModelInput {
   id: string
   /** 视觉（图像输入）声明——缺省 false（不放假能力） */
   supportsImages?: boolean
+  /** 1M 上下文档位声明（v0.1.111）：附件注入预算随窗口档位——缺省 128k 档 */
+  context1M?: boolean
 }
 
 export interface ProviderInput {
@@ -234,6 +240,7 @@ export class SettingsStore {
       ...(profile.timeoutMs !== undefined ? { timeoutMs: profile.timeoutMs } : {}),
       ...(profile.protocol !== undefined ? { protocol: profile.protocol } : {}),
       ...(modelEntry.supportsImages !== undefined ? { supportsImages: modelEntry.supportsImages } : {}),
+      ...(modelEntry.context1M !== undefined ? { context1M: modelEntry.context1M } : {}),
     }
   }
 
@@ -243,7 +250,7 @@ export class SettingsStore {
    *  defaultProvider / fallbackProvider 引用级联更新（defaultModel 不动——模型 id 不变） */
   async upsert(input: ProviderInput): Promise<ProviderProfileView> {
     const models = input.models
-      .map((m) => ({ id: m.id, ...(m.supportsImages !== undefined ? { supportsImages: m.supportsImages } : {}) }))
+      .map((m) => ({ id: m.id, ...(m.supportsImages !== undefined ? { supportsImages: m.supportsImages } : {}), ...(m.context1M !== undefined ? { context1M: m.context1M } : {}) }))
       .filter((m) => m.id !== '')
     if (models.length === 0) {
       throw new KernelError(SettingsErrorCodes.SETTINGS_PROVIDER_NO_MODEL, '供应商至少要有一个模型')
@@ -510,9 +517,9 @@ export class SettingsStore {
 function normalizeModels(p: { model?: unknown; supportsImages?: unknown; models?: unknown }): ProviderModel[] {
   if (Array.isArray(p.models)) {
     const models = p.models
-      .filter((m): m is { id: string; supportsImages?: boolean } =>
+      .filter((m): m is { id: string; supportsImages?: boolean; context1M?: boolean } =>
         typeof m === 'object' && m !== null && typeof (m as { id?: unknown }).id === 'string' && (m as { id: string }).id !== '')
-      .map((m) => ({ id: m.id, ...(m.supportsImages === true ? { supportsImages: true } : {}) }))
+      .map((m) => ({ id: m.id, ...(m.supportsImages === true ? { supportsImages: true } : {}), ...(m.context1M === true ? { context1M: true } : {}) }))
     if (models.length > 0) return models
   }
   if (typeof p.model === 'string' && p.model !== '') {
