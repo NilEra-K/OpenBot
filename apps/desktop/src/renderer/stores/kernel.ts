@@ -8,6 +8,7 @@ import { GatewayCommandError } from '../lib/gateway'
 import { connectRunStreams } from '../lib/stream'
 import { agentColor } from '../lib/agent-color'
 import { useToastStore } from './toast'
+import { failureText } from '../lib/llm-failure'
 import type { GatewayClient, GatewayEndpoint } from '../lib/gateway'
 import type { StreamClient } from '../lib/stream'
 import type { KernelEvent } from '@openbot/transport'
@@ -183,6 +184,9 @@ export interface RunCard {
   state: 'queued' | 'running' | 'succeeded' | 'failed' | 'aborted' | 'escaped' | 'reaped'
   attempts: number
   code?: string
+  /** 失败原因原文（v0.1.113：llm abort 流 err.message——含端点诊断如 `HTTP 400: ...`；
+   *  onStreamEnd 捕获。失败轮无产出块时原文只在这里，toast/过程条人话呈现取用） */
+  abortReason?: string
   at: number
   /** 末次状态时间 */
   updatedAt: number
@@ -1506,7 +1510,9 @@ export const useKernelStore = defineStore('kernel', {
           // （网络错误等无终答场景——code 至少让用户知道哪类问题）
           if (event.payload.state === 'failed') {
             const name = this.roster.find((a) => a.agentId === event.payload.agentId)?.name ?? event.payload.agentId
-            useToastStore().push(`${name} 的执行失败（${event.payload.code ?? '未知原因'}）`, 'danger', 6_000)
+            // v0.1.113：人话 + 端点原文摘录（原文经 abort 流先/后到达——后到时过程条仍会补显）
+            const run = this.runs.find((r) => r.runId === event.payload.runId)
+            useToastStore().push(`${name} 执行失败：${failureText(event.payload.code, run?.abortReason)}`, 'danger', 8_000)
           }
           return
         }
@@ -1619,6 +1625,12 @@ export const useKernelStore = defineStore('kernel', {
     },
 
     onStreamEnd(record: { agentId: string; runId: string; stream: 'llm' | 'exec' }, reason?: string): void {
+      // 失败原因原文归档到 run（v0.1.113）：失败轮往往无产出块（llm 块惰性建）——原文若只标
+      // 块必丢；存 run 上供 toast/过程条人话呈现（llm.abort 的 reason=err.message 含端点诊断）
+      if (reason !== undefined) {
+        const run = this.runs.find((r) => r.runId === record.runId)
+        if (run !== undefined && run.abortReason === undefined) run.abortReason = reason
+      }
       // llm 双通道（v0.1.43）：关闭该 run 全部 llm live 块（think 与 text 各一）
       const live = this.streams.filter(
         (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live',

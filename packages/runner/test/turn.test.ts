@@ -35,6 +35,10 @@ interface HarnessOptions {
   supportsImagesOf?: (agentId: string) => boolean
   /** 身份元信息（2026-10-18 身份修复）：群轮 prompt 注入自称与名单；缺席回落 agentId */
   agentMetaOf?: (agentId: string) => { name: string; persona?: string } | undefined
+  /** 附件本体读取（v0.1.113 附件注入测试：内存 Map 或函数注入） */
+  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string } | null>
+  /** 附件注入预算（v0.1.113：缺省 128k 档） */
+  attachmentBudgetOf?: (agentId: string) => number
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -130,6 +134,8 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     onStream: options.onStream,
     ...(options.supportsImagesOf !== undefined ? { supportsImagesOf: options.supportsImagesOf } : {}),
     ...(options.agentMetaOf !== undefined ? { agentMetaOf: options.agentMetaOf } : {}),
+    ...(options.loadAttachment !== undefined ? { loadAttachment: options.loadAttachment } : {}),
+    ...(options.attachmentBudgetOf !== undefined ? { attachmentBudgetOf: options.attachmentBudgetOf } : {}),
     // 与 assemble 同构（P5 Step 4 修复）：supersede 旧轮终答写入前拦截
     isGroupTurnStale: (p) => groups.isStale(p),
   })
@@ -779,5 +785,86 @@ describe('群聊身份与独立作答（2026-10-18：身份修复 + #讨论 模�
     const a2Prompt = h.llms.get('a2')!.requests[0]?.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n') ?? ''
     expect(a2Prompt).toContain('本轮已发言：\na1：先说') // 轮转上下文保留（与独立模式对照）
     expect(a2Prompt).toContain('你是本群成员「阿尔法」')
+  })
+})
+
+describe('附件注入（v0.1.113 预算双语双计 + 大文件预览）', () => {
+  const zh = (n: number): string => '汉'.repeat(n) // n 汉字（UTF-8 3 字节/字）
+  const att = (id: string, name: string, size: number) => [{ id, name, mime: 'text/csv', size, path: `/tmp/${id}.csv` }]
+  const userPrompt = (h: ReturnType<typeof makeHarness>): string => {
+    const m = h.llms.get('a1')!.requests[0]?.messages[1]
+    return typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content)
+  }
+
+  it('小文件（估算 ≤ 预算/4）全文注入——1000 汉字 est=1260 < 89600/4', async () => {
+    const h = makeHarness({ a1: [{ text: '收到' }] }, { loadAttachment: async () => ({ base64: '', text: zh(1000) }) })
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '看文件', nonce: 'n1', attachments: att('x1', '小.csv', 3000) })
+    await waitIdle([a1])
+    expect(userPrompt(h)).toContain(zh(1000))
+  })
+
+  it('中文大文件（字节项主导：100k 汉字 est≈126k）→ 头部预览 + 分块索引 + 读取指引，不注全文', async () => {
+    const h = makeHarness(
+      { a1: [{ text: '收到' }] },
+      { loadAttachment: async () => ({ base64: '', text: zh(100_000) }) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '看文件', nonce: 'n1', attachments: att('big', '大.csv', 300_000) })
+    await waitIdle([a1])
+    const p = userPrompt(h)
+    expect(p).toContain('超出全文注入档')
+    expect(p).toContain('[取全文]')
+    expect(p).toContain('块 1（字符 1-4000）')
+    expect(p).toContain('sed -n')
+    expect(p).toContain(zh(2000)) // 头部 2000 字符在场
+    expect(p).not.toContain(zh(2001)) // 第 2001 字起不在（全文未注入）
+  })
+
+  it('英文长文件同口径（字符项主导：100k 字符 est=50k）→ 同样转预览（口径统一按估算 token）', async () => {
+    const h = makeHarness(
+      { a1: [{ text: '收到' }] },
+      { loadAttachment: async () => ({ base64: '', text: 'a'.repeat(100_000) }) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '看文件', nonce: 'n1', attachments: att('en', 'big.txt', 100_000) })
+    await waitIdle([a1])
+    expect(userPrompt(h)).toContain('超出全文注入档')
+  })
+
+  it('预算尽 → 预览兜底（attachmentBudgetOf 注入小预算：300 汉字 est≈378 > 1000/4）', async () => {
+    const h = makeHarness(
+      { a1: [{ text: '收到' }] },
+      { attachmentBudgetOf: () => 1000, loadAttachment: async () => ({ base64: '', text: zh(300) }) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '看文件', nonce: 'n1', attachments: att('y1', '中.csv', 900) })
+    await waitIdle([a1])
+    const p = userPrompt(h)
+    expect(p).toContain('超出全文注入档')
+    expect(p).toContain(zh(300)) // 预览头部含全文（300 < 头部 2000 上限）
+  })
+
+  it('多附件：全文件扣减预算后，后续超档文件转预览', async () => {
+    const texts = new Map([['/tmp/m1.csv', zh(1000)], ['/tmp/m2.csv', zh(100_000)]])
+    const h = makeHarness(
+      { a1: [{ text: '收到' }] },
+      {
+        loadAttachment: async ({ path }) => ({ base64: '', text: texts.get(path) ?? '' }),
+        attachmentBudgetOf: () => 89_600,
+      },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({
+      toAgentId: 'a1', text: '看文件', nonce: 'n1',
+      attachments: [
+        { id: 'm1', name: '小.csv', mime: 'text/csv', size: 3000, path: '/tmp/m1.csv' },
+        { id: 'm2', name: '大.csv', mime: 'text/csv', size: 300_000, path: '/tmp/m2.csv' },
+      ],
+    })
+    await waitIdle([a1])
+    const p = userPrompt(h)
+    expect(p).toContain(zh(1000)) // 小文件全文
+    expect(p).toContain('超出全文注入档') // 大文件预览
   })
 })

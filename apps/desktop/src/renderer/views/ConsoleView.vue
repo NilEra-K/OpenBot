@@ -13,6 +13,7 @@ import type { GroupEntry } from '../stores/kernel'
 import type { AttachmentMeta } from '../stores/kernel'
 import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
+import { failureText } from '../lib/llm-failure'
 import { renderMarkdown } from '../lib/markdown'
 import { mentionify } from '../lib/mention'
 import RosterPanel from '../components/RosterPanel.vue'
@@ -380,13 +381,14 @@ const streamUnits = computed<StreamUnit[]>(() => {
 })
 
 /** 已终结块组的状态行：该 agent 最新 run 的终态文案——v0.1.43 强化：所有非正常终态都醒目
- *  交代（此前仅 aborted/failed 两条且弱呈现——「只有 think 没有终答」时用户不知为何） */
+ *  交代（此前仅 aborted/failed 两条且弱呈现——「只有 think 没有终答」时用户不知为何）。
+ *  v0.1.113：失败因加人话与端点原文摘录（用户报障「只知道报错不知道原因」） */
 const endedOutcomeLabel = computed(() => {
   // 群轮 run 不在此交代（其终态归群流注记）——只看该 agent 的私聊/协作 run
   const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId && r.kind !== 'group').at(-1)
   if (!last) return null
   if (last.state === 'aborted') return '本轮已中止——未产出终答（过程与思考见上方）'
-  if (last.state === 'failed') return (last.code ? `失败 · ${last.code}` : '失败') + '——未产出终答（过程与思考见上方）'
+  if (last.state === 'failed') return `失败——${failureText(last.code, last.abortReason)}（过程与思考见上方）`
   if (last.state === 'escaped') return '已转后台继续——完成后结果仍会送达会话'
   if (last.state === 'reaped') return '后台已结束——终答若已产出会在上方'
   return null

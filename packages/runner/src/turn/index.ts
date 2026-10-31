@@ -30,13 +30,56 @@ export const DEFAULT_MAX_TOOL_ROUNDS = 8
 
 /** session 内组装窗口上限（「会话掌控」裁定 D）：最近 N 条领域消息——会话再长不无限累积 */
 const SESSION_WINDOW_MESSAGES = 50
-/** 文本附件逐文件上限（v0.1.102 二期）：已并入总预算制（v0.1.111 二改——1M 档单文件可全量）；
- *  常量保留供预算缺省时的参考档位文档（128k 档总量 180k < 单文件 200k，实际不再触达） */
-const TEXT_ATTACHMENT_MAX_CHARS = 200_000
-/** 附件总预算缺省（v0.1.111）：128k 档 ≈ 128×1000 token × 2 字符/token × 70% 余量 */
-export const ATTACHMENT_BUDGET_128K = 180_000
-/** 1M 档预算（模型勾选「1M」后）：≈ 1.4M 字符 */
-export const ATTACHMENT_BUDGET_1M = 1_400_000
+/** 附件总预算缺省（v0.1.113 双语修正）：128k 档 = 128×1000 token × 70% ≈ 89.6k 估算 token */
+export const ATTACHMENT_BUDGET_128K = 89_600
+/** 1M 档预算（模型勾选「1M」后）：1M×1000 × 70% = 700k 估算 token */
+export const ATTACHMENT_BUDGET_1M = 700_000
+
+/**
+ * token 估算（v0.1.113 双语修正——2026-10-31 用户 400 报障根因修复）：max(字符×0.5, 字节×0.42)。
+ * 中文由字节项主导（UTF-8 3 字节/字 → ≈1.26 token/字，贴主流中文 tokenizer ~1.5 的保守侧）；
+ * 英文由字符项主导（≈0.5 token/字符，较真实 ~0.3 保守 1.7 倍）。
+ * v0.1.111 曾按「2 字符/token」英文假设以字符数直做预算——中文密度高 3 倍被低估，
+ * 1.4M 中文字符 ≈ 2M+ token 打爆 1M 窗口端点（HTTP 400 实锤）。
+ */
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length
+const estTokens = (text: string): number => Math.max(text.length * 0.5, utf8Bytes(text) * 0.42)
+
+/** 全文注入阈值（v0.1.113 层二）：单文件估算 ≤ 预算/4 才全量；超出转「头部预览 + 分块索引」
+ *  ——「全文抱着」改「知道有什么、去哪拿」：任意窗口档位永不超窗，全文由 agent exec 分段读取 */
+const PREVIEW_INVOKE_FACTOR = 4
+const PREVIEW_HEAD_CHARS = 2000
+const PREVIEW_CHUNK_CHARS = 4000
+const PREVIEW_MAX_INDEX = 12
+
+/**
+ * 大文件预览块（v0.1.113 层二）：头部 + 行数 + 分块索引（每块首行摘样）+ exec 分段读取指引。
+ * 模型「知道有什么、去哪拿」，全文按需分段读取——任意窗口档位永不超窗（工业方案同款哲学：
+ * ChatGPT/Claude 客户端均不全文硬塞，按需取片段）。
+ */
+function previewBlock(name: string, path: string, size: number, full: string, est: number): string {
+  const lines = full.split('\n').length
+  const head = full.slice(0, PREVIEW_HEAD_CHARS)
+  const totalChunks = Math.ceil(full.length / PREVIEW_CHUNK_CHARS)
+  const index: string[] = []
+  for (let i = 0; i < full.length && index.length < PREVIEW_MAX_INDEX; i += PREVIEW_CHUNK_CHARS) {
+    const firstLine = (full.slice(i).match(/^.*$/m)?.[0] ?? '').slice(0, 40)
+    index.push(`  块 ${index.length + 1}（字符 ${i + 1}-${Math.min(i + PREVIEW_CHUNK_CHARS, full.length)}）：${firstLine}`)
+  }
+  if (totalChunks > PREVIEW_MAX_INDEX) index.push(`  …（余 ${totalChunks - PREVIEW_MAX_INDEX} 块略——按块号 × ${PREVIEW_CHUNK_CHARS} 定位）`)
+  return [
+    `--- 附件 ${name}（${(size / 1024).toFixed(1)}KB · ${lines} 行 · 估算 ~${Math.max(1, Math.round(est / 1000))}k token——超出全文注入档，以下为预览）---`,
+    head,
+    head.length < full.length ? '…（预览截断）' : '',
+    `[结构] 全文 ${full.length} 字符 / ${totalChunks} 块（每块 ${PREVIEW_CHUNK_CHARS} 字符）：`,
+    ...index,
+    `[取全文] 文件已存档：${path}`,
+    `  用 exec 分段读取，如：sed -n '1,100p' "${path}"（按块号 × ${PREVIEW_CHUNK_CHARS} ÷ 平均行长换算行号，或 head -c 字节数）`,
+    '--- 附件预览完 ---',
+  ]
+    .filter((line) => line !== '')
+    .join('\n')
+}
 
 /** 引用会话注入预算（字符）：尾部优先 + 总量提示（记忆注入同哲学） */
 const SESSION_REF_CHAR_BUDGET = 4000
@@ -244,7 +287,8 @@ export class TurnRunner {
     const attachments = payload.attachments
     if (attachments === undefined || attachments.length === 0) return payload.text
     const vision = this.#deps.supportsImagesOf?.(agentId) ?? true
-    // 总预算（v0.1.111）：模型窗口档位决定——超预算的文本附件降级存档注记（图片不计预算，走 part）
+    // 总预算（v0.1.113 双语修正）：模型窗口档位 × 70%，单位 = 估算 token（estTokens——
+    // 字符/字节双计，中文密度按字节项安全放大）；预算尽或单文件超全文档位 → 预览块
     let budget = this.#deps.attachmentBudgetOf?.(agentId) ?? ATTACHMENT_BUDGET_128K
     const parts: ContentPart[] = [{ type: 'text', text: payload.text !== '' ? payload.text : '（附件）' }]
     for (const att of attachments) {
@@ -258,26 +302,22 @@ export class TurnRunner {
         else parts.push({ type: 'text', text: `（图片附件 ${att.name}——当前模型无视觉能力，图像内容不可读）` })
         continue
       }
-      if (loaded.text !== undefined && budget > 0) {
-        // 逐文件上限=当前预算余量（v0.1.111 二改：1M 档单文件可全量——固定 200k 封顶会架空
-        // 1M 档；总量预算本身已防单文件霸占——超了后续附件自动降级存档注记）
-        const room = budget
+      if (loaded.text !== undefined) {
         const full = loaded.text
-        if (full.length <= room) {
-          budget -= full.length
-          parts.push({ type: 'text', text: `--- 附件 ${att.name} ---\n${full}` })
-        } else {
-          budget = 0
-          parts.push({
-            type: 'text',
-            text: `--- 附件 ${att.name}（超注入预算，已截断 ${room} 字符，原文 ${(att.size / 1024).toFixed(1)}KB——完整文件已存档可分段读取）---\n${full.slice(0, room)}\n--- 截断于此 ---`,
-          })
+        const est = estTokens(full)
+        // v0.1.113 层二：超全文档位（est > budget/4）或预算已尽 → 头部预览 + 分块索引 +
+        // exec 分段读取指引（预览头部恒注入不扣预算——封顶 PREVIEW_HEAD_CHARS×附件数，量级可忽略）
+        if (budget <= 0 || est > budget / PREVIEW_INVOKE_FACTOR) {
+          parts.push({ type: 'text', text: previewBlock(att.name, att.path, att.size, full, est) })
+          continue
         }
+        budget -= est
+        parts.push({ type: 'text', text: `--- 附件 ${att.name} ---\n${full}` })
         continue
       }
       parts.push({
         type: 'text',
-        text: `（附件 ${att.name}，${(att.size / 1024).toFixed(1)}KB，已存档：${att.path}${loaded.text !== undefined ? '——超注入预算未注入内容' : ''}，可用工具读取）`,
+        text: `（附件 ${att.name}，${(att.size / 1024).toFixed(1)}KB，已存档：${att.path}——非文本类型未注入内容，可用工具读取）`,
       })
     }
     return parts
