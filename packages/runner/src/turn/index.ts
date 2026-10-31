@@ -122,6 +122,14 @@ export interface TurnRunnerDeps {
   /** 时钟（v0.1.113 顺序修复）：thinking 记录 startedAt 须与 transcript envelope at 同源
    *  （装配注入 assemble 的统一 now；测试 mock 时钟注入——真实 Date.now 与 mock at 量纲错位会乱序）。缺省 Date.now */
   now?: () => number
+  /** 用量采集（会话引擎 v2 · P1）：chat 返回带 usage 则上报——壳层落 usage.jsonl（水位/密度
+   *  校准数据源）。runner 环境无关，落盘归装配；缺席 = 无文件系统（CLI/测试不采） */
+  recordUsage?: (agentId: string, usage: { promptTokens: number; completionTokens: number }, model: string) => void
+  /** 窗口档位（会话引擎 v2 · P2 Composer）：agent 生效模型 context1M → 1M；缺省 128k */
+  windowTokensOf?: (agentId: string) => number
+  /** 上下文压力信号（P3 自动 compact——默认开）：组装发生级③整轮丢弃时上报；装配挂异步
+   *  压缩（下一 run 生效）。缺席 = 不自动压缩（仅手动 /compact） */
+  onContextPressure?: (agentId: string, sessionKey: string) => void
   /**
    * 每 agent 的视觉能力（P8-4 后 UI 优化，可选注入）：截图回喂分流——有视觉喂 image part，
    * 无视觉降级为文本说明（部分端点对 image part 会 400）。缺席 = 视为有视觉（向后兼容）。
@@ -350,15 +358,65 @@ export class TurnRunner {
       if (clearIdx >= 0) records = records.slice(clearIdx + 1)
     }
     const view = sessionView(records)
-    const effective = view.records.slice(-SESSION_WINDOW_MESSAGES)
+    // ---- ContextComposer（会话引擎 v2 · P2）：compact 软标记 + token 预算窗口 + 降级阶梯 ----
+    // compact 层：最后一条 compact 记录（coveredSeq 之前的记录不进活动层——同 /clear 模式，
+    // append-only 只加解释）；摘要注入在 system 之后（常驻层下、活动层上）
+    let compactSummary: string | null = null
+    let activeStart = 0
+    for (let i = view.records.length - 1; i >= 0; i -= 1) {
+      const rec = view.records[i]!
+      if (rec.kind === 'compact' && typeof (rec.payload as { summary?: unknown }).summary === 'string') {
+        compactSummary = (rec.payload as { summary: string }).summary
+        activeStart = i + 1
+        break
+      }
+    }
+    const active = view.records.slice(activeStart)
+    // token 预算窗口：窗口档位 × 85% − 常驻预留（system est + 工具定义余量）；50 条绝对上限
+    // 保留为双保险（极端多条小消息）。estTokens = P1 双计公式
+    const windowTokens = this.#deps.windowTokensOf?.(agentId) ?? 128_000
+    const system = typeof this.#deps.systemPrompt === 'function' ? this.#deps.systemPrompt(agentId) : this.#deps.systemPrompt
+    const reserved = (system !== undefined ? estTokens(system) : 0) + 4_000
+    let budget = Math.max(8_000, Math.floor(windowTokens * 0.85) - reserved)
+    if (compactSummary !== null) budget -= estTokens(compactSummary)
+    // 逐轮（user 起至下一 user 前）从新到旧扣减式纳入：每轮计入累计，放不下即停——更老轮
+    // 全部整轮丢弃（级③）；dropped = 未纳入的 user 轮数（压力信号判据）
+    const capped = active.slice(-SESSION_WINDOW_MESSAGES)
+    let startIdx = capped.length
+    let acc = 0
+    for (let i = capped.length - 1; i >= 0; i -= 1) {
+      if (capped[i]!.kind !== 'user') continue
+      const segTokens = capped
+        .slice(i, startIdx)
+        .reduce((a, r) => a + estTokens(String((r.payload as { text?: unknown }).text ?? '')), 0)
+      if (acc + segTokens > budget) break // 该轮起（含更老）放不下——停止纳入
+      acc += segTokens
+      startIdx = i
+    }
+    const dropped = capped.slice(0, startIdx).filter((r) => r.kind === 'user').length
+    const effective = capped.slice(startIdx)
     const history = toChatMessages(
       await this.#injectSessionRefs(agentId, effective),
       agentId,
     )
+    // 级② 降级：纳入轮中过长文本截断（user 保 8k / agent 保 4k 头 + 省略注记——细节由摘要层承接）
+    for (const m of history) {
+      if (typeof m.content === 'string' && m.content.length > 8_000) {
+        const head = m.role === 'user' ? 8_000 : 4_000
+        m.content = `${m.content.slice(0, head)}\n（…后文 ${m.content.length - head} 字符已省略——完整内容见会话记录）`
+      }
+    }
+    // 级③压力信号（P3 自动 compact——默认开，用户裁定）：有轮被丢弃即上报（装配挂异步压缩，
+    // 下一 run 起生效——当前 run 不阻塞）
+    if (dropped > 0) this.#deps.onContextPressure?.(agentId, sessionKey)
+
     const messages: ChatMessage[] = []
-    const system = typeof this.#deps.systemPrompt === 'function' ? this.#deps.systemPrompt(agentId) : this.#deps.systemPrompt
     if (system) messages.push({ role: 'system', content: system })
+    if (compactSummary !== null) {
+      messages.push({ role: 'system', content: `[会话摘要 · 早期对话已压缩]\n${compactSummary}` })
+    }
     messages.push(...history, input.userMessage)
+    const userMsgIdx = messages.length - 1 // 当轮消息位（P1 图片降级的定位锚——轮循环中末条会变为 tool 消息）
 
     const maxRounds = this.#deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS
     const emitStream = this.#deps.onStream
@@ -380,6 +438,19 @@ export class TurnRunner {
       const roundStartedAt = this.#deps.now?.() ?? Date.now() // 轮开始时刻（v0.1.113 顺序修复）：thinking 记录落盘在轮末，
       // 其 envelope at 失真（晚于轮内 exec）——重启回放排序会把思考挤到工具后；startedAt 供投影还原真实序。
       // 须用与 transcript 同源时钟（deps.now——装配统一注入；真实 Date.now 会与 mock 测试时钟量纲错位）
+      // 图片首轮消费（会话引擎 v2 · P1）：第 2 轮起当轮消息的 image part 降级注记——图只在首轮
+      // 有价值（模型已看过），重发既耗 token 又制造重复图被端点拒绝面（messages[35].image 400 报障根因）
+      if (chatRound === 2 && Array.isArray(messages[userMsgIdx]?.content)) {
+        const parts = messages[userMsgIdx]!.content as import('@openbot/llm').ContentPart[]
+        if (parts.some((p) => p.type === 'image')) {
+          messages[userMsgIdx] = {
+            ...messages[userMsgIdx]!,
+            content: parts.map((p) =>
+              p.type === 'image' ? { type: 'text', text: '（图片已随首条消息提供——如需再看请基于已见内容描述）' } : p,
+            ),
+          }
+        }
+      }
       emit({ type: 'open', stream: 'llm', meta: { round: chatRound } })
       let response: Awaited<ReturnType<ChatProvider['chat']>>
       let thinkingText = '' // 本轮思考聚合（v0.1.48：真思考持久化——落 transcript thinking 记录）
@@ -401,6 +472,10 @@ export class TurnRunner {
       } catch (err) {
         emit({ type: 'abort', stream: 'llm', reason: err instanceof Error ? err.message : String(err) })
         throw err
+      }
+      // 用量采集（会话引擎 v2 · P1）：端点带 usage 则上报（壳层落 usage.jsonl——水位/密度数据源）
+      if (response.usage !== undefined) {
+        this.#deps.recordUsage?.(agentId, response.usage, response.meta?.model ?? '')
       }
       // 过程事实：本轮思考落 transcript（v0.1.48 修正：存**真思考聚合**——onThinking 通道；
       // 此前存终答文本是双通道前的旧语义，重启后"思考没了"的根因。终答文本的家在 agent 消息，

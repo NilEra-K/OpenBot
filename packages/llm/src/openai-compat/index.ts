@@ -110,6 +110,9 @@ export class OpenAiCompatProvider implements ChatProvider {
     }
     if (request.tools && request.tools.length > 0) body['tools'] = toWireTools(request.tools)
     if (config.temperature !== undefined) body['temperature'] = config.temperature
+    // 会话引擎 v2 · UsageLedger（P1）：流式请求要求末帧携带 usage（OpenAI 协议默认不带）——
+    // 端点不识别此字段时按 OpenAI 惯例忽略（无害）；不识别且严格校验的端点在 compat 配置层观察
+    if (streaming) body['stream_options'] = { include_usage: true }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -243,7 +246,12 @@ function parseCompletion(payload: unknown, model: string): ChatResponse {  const
       toolCalls.push({ id: call['id'], name, args: parseArgsLoose(rawArgs) })
     }
   }
-  return { text, toolCalls, meta: { model } }
+  // usage 透传（P1）：顶层 usage.prompt_tokens / completion_tokens——缺席不造假
+  const usageRaw = recordOf(recordOf(payload)?.['usage'])
+  const pt = usageRaw?.['prompt_tokens']
+  const ct = usageRaw?.['completion_tokens']
+  const usage = typeof pt === 'number' && typeof ct === 'number' ? { promptTokens: pt, completionTokens: ct } : undefined
+  return { text, toolCalls, meta: { model }, ...(usage !== undefined ? { usage } : {}) }
 }
 
 /** 模型输出的 arguments 是 JSON 字符串；坏 JSON 不炸请求，原样交给工具层回喂纠错 */
@@ -298,6 +306,7 @@ async function consumeSse(
   let buffer = ''
   let text = ''
   const toolAcc = new Map<number, ToolCallAcc>()
+  let usage: { promptTokens: number; completionTokens: number } | undefined // 末帧 usage（P1）
 
   for await (const chunk of iterateBody(body)) {
     if (signal.aborted) {
@@ -316,7 +325,7 @@ async function consumeSse(
         const toolCalls = [...toolAcc.entries()]
           .sort((a, b) => a[0] - b[0])
           .map(([, acc]) => ({ id: acc.id, name: acc.name, args: parseArgsLoose(acc.args) }))
-        return { text: text === '' ? null : text, toolCalls, meta: { model } }
+        return { text: text === '' ? null : text, toolCalls, meta: { model }, ...(usage !== undefined ? { usage } : {}) }
       }
       let parsed: unknown
       try {
@@ -324,7 +333,15 @@ async function consumeSse(
       } catch (err) {
         throw new LlmError(LlmErrorCodes.LLM_RESPONSE_INVALID, `SSE 数据块不是 JSON：${String(err)}`)
       }
-      const choices = recordOf(parsed)?.['choices']
+      const record = recordOf(parsed)
+      // usage 末帧（include_usage 开启时 choices 为空数组、delta 缺席）——在 delta 跳过逻辑前抓取
+      const usageRaw = recordOf(record?.['usage'])
+      if (usageRaw !== null) {
+        const pt = usageRaw['prompt_tokens']
+        const ct = usageRaw['completion_tokens']
+        if (typeof pt === 'number' && typeof ct === 'number') usage = { promptTokens: pt, completionTokens: ct }
+      }
+      const choices = record?.['choices']
       const delta = Array.isArray(choices) && choices.length > 0
         ? recordOf(recordOf(choices[0])?.['delta'])
         : null

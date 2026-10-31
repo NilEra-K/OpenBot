@@ -95,6 +95,12 @@ export interface ChatResponse {
   toolCalls: ToolCall[]
   /** 诊断信息（模型标识等，不进协议） */
   meta?: { model?: string }
+  /**
+   * 用量回执（会话引擎 v2 · UsageLedger P1）：端点返回则透传——openai-compat 流式需
+   * 请求开 stream_options.include_usage（末帧携带）；anthropic message.delta 的 usage。
+   * 缺席 = 端点未提供（水位/密度退回估算，不造假）
+   */
+  usage?: { promptTokens: number; completionTokens: number }
 }
 
 export interface ChatProvider {

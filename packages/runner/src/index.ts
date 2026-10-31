@@ -3,6 +3,7 @@
  * 参考：ARCHITECTURE.md §3.6。
  */
 export * from './turn/index.js'
+export * from './compact.js'
 export * from './tools/index.js'
 export * from './gate/index.js'
 export * from './approval/index.js'

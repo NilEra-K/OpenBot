@@ -829,6 +829,15 @@
   color: var(--ink3);
 }
 
+/* compact 注记（会话引擎 v2 · P2）：居中弱化系统行（与 sysnote 同族——压缩事实一目了然） */
+.compact-note {
+  text-align: center;
+  font-size: 11px;
+  color: var(--ink3);
+  margin: 6px 0;
+  user-select: none;
+}
+
 /* 群聊系统注记（P5 Step 4，原型 .sysnote 同源）：建群/成员缺席/插话/收敛等居中弱化行 */
 .sysnote {
   text-align: center;
@@ -987,6 +996,52 @@
   font-size: 12.5px;
   cursor: pointer;
   transition: background 140ms var(--ease);
+}
+
+/* 上下文水位（会话引擎 v2 · P1）：composer 工具行右区色阶进度条——usage 实测驱动；
+   三档功能色（用户裁定：<50% 绿 / 50-80% 黄 / ≥80% 红）取 chip-success/warning/danger
+   同源主题变量（明暗双态自适应） */
+.ctx-gauge {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink3);
+  cursor: default;
+  user-select: none;
+}
+
+.ctx-bar {
+  display: inline-block;
+  width: 56px;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--bg3);
+  overflow: hidden;
+}
+
+.ctx-fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--success);
+  transition: width 300ms var(--ease), background-color 300ms var(--ease);
+}
+
+.ctx-gauge.lv-warm .ctx-fill {
+  background: var(--warning);
+}
+
+.ctx-gauge.lv-hot .ctx-fill {
+  background: var(--danger);
+}
+
+.ctx-gauge.lv-hot {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .cb-chip:hover,

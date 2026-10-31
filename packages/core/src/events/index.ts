@@ -98,6 +98,14 @@ export interface SessionClearedPayload {
   sessionId: string
 }
 
+/** 会话压缩（会话引擎 v2 · P2）：早期轮次已摘要化——组装自 compact 记录后起算 */
+export interface SessionCompactedPayload {
+  sessionKey: string
+  coveredSeq: number
+  keptRounds: number
+  trigger: 'manual' | 'auto'
+}
+
 /** agent 回复 */
 export interface MessageAgentPayload {
   messageId: string
@@ -300,6 +308,7 @@ export interface KernelEventMap {
   'v1.session.tombstoned': SessionTombstonedPayload
   'v1.session.revived': SessionTombstonedPayload
   'v1.session.cleared': SessionClearedPayload
+  'v1.session.compacted': SessionCompactedPayload
   'v1.session.resumed': { agentId: string }
   'v1.message.remote': MessageRemotePayload
 }

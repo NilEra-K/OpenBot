@@ -261,10 +261,12 @@ type UnitPart = { kind: 'think'; block: LiveStreamBlock } | { kind: 'exec'; inde
 interface StreamUnit {
   key: string
   at: number
-  kind: 'divider' | 'msg-user' | 'msg-remote' | 'relay' | 'agent' | 'pending' | 'ended'
+  kind: 'divider' | 'msg-user' | 'msg-remote' | 'relay' | 'agent' | 'pending' | 'ended' | 'note'
   /** msg-user / msg-remote / relay / agent（最终消息；块组与进行中单元无） */
   msgIndex?: number
   parts: UnitPart[]
+  /** note（compact 注记）：系统行文案 */
+  noteText?: string
 }
 
 /** 组成部分的发生时间（flush/进行中单元的排序值） */
@@ -274,7 +276,7 @@ const partAt = (part: UnitPart): number =>
 interface RawRow {
   key: string
   at: number
-  kind: 'msg-user' | 'msg-agent' | 'msg-remote' | 'relay' | 'exec' | 'think' | 'live-msg'
+  kind: 'msg-user' | 'msg-agent' | 'msg-remote' | 'relay' | 'exec' | 'think' | 'live-msg' | 'note'
   msgIndex?: number
   execIndex?: number
   block?: LiveStreamBlock
@@ -328,6 +330,12 @@ const streamUnits = computed<StreamUnit[]>(() => {
     if (kernel.messages.some((m) => m.kind === 'agent' && m.from === active && isPreviewDup(m.text, block.stdout))) continue
     raw.push({ key: `p-${block.key}`, at: block.at, kind: 'live-msg', block })
   }
+  // compact 注记（会话引擎 v2 · P2）：会话流系统行（当前会话键过滤——私聊 agentId / 群 groupId）
+  const noteKey = activeGroup?.groupId ?? active
+  for (const note of kernel.sessionNotes) {
+    if (note.sessionKey !== noteKey) continue
+    raw.push({ key: `note-${note.at}`, at: note.at, kind: 'note' })
+  }
   // 排序：at 主键；同刻平局按领域事实定序（v0.1.113 顺序修复）——思考恒先于工具
   // （同轮推理→调用的因果序；E2E mock 瞬时轮 startedAt 与 exec 事件同毫秒，key 字典序
   // 会把 t- 排到 e- 后致倒序）。其余回落 key 稳定序。
@@ -347,6 +355,9 @@ const streamUnits = computed<StreamUnit[]>(() => {
       pendingParts.push({ kind: 'exec', index: row.execIndex! })
     } else if (row.kind === 'think') {
       pendingParts.push({ kind: 'think', block: row.block! })
+    } else if (row.kind === 'note') {
+      // compact 注记：独立系统行（不进 pendingParts——不属任何轮）
+      units.push({ key: row.key, at: row.at, kind: 'note', parts: [], noteText: kernel.sessionNotes.find((n) => `note-${n.at}` === row.key)?.text ?? '' })
     } else if (row.kind === 'live-msg') {
       // 正文 live 预览：独立单元以 agent 气泡形态流式呈现。v0.1.113 收编改版：不再 flush
       // 过程块（多轮工具场景每轮拆一个「署名+思考」空气泡——用户报障拆散观感）；终答行
@@ -394,6 +405,56 @@ const streamUnits = computed<StreamUnit[]>(() => {
 /** 已终结块组的状态行：该 agent 最新 run 的终态文案——v0.1.43 强化：所有非正常终态都醒目
  *  交代（此前仅 aborted/failed 两条且弱呈现——「只有 think 没有终答」时用户不知为何）。
  *  v0.1.113：失败因加人话与端点原文摘录（用户报障「只知道报错不知道原因」） */
+/** 上下文水位（会话引擎 v2 · P1）：最近 usage 实测 / 生效模型窗口档位——composer 角落计量。
+ *  数据源 usage.jsonl 尾行（v1.usage.latest）；档位取 llmStatus 生效模型（activeLane 随每轮
+ *  更新——比 defaultModel 静态值准；agent 级覆写下版接 roster） */
+const contextGauge = computed(() => {
+  const u = kernel.contextUsage
+  if (u === null || u.agentId !== ui.activeAgentId) return null
+  const laneModel = kernel.llmStatus?.activeLane === 'fallback' ? kernel.llmStatus?.fallback : kernel.llmStatus?.primaryModel
+  const model = kernel.providers
+    .find((p) => p.name === (kernel.llmStatus?.activeLane === 'fallback' ? kernel.llmStatus?.fallback : kernel.llmStatus?.primary))
+    ?.models.find((m) => m.id === laneModel)
+  const windowTokens = model?.context1M === true ? 1_000_000 : 128_000
+  const ratio = u.promptTokens / windowTokens
+  // 显示口径（用户裁定）：不足 1% 按 1% 计（不显示 <1% 说法）；条宽与显示值一致
+  const pctNum = Math.max(1, Math.min(100, Math.round(ratio * 100)))
+  return {
+    pct: String(pctNum),
+    width: `${pctNum}%`,
+    level: ratio >= 0.8 ? 'hot' : ratio >= 0.5 ? 'warm' : 'ok', // 色阶（用户裁定三档；档位判据仍按真实 ratio）
+    used: u.promptTokens,
+    windowTokens,
+  }
+})
+const fmtTok = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+// 刷新时机（用户报障「必须发送一次才显现」）：连接就绪 + 会话切换 + 终答落地（usage 刚落盘）+ 30s 轮询兜底
+watch(
+  () => kernel.connected,
+  (c) => {
+    if (c && ui.activeAgentId !== null) void kernel.refreshContextUsage(ui.activeAgentId)
+  },
+)
+watch(
+  () => kernel.messages.length,
+  () => {
+    if (kernel.connected && ui.activeAgentId !== null) {
+      // 终答事件先于 usage 尾行可见的极端竞态——延迟 2s 再取
+      window.setTimeout(() => {
+        if (ui.activeAgentId !== null) void kernel.refreshContextUsage(ui.activeAgentId)
+      }, 2_000)
+    }
+  },
+)
+watch(() => ui.activeAgentId, (id) => { if (id !== null) void kernel.refreshContextUsage(id) }, { immediate: true })
+let gaugeTimer: number | undefined
+onMounted(() => {
+  gaugeTimer = window.setInterval(() => {
+    if (ui.activeAgentId !== null) void kernel.refreshContextUsage(ui.activeAgentId)
+  }, 30_000)
+})
+onBeforeUnmount(() => { if (gaugeTimer !== undefined) window.clearInterval(gaugeTimer) })
+
 const endedOutcomeLabel = computed(() => {
   // 群轮 run 不在此交代（其终态归群流注记）——只看该 agent 的私聊/协作 run
   const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId && r.kind !== 'group').at(-1)
@@ -442,6 +503,20 @@ const toggleTombstone = async (m: { messageId: string; from?: string; tombstoned
 /** 发送前拦截：/clear /resume 不进消息流——直接走命令面（菜单关闭时的兜底路径）。
  *  群会话分流（2026-10-15 用户报障 /clear 群语义错位）：群上下文=群流记录，清空走群命令
  *  （清空点切窗口，成员忘记之前轮次）——此前误清 activeAgentId 的私聊会话，群上下文原封未动 */
+/** /compact（会话引擎 v2 · P2）：早期轮次摘要化（保留近 6 轮原文）——群聊压群流/私聊压
+ *  agent 流（同 /clear 分流语义）。剩余轮数不足诚实跳过；成功后刷新消息流（compact 注记入流） */
+const doSlashCompact = async (): Promise<void> => {
+  const groupId = ui.activeGroupId
+  const r = await kernel.sessionCompact(
+    groupId !== null ? { groupId, agentId: kernel.stewardId ?? ui.activeAgentId } : { agentId: ui.activeAgentId },
+  )
+  if (r.skipped === true) {
+    toast.push(r.reason === 'in-progress' ? '压缩正在进行中——请稍候' : '会话还很短——无需压缩（保留近期轮即可）', 'info')
+    return
+  }
+  toast.push(`已压缩：早期轮次摘要化，保留最近 ${r.keptRecords} 条原文（下一轮对话生效）`, 'success')
+}
+
 const doSlashClear = async (): Promise<void> => {
   if (ui.activeGroupId !== null) {
     await kernel.groupClear(ui.activeGroupId)
@@ -479,6 +554,7 @@ const GROUP_MODE_LABELS: Record<'independent' | 'summary' | 'mention' | 'debate'
 /** 命令清单（子串联想；/quote 进 agent 级；# 前缀为群发言模式——2026-10-18 可扩展注册面） */
 const SLASH_COMMANDS: Array<{ name: string; sub: string }> = [
   { name: '/clear', sub: '开启新会话——上下文与界面清空（transcript 留证）' },
+  { name: '/compact', sub: '压缩会话——早期轮次摘要化，保留近期原文（上下文吃紧时用）' },
   { name: '/resume', sub: '选择回到某个历史会话（默认最近一个）' },
   { name: '/quote', sub: '引用某个 Agent 的会话（随下条消息注入）' },
   { name: '#讨论', sub: '群聊独立作答——成员各抒己见、互不可见（前缀触发）' },
@@ -586,6 +662,12 @@ const pickSlash = (i: number): void => {
       removeSlashToken()
       closeSlash()
       void doSlashClear().catch((err: unknown) => toast.push(String(err), 'danger'))
+      return
+    }
+    if (it.key === '/compact') {
+      removeSlashToken()
+      closeSlash()
+      void doSlashCompact().catch((err: unknown) => toast.push(String(err), 'danger'))
       return
     }
     if (it.key === '/resume') {
@@ -1639,6 +1721,9 @@ const GROUP_ICON =
           <template v-for="unit in streamUnits" :key="unit.key">
             <div v-if="unit.kind === 'divider'" class="day-divider">{{ fmtDay(unit.at) }}</div>
 
+            <!-- compact 注记（会话引擎 v2 · P2）：系统行——压过哪些段一目了然 -->
+            <div v-else-if="unit.kind === 'note'" class="compact-note">◎ {{ unit.noteText }}</div>
+
             <!-- user 消息（右对齐气泡；「会话掌控」hover 编辑 + 引用胶囊） -->
             <div v-else-if="unit.kind === 'msg-user'" class="m user" :data-mid="kernel.messages[unit.msgIndex]!.messageId">
               <div class="m-body">
@@ -1962,6 +2047,14 @@ const GROUP_ICON =
                 </div>
               </div>
               <div class="cb-tools-right">
+                <!-- 上下文水位（会话引擎 v2 · P1）：色阶进度条（用户裁定：<50% 绿 / 50-80% 黄 / ≥80% 红
+                     ——功能色取 chip-success/warning/danger 同源主题变量）+ 百分比 -->
+                <span
+                  v-if="contextGauge"
+                  class="ctx-gauge"
+                  :class="`lv-${contextGauge.level}`"
+                  :title="`上下文占用 ${contextGauge.pct}%（${fmtTok(contextGauge.used)} / ${fmtTok(contextGauge.windowTokens)} token）——由最近一次响应 usage 实测`"
+                ><i class="ctx-bar"><i class="ctx-fill" :style="{ width: contextGauge.width }"></i></i>{{ contextGauge.pct }}%</span>
                 <!-- 模型下拉（2026-09-06 图 3）：档案清单 + 当前勾选 + 管理模型入口 -->
                 <div class="cb-dd">
                   <button class="cb-chip" :class="{ open: modelMenuOpen }" @click.stop="modelMenuOpen = !modelMenuOpen; modeMenuOpen = false; plusMenuOpen = false">

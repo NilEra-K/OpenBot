@@ -14,7 +14,7 @@ import { app, desktopCapturer, safeStorage, screen as electronScreen } from 'ele
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { stat, statfs } from 'node:fs/promises'
 import { assembleKernel, chooseBackend } from '@openbot/coordinator'
@@ -1054,6 +1054,20 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         return Promise.resolve(null)
       }
     },
+    // 用量采集落盘（会话引擎 v2 · P1 UsageLedger）：runner 上报 → data/agents/<id>/usage.jsonl
+    // append（水位条/密度校准数据源；usage 是遥测——不进事件总线，读取走 v1.usage.latest 命令）
+    recordUsage: (agentId, usage, model) => {
+      try {
+        const dir = `${userDataRoot}/data/agents/${agentId}`
+        mkdirSync(dir, { recursive: true })
+        appendFileSync(
+          `${dir}/usage.jsonl`,
+          `${JSON.stringify({ at: Date.now(), model, ...usage })}\n`,
+        )
+      } catch {
+        // 采集失败静默（遥测不阻塞主链路）
+      }
+    },
     // 附件注入预算分档（v0.1.111）：随模型窗口档位（capabilities.context1M）——在 coordinator
     // 装配处与 supportsImagesOf 同位直算（llms 能力注册表在那），desktop 不另注入
     // 会话记录独立根（v0.1.63）：缺省 undefined = 随 dataRoot（现行为零变化）
@@ -1570,6 +1584,20 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     // （append-only 铁律）；读取面恒限附件目录（不开放任意盘读）。
     // 二期语义（作者默认裁定）：文本类（text/*、json/xml/yaml/toml/csv、代码扩展名）≤200KB
     // 注入全文、超出截断加注记；图片 ≤8MB 视觉注入；其余 ≤8MB 存档（消息给路径，agent 工具读） ----
+    // 用量水位（会话引擎 v2 · P1）：最近一条 usage 记录（读取面恒限 data/agents/<id>/usage.jsonl）
+    .register('v1.usage.latest', async (payload) => {
+      const { agentId } = z.object({ agentId: z.string().min(1).max(120) }).parse(payload)
+      const file = `${userDataRoot}/data/agents/${agentId}/usage.jsonl`
+      if (!existsSync(file)) return null
+      const lines = readFileSync(file, 'utf8').trim().split('\n')
+      const last = lines.at(-1)
+      if (last === undefined || last === '') return null
+      try {
+        return JSON.parse(last) as { at: number; model: string; promptTokens: number; completionTokens: number }
+      } catch {
+        return null
+      }
+    })
     .register('v1.attachments.upload', async (payload) => {
       const { name, mime, dataBase64 } = z
         .object({

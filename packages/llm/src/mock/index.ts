@@ -58,6 +58,11 @@ export class MockChatProvider implements ChatProvider {
       text: step.text ?? null,
       toolCalls: step.toolCalls ? [...step.toolCalls] : [],
       meta: { model: this.#model },
+      // usage 近似（P1 UsageLedger 测试面）：按请求/回复字符量 1/2 估——供水位与采集链路断言（非精确事实）
+      usage: {
+        promptTokens: Math.ceil(JSON.stringify(request.messages).length / 2) + 10,
+        completionTokens: Math.ceil((step.text ?? '').length / 2),
+      },
     }
     if (request.onText && response.text !== null) {
       for (let i = 0; i < response.text.length; i += MOCK_CHUNK_CODE_UNITS) {

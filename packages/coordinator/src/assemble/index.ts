@@ -13,7 +13,7 @@ import type { ChatProvider } from '@openbot/llm'
 import { BoxRegistry, BoxesErrorCodes, MockBoxBackend, X11ScreenControl } from '@openbot/boxes'
 import type { BoxBackend, ScreenControl } from '@openbot/boxes'
 import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
-import { AutoApprovalGate, computerTools, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner, ATTACHMENT_BUDGET_1M, ATTACHMENT_BUDGET_128K } from '@openbot/runner'
+import { AutoApprovalGate, computerTools, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner, ATTACHMENT_BUDGET_1M, ATTACHMENT_BUDGET_128K, compactSession } from '@openbot/runner'
 import type { GuiTakeoverLock, RunStreamEvent } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
@@ -76,6 +76,11 @@ export interface AssembleOptions {
    * 文本降级注记（TurnRunner.loadAttachment 同语义）。
    */
   loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string } | null>
+  /**
+   * 用量采集（会话引擎 v2 · P1）：runner 每轮 chat 带 usage 则上报——desktop 落
+   * data/agents/<id>/usage.jsonl（水位/密度校准数据源）。缺席 = 无文件系统（CLI/测试不采）
+   */
+  recordUsage?: (agentId: string, usage: { promptTokens: number; completionTokens: number }, model: string) => void
   /**
    * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
    * 默认每次启动随机；确定性冒烟（CLI）注入固定值。
@@ -360,11 +365,35 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     log: (msg) => console.log(msg),
   })
 
+  // 会话压缩（v2 · P2/P3）：Compactor 依赖（llmOf/transcript 与 runner 同源）；自动触发防重入
+  const compactDeps = () => ({
+    transcript,
+    llmOf: (agentId: string) => llms.get(agentId) ?? new MockChatProvider({ steps: [] }),
+    nextRunId: () => `compact-${++runCounter}`,
+  })
+  const compacting = new Set<string>() // sessionKey 防重入（自动触发并发保护）
   const runner = new TurnRunner({
     bus,
     transcript,
     // 时钟（v0.1.113 顺序修复）：与 transcript envelope at 同源——thinking startedAt 量纲一致
     now,
+    // 窗口档位（会话引擎 v2 · P2）：模型 context1M 声明 → 1M；缺省 128k
+    windowTokensOf: (agentId) => (llms.get(agentId)?.capabilities?.context1M === true ? 1_000_000 : 128_000),
+    // 自动 compact（P3 · 默认开——用户裁定）：级③压力信号 → 异步压缩（防重入；失败静默下轮再试）
+    onContextPressure: (agentId, sessionKey) => {
+      if (compacting.has(sessionKey)) return
+      compacting.add(sessionKey)
+      void compactSession(compactDeps(), agentId, sessionKey, { trigger: 'auto' })
+        .then((r) => {
+          if (r !== null) {
+            bus.emit('v1.session.compacted', { sessionKey, coveredSeq: r.coveredSeq, keptRounds: r.keptRecords, trigger: 'auto' })
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          compacting.delete(sessionKey)
+        })
+    },
     llmOf: (agentId) => llms.get(agentId) ?? new MockChatProvider({ steps: [] }),
     // 视觉能力（P8-4 后 UI 优化）：截图回喂分流——provider.capabilities.supportsImages 决定
     // 图像 part 或文本降级（未声明按有视觉处理——向后兼容）
@@ -374,6 +403,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       llms.get(agentId)?.capabilities?.context1M === true ? ATTACHMENT_BUDGET_1M : ATTACHMENT_BUDGET_128K,
     // 附件本体读取（v0.1.102）：desktop 注入的文件系统通道原样透传（缺席=文本降级）
     ...(options.loadAttachment !== undefined ? { loadAttachment: options.loadAttachment } : {}),
+    ...(options.recordUsage !== undefined ? { recordUsage: options.recordUsage } : {}),
     tools,
     boxOf: (agentId) => boxes.get(agentId) ?? null,
     nextMessageId,
@@ -521,6 +551,30 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
       await transcript.append(agentId, 'revive', { messageId })
       bus.emit('v1.session.revived', { agentId, messageId })
       return { ok: true }
+    })
+    // 会话压缩（会话引擎 v2 · P2）：手动 /compact 底座——sessionKey 通吃私聊（agentId）与
+    // 群聊（groupId）；活动段过短诚实跳过（skipped）。摘要生成是独立 llm 调用（一次成本全程受益）
+    .register('v1.session.compact', async (payload) => {
+      const { agentId, groupId, focus } = payload as { agentId?: string; groupId?: string; focus?: string }
+      const sessionKey = groupId ?? agentId
+      if (sessionKey === undefined || sessionKey === '') {
+        throw new KernelError('STATE_AGENT_NOT_FOUND', '缺少 agentId 或 groupId')
+      }
+      if (compacting.has(sessionKey)) return { skipped: true, reason: 'in-progress' as const }
+      compacting.add(sessionKey)
+      try {
+        const r = await compactSession(compactDeps(), agentId ?? sessionKey, sessionKey, {
+          trigger: 'manual',
+          ...(focus !== undefined && focus !== '' ? { focus } : {}),
+        })
+        if (r !== null) {
+          bus.emit('v1.session.compacted', { sessionKey, coveredSeq: r.coveredSeq, keptRounds: r.keptRecords, trigger: 'manual' })
+          return { skipped: false as const, coveredSeq: r.coveredSeq, keptRecords: r.keptRecords }
+        }
+        return { skipped: true as const }
+      } finally {
+        compacting.delete(sessionKey)
+      }
     })
     // /clear：开新 session（sessionId=UUID，2026-10-18 改版；在跑 run 由 renderer 先 cancel——v1.scheduler.cancel 既有面）。
     // 空会话 no-op（2026-10-18 用户裁定「空会话不计入」）：当前段无消息时不落边界——连续 /clear 只计首条

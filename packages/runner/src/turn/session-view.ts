@@ -15,6 +15,8 @@ export interface SessionRecord {
   kind: string
   payload: unknown
   at?: number
+  /** 源记录序号透传（会话引擎 v2 · compact 溯源用；视图原样透传 TranscriptRecord 时在场） */
+  seq?: number
 }
 
 export interface SessionView {

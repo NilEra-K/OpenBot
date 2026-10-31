@@ -461,6 +461,10 @@ export const useKernelStore = defineStore('kernel', {
     fallbackProvider: null as string | null,
     /** LLM 生效事实（状态栏投影；activeLane = 最近一轮成功响应实际走的通道） */
     llmStatus: null as LlmStatus | null,
+    /** 上下文水位（会话引擎 v2 · P1）：最近 usage 实测——composer 角落计量条数据源 */
+    contextUsage: null as { at: number; model: string; promptTokens: number; completionTokens: number; agentId: string } | null,
+    /** compact 注记（会话引擎 v2 · P2）：会话流系统行（内存态即时反馈；sessionKey 过滤归属） */
+    sessionNotes: [] as Array<{ at: number; sessionKey: string; text: string }>,
     /** 沙箱后端装配事实（settings 视图呈现） */
     sandbox: null as SandboxStatus | null,
     /** 镜像注册表（P8-3；settings 视图呈现与管理） */
@@ -887,6 +891,24 @@ export const useKernelStore = defineStore('kernel', {
     async refreshLlmStatus(): Promise<void> {
       this.llmStatus = await this.call<LlmStatus>('v1.settings.llmStatus')
     },
+    /** 上下文水位（会话引擎 v2 · P1）：当前会话 agent 最近一次 usage 实测 / 窗口档位。
+     *  数据源 usage.jsonl 尾行（遥测不进事件总线——轮询/会话切换时拉取）；无记录返回 null；
+     *  未连接/无记录静默为 null（启动竞态不刷屏——连接就绪与终答落地钩子会补刷） */
+    async refreshContextUsage(agentId: string): Promise<void> {
+      try {
+        const u = await this.call<{ at: number; model: string; promptTokens: number; completionTokens: number } | null>(
+          'v1.usage.latest',
+          { agentId },
+        )
+        this.contextUsage = u === null ? null : { ...u, agentId }
+      } catch {
+        this.contextUsage = null
+      }
+    },
+    /** 会话压缩（会话引擎 v2 · P2 · /compact）：早期轮次摘要化；sessionKey 通吃私聊/群聊 */
+    async sessionCompact(input: { agentId: string; groupId?: string }): Promise<{ skipped: boolean; reason?: 'in-progress'; keptRecords?: number }> {
+      return this.call('v1.session.compact', { agentId: input.agentId, ...(input.groupId !== undefined ? { groupId: input.groupId } : {}) })
+    },
     /** 刷新沙箱后端状态（boot 与 settings 视图进入时调用） */
     async refreshSandbox(): Promise<void> {
       this.sandbox = await this.call<SandboxStatus>('v1.sandbox.status')
@@ -1246,6 +1268,18 @@ export const useKernelStore = defineStore('kernel', {
         case 'v1.session.revived': {
           const m = this.messages.find((x) => x.messageId === event.payload.messageId)
           if (m !== undefined) m.tombstoned = false
+          return
+        }
+        case 'v1.session.compacted': {
+          // 会话引擎 v2 · P2：compact 注记（内存态——即时反馈；摘要层本体在 transcript 持久）
+          this.sessionNotes.push({
+            at: event.at,
+            sessionKey: event.payload.sessionKey,
+            text: `已压缩：早期对话摘要化（保留近 ${event.payload.keptRounds} 条原文）——摘要承接长期记忆`,
+          })
+          if (event.payload.trigger === 'auto') {
+            useToastStore().push('上下文已满——已自动压缩早期对话（下一轮起以摘要承接）', 'info', 6_000)
+          }
           return
         }
         case 'v1.session.cleared': {

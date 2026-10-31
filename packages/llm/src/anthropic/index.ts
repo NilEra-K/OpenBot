@@ -267,7 +267,12 @@ function parseMessage(payload: unknown, model: string): ChatResponse {
       toolCalls.push({ id: b['id'], name: b['name'], args: b['input'] ?? {} })
     }
   }
-  return { text: text === '' ? null : text, toolCalls, meta: { model } }
+  // usage 透传（P1）：anthropic 顶层 usage.input_tokens/output_tokens
+  const u = recordOf(record?.['usage'])
+  const it = u?.['input_tokens']
+  const ot = u?.['output_tokens']
+  const usage = typeof it === 'number' && typeof ot === 'number' ? { promptTokens: it, completionTokens: ot } : undefined
+  return { text: text === '' ? null : text, toolCalls, meta: { model }, ...(usage !== undefined ? { usage } : {}) }
 }
 
 function recordOf(value: unknown): Record<string, unknown> | null {
@@ -313,6 +318,7 @@ async function consumeSse(
   let buffer = ''
   let text = ''
   const toolAcc = new Map<number, ToolCallAcc>()
+  let streamUsage: { promptTokens: number; completionTokens: number } | undefined // P1：message_start.input + message_delta.output 聚合
 
   for await (const chunk of iterateBody(body)) {
     if (signal.aborted) {
@@ -335,11 +341,23 @@ async function consumeSse(
       }
       const record = recordOf(parsed)
       const type = record?.['type']
+      // usage 抓取（P1）：message_start 带 usage.input_tokens；message_delta 带 usage.output_tokens（终值）
+      if (type === 'message_start' || type === 'message_delta') {
+        const u = recordOf(record?.['usage'])
+        const it = u?.['input_tokens']
+        const ot = u?.['output_tokens']
+        if (typeof it === 'number' || typeof ot === 'number') {
+          streamUsage = {
+            promptTokens: typeof it === 'number' ? it : streamUsage?.promptTokens ?? 0,
+            completionTokens: typeof ot === 'number' ? ot : streamUsage?.completionTokens ?? 0,
+          }
+        }
+      }
       if (type === 'message_stop') {
         const toolCalls = [...toolAcc.entries()]
           .sort((a, b) => a[0] - b[0])
           .map(([, acc]) => ({ id: acc.id, name: acc.name, args: parseArgsLoose(acc.args) }))
-        return { text: text === '' ? null : text, toolCalls, meta: { model } }
+        return { text: text === '' ? null : text, toolCalls, meta: { model }, ...(streamUsage !== undefined ? { usage: streamUsage } : {}) }
       }
       if (type === 'error') {
         const message = recordOf(record?.['error'])?.['message']

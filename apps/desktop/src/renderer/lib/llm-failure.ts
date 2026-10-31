@@ -7,7 +7,8 @@
 
 /** 常见失败 code → 人话（未知 code 原样展示） */
 const HUMAN: Record<string, string> = {
-  LLM_HTTP_400: '请求被模型端点拒绝——多为上下文超窗口（大文件已自动转预览+分段读取，重发即可）',
+  // 400 归因细分见 failureText 内（v0.1.115：图片类拒绝与超窗是不同根因——曾一律归因超窗误导报障）
+  LLM_HTTP_400: '请求被模型端点拒绝——见端点原文定位（常见：图片不被支持 / 上下文超窗 / 消息格式）',
   LLM_HTTP_401: '鉴权失败——检查供应商 API Key',
   LLM_HTTP_403: '鉴权失败——检查 API Key 权限',
   LLM_HTTP_404: '接口地址或模型名不存在——检查 baseUrl 与模型 id',
@@ -22,13 +23,27 @@ const HUMAN: Record<string, string> = {
   RUN_GRACE_EXCEEDED: '本轮长时间无进展被回收',
 }
 
+/** 400 按端点原文细分（v0.1.115 用户报障链：messages[N].image 被拒被误归因超窗） */
+const detail400 = (detail: string | undefined): string | null => {
+  if (detail === undefined) return null
+  if (/image|photo|图片/i.test(detail)) return '图片不被端点支持（尺寸/格式限制）——压缩或换格式后重发'
+  if (/context|token|length|maximum/i.test(detail)) return '上下文超窗口——大文件已自动转预览+分段读取，或 /compact 压缩会话后重发'
+  return null
+}
+
+const briefOf = (detail: string | undefined): string =>
+  detail !== undefined && detail !== '' ? `｜端点原文：${detail.slice(0, 80)}${detail.length > 80 ? '…' : ''}` : ''
+
 /**
- * 失败原因一句话。code 人话优先；detail（abortReason 原文，如 `HTTP 400: {"error":...}`）
+ * 失败原因一句话。code 人话优先；400 按原文细分；detail（abortReason 原文，如 `HTTP 400: {...}`）
  * 摘前 80 字附后——人话定位类别、原文补端点细节。
  */
 export function failureText(code: string | undefined, detail?: string): string {
+  if (code === 'LLM_HTTP_400') {
+    const fine = detail400(detail)
+    if (fine !== null) return `${fine}${briefOf(detail)}`
+  }
   const human = code !== undefined ? HUMAN[code] : undefined
-  const brief = detail !== undefined && detail !== '' ? `｜端点原文：${detail.slice(0, 80)}${detail.length > 80 ? '…' : ''}` : ''
-  if (human !== undefined) return `${human}${brief}`
-  return `${code ?? '未知原因'}${brief}`
+  if (human !== undefined) return `${human}${briefOf(detail)}`
+  return `${code ?? '未知原因'}${briefOf(detail)}`
 }

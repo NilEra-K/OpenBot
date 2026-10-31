@@ -39,6 +39,12 @@ interface HarnessOptions {
   loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string } | null>
   /** 附件注入预算（v0.1.113：缺省 128k 档） */
   attachmentBudgetOf?: (agentId: string) => number
+  /** 用量采集（会话引擎 v2 · P1） */
+  recordUsage?: (agentId: string, usage: { promptTokens: number; completionTokens: number }, model: string) => void
+  /** 窗口档位（P2 Composer） */
+  windowTokensOf?: (agentId: string) => number
+  /** 压力信号（P3 自动 compact） */
+  onContextPressure?: (agentId: string, sessionKey: string) => void
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -137,6 +143,9 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     ...(options.agentMetaOf !== undefined ? { agentMetaOf: options.agentMetaOf } : {}),
     ...(options.loadAttachment !== undefined ? { loadAttachment: options.loadAttachment } : {}),
     ...(options.attachmentBudgetOf !== undefined ? { attachmentBudgetOf: options.attachmentBudgetOf } : {}),
+    ...(options.recordUsage !== undefined ? { recordUsage: options.recordUsage } : {}),
+    ...(options.windowTokensOf !== undefined ? { windowTokensOf: options.windowTokensOf } : {}),
+    ...(options.onContextPressure !== undefined ? { onContextPressure: options.onContextPressure } : {}),
     // 与 assemble 同构（P5 Step 4 修复）：supersede 旧轮终答写入前拦截
     isGroupTurnStale: (p) => groups.isStale(p),
   })
@@ -867,5 +876,71 @@ describe('附件注入（v0.1.113 预算双语双计 + 大文件预览）', () =
     const p = userPrompt(h)
     expect(p).toContain(zh(1000)) // 小文件全文
     expect(p).toContain('超出全文注入档') // 大文件预览
+  })
+})
+
+describe('会话引擎 v2 · P1（图片首轮消费 + usage 采集）', () => {
+  const imgAtt = (id: string) => [{ id, name: `${id}.png`, mime: 'image/png', size: 1000, path: `/tmp/${id}.png` }]
+
+  it('图片首轮消费：带图消息的工具循环第 2 轮请求无 image part（注记代替）', async () => {
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'exec', args: { command: ['echo', 'x'] } }] },
+          { text: '看完图了' },
+        ],
+      },
+      { loadAttachment: async () => ({ base64: 'aGk=' }) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '看图', nonce: 'n1', attachments: imgAtt('p1') })
+    await waitIdle([a1])
+    const p = h.llms.get('a1')!
+    // 当轮 user 消息（content 为数组且含「看图」文本 part）——按内容定位（轮循环后末条是 tool 消息）
+    const userMsgOf = (i: number) => (p.requests[i]!.messages.find((m) => Array.isArray(m.content) && JSON.stringify(m.content).includes('看图')) ?? { content: [] })
+    const parts1 = userMsgOf(0).content as Array<{ type: string }>
+    const parts2 = userMsgOf(1).content as Array<{ type: string }>
+    expect(parts1.some((x) => x.type === 'image')).toBe(true) // 首轮带图
+    expect(parts2.some((x) => x.type === 'image')).toBe(false) // 第 2 轮降级
+    expect(JSON.stringify(parts2)).toContain('图片已随首条消息提供')
+  })
+
+  it('usage 采集：chat 带 usage 则经 recordUsage 上报（含 agent 与模型）', async () => {
+    const calls: Array<{ agentId: string; model: string; promptTokens: number }> = []
+    const h = makeHarness(
+      { a1: [{ text: '好' }] },
+      { recordUsage: (agentId, usage, model) => calls.push({ agentId, model, promptTokens: usage.promptTokens }) },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: 'hi', nonce: 'n1' })
+    await waitIdle([a1])
+    expect(calls.length).toBeGreaterThanOrEqual(1)
+    expect(calls[0]!.agentId).toBe('a1')
+    expect(calls[0]!.promptTokens).toBeGreaterThan(0) // mock 近似 usage
+  })
+})
+
+describe('ContextComposer（会话引擎 v2 · P2 预算窗口）', () => {
+  it('小窗口：老轮被丢弃（级③）+ 压力信号上报；近期轮保留', async () => {
+    const pressure: Array<{ agentId: string; sessionKey: string }> = []
+    const h = makeHarness(
+      { a1: [{ text: '末轮答' }] },
+      {
+        windowTokensOf: () => 16_000, // 极小窗口：预算 ~9.6k - 常驻 ≈ 5.6k est——长历史必然丢老轮
+        onContextPressure: (agentId, sessionKey) => pressure.push({ agentId, sessionKey }),
+      },
+    )
+    const a1 = await h.register('a1')
+    // 三轮长对话（每轮 ~8k 汉字 est≈20k——远超预算）
+    for (let i = 1; i <= 3; i++) {
+      await h.messaging.sendUserMessage({ toAgentId: 'a1', text: `第${i}问：${'内'.repeat(4_000)}`, nonce: `n${i}` })
+      await waitIdle([a1])
+    }
+    const p = h.llms.get('a1')!
+    const lastPrompt = p.requests.at(-1)!.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('')
+    expect(lastPrompt).toContain('第3问') // 近期轮在场
+    expect(lastPrompt).not.toContain('第1问：') // 老轮已丢（级③）
+    expect(pressure.length).toBeGreaterThanOrEqual(1) // 压力信号
+    expect(pressure[0]!.agentId).toBe('a1')
   })
 })
