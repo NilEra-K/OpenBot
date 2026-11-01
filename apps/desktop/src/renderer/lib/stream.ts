@@ -57,8 +57,8 @@ export interface GuiStreamMetaMeta {
 
 export interface StreamClientHandlers {
   onOpen: (meta: RunStreamOpenMeta['meta']) => void
-  onChunk: (meta: { agentId: string; runId: string; stream: 'llm' | 'exec' }, chunk: RunStreamChunk) => void
-  onEnd: (meta: { agentId: string; runId: string; stream: 'llm' | 'exec' }, reason?: string) => void
+  onChunk: (meta: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number }, chunk: RunStreamChunk) => void
+  onEnd: (meta: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number }, reason?: string) => void
   /** pty 流（可选）：会话开流（pty 流的 meta 只有 shellId/boxId，无 agentId/runId） */
   onPtyOpen?: (meta: { shellId: string; boxId: string }) => void
   onPtyData?: (meta: { shellId: string; boxId: string }, text: string) => void
@@ -67,6 +67,10 @@ export interface StreamClientHandlers {
   onGuiOpen?: (meta: { boxId: string; codec: 'h264' | 'mjpeg'; streamId: number }) => void
   onGuiData?: (meta: { boxId: string; streamId: number }, chunk: Uint8Array) => void
   onGuiEnd?: (meta: { boxId: string }, reason?: string) => void
+  /** 连接断开（v0.1.121，即将自动重连）：流表即将清空——消费方应封存进行中的流状态。
+   *  hub 语义「流只发给 open 时刻已连接的会话」：重连后旧流的 end 不会补发，
+   *  不在此封块则 live 态永久滞留（后续新轮 chunk 会被反向 find 续写进旧块——拼接残留根因） */
+  onDisconnect?: () => void
 }
 
 export interface StreamClient {
@@ -81,6 +85,9 @@ interface StreamRecord {
   agentId: string
   runId: string
   stream: 'llm' | 'exec'
+  /** 流代际（hub 每次 open 递增分配）——块身份配对依据（v0.1.121）：重连后新流必有
+   *  新 seq，消费方按此精确找块，不同流的 chunk 结构上不可能续写进旧块 */
+  seq: number
 }
 
 /** pty 流归属（OPEN 登记，END 除名） */
@@ -124,6 +131,7 @@ export function connectRunStreams(
       streams.clear()
       ptys.clear()
       guis.clear()
+      handlers.onDisconnect?.() // 断线封块（v0.1.121）：早于重连调度——封存语义不依赖连接状态
       if (!closed) setTimeout(connect, 3_000)
     }
   }
@@ -157,7 +165,7 @@ export function connectRunStreams(
         return
       }
       if (m && typeof m.agentId === 'string' && typeof m.runId === 'string' && (m.stream === 'llm' || m.stream === 'exec')) {
-        streams.set(frame.streamId, { agentId: m.agentId, runId: m.runId, stream: m.stream })
+        streams.set(frame.streamId, { agentId: m.agentId, runId: m.runId, stream: m.stream, seq: m.seq })
         handlers.onOpen(m)
       }
       return

@@ -350,6 +350,8 @@ export interface LiveStreamBlock {
   /** llm 流类（v0.1.43 双通道）：true=思考增量（thinking_delta/reasoning_content）；缺席=正文。
    *  exec 流无此字段 */
   think?: boolean
+  /** 流代际（hub 每次 open 递增）：块的身份标识——chunk 续写与 end 关块均按此精确配对
+   *  （v0.1.121 身份配对：不同流的 chunk 结构上不可能写进旧块）；llm 惰性建块从 record 取 */
   seq: number
   /** exec 流：命令行与所属 Box；llm 流：轮次序号 */
   command?: string[]
@@ -527,6 +529,7 @@ export const useKernelStore = defineStore('kernel', {
           onOpen: (meta) => this.onStreamOpen(meta),
           onChunk: (record, chunk) => this.onStreamChunk(record, chunk),
           onEnd: (record, reason) => this.onStreamEnd(record, reason),
+          onDisconnect: () => this.onStreamsDisconnected(),
           onPtyOpen: (meta) => this.dispatchPty({ type: 'open', ...meta }),
           onPtyData: (meta, text) => this.dispatchPty({ type: 'data', ...meta, text }),
           onPtyEnd: (meta) => this.dispatchPty({ type: 'end', ...meta }),
@@ -1630,17 +1633,20 @@ export const useKernelStore = defineStore('kernel', {
     },
 
     onStreamChunk(
-      record: { agentId: string; runId: string; stream: 'llm' | 'exec' },
+      record: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number },
       chunk: { t: string; ch?: 'stdout' | 'stderr'; th?: boolean },
     ): void {
       if (record.stream === 'llm') {
         // llm 双通道（v0.1.43）：th=true → 思考块 / 缺省 → 正文块（live 预览气泡）。
-        // open 不预开——首 chunk 惰性建，th 交替时各自续写已有通道块
+        // open 不预开——首 chunk 惰性建，th 交替时各自续写已有通道块。
+        // 身份配对（v0.1.121）：find 以流代际 seq 为准——断线吞 end 后旧块即使滞留 live，
+        // 新流（新 seq）也绝不续写进它（「旧正文＋终答」拼接残留的结构根除）
         let block = [...this.streams].reverse().find(
           (s) =>
             s.runId === record.runId &&
             s.stream === 'llm' &&
             s.state === 'live' &&
+            s.seq === record.seq &&
             (s.think === true) === (chunk.th === true),
         )
         if (block === undefined) {
@@ -1649,7 +1655,7 @@ export const useKernelStore = defineStore('kernel', {
             agentId: record.agentId,
             runId: record.runId,
             stream: 'llm',
-            seq: 0,
+            seq: record.seq,
             stdout: '',
             stderr: '',
             state: 'live',
@@ -1662,29 +1668,43 @@ export const useKernelStore = defineStore('kernel', {
         return
       }
       const block = [...this.streams].reverse().find(
-        (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live',
+        (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live' && s.seq === record.seq,
       )
       if (!block) return
       if (chunk.ch === 'stderr') block.stderr += chunk.t
       else block.stdout += chunk.t
     },
 
-    onStreamEnd(record: { agentId: string; runId: string; stream: 'llm' | 'exec' }, reason?: string): void {
+    onStreamEnd(record: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number }, reason?: string): void {
       // 失败原因原文归档到 run（v0.1.113）：失败轮往往无产出块（llm 块惰性建）——原文若只标
       // 块必丢；存 run 上供 toast/过程条人话呈现（llm.abort 的 reason=err.message 含端点诊断）
       if (reason !== undefined) {
         const run = this.runs.find((r) => r.runId === record.runId)
         if (run !== undefined && run.abortReason === undefined) run.abortReason = reason
       }
-      // llm 双通道（v0.1.43）：关闭该 run 全部 llm live 块（think 与 text 各一）
+      // llm 双通道（v0.1.43）：关闭该流全部 live 块（同一流 seq 的 think 与 text 各一）。
+      // v0.1.121 起按 seq 精确配对——同 run 其它代际的滞留块（断线封块漏网等）不被误关
       const live = this.streams.filter(
-        (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live',
+        (s) => s.runId === record.runId && s.stream === record.stream && s.seq === record.seq && s.state === 'live',
       )
       for (const block of live) {
         block.state = reason === undefined ? 'end' : 'abort'
         // 思考块时长回写（v0.1.113 思考头「已思考 · Ns」）——此刻即结束时刻
         if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
         if (reason !== undefined) block.abortReason = reason
+      }
+    },
+
+    /** 流连接断开（v0.1.121 拼接残留根治·其一）：全量 live 块就地封存（state 置 end）——hub
+     *  语义「流只发给 open 时刻已连接的会话」，重连后旧流的 end 不会补发；不封则 live 永久
+     *  滞留（「生成中…」假活态）。续写错位由其二（onStreamChunk 的 seq 身份配对）结构根除，
+     *  本封存退居呈现语义：让假活态立即消失。置 end 而非 abort：断线不等于失败，已收内容
+     *  如实保留（丢尾前缀由 isPreviewDup 让位收尾） */
+    onStreamsDisconnected(): void {
+      for (const block of this.streams) {
+        if (block.state !== 'live') continue
+        block.state = 'end'
+        if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
       }
     },
 
