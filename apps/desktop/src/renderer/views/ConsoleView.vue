@@ -15,6 +15,7 @@ import { useUiStore } from '../stores/ui'
 import { useToastStore } from '../stores/toast'
 import { failureText } from '../lib/llm-failure'
 import { isPreviewDup } from '../lib/preview-dup'
+import { loadBucket, pushHistory } from '../lib/input-history'
 import { renderMarkdown } from '../lib/markdown'
 import { mentionify } from '../lib/mention'
 import RosterPanel from '../components/RosterPanel.vue'
@@ -1330,7 +1331,18 @@ const onComposerInput = (): void => {
   mention.value = { open: true, start: caret - m[1]!.length, items, sel: 0 }
 }
 
-/** 键盘流：菜单开时先行消费（↑↓/Enter/Tab/Esc），不冒泡到发送——原型同款 */
+/** 键盘流：菜单开时先行消费（↑↓/Enter/Tab/Esc），不冒泡到发送——原型同款。
+ *  菜单关时 ↑/↓ = 终端式输入历史翻阅（2026-11-01 用户需求）：按对话对象分桶
+ *  （agentId/groupId 各自独立 ≤100 条，localStorage 持久）；↑ 进入历史（暂存当前草稿），
+ *  ↓ 翻回、越过最新一条退出并还原草稿；Esc 直接退出还原；Enter 照常发送。 */
+/** 历史翻阅态（非响应式——仅 keydown 内部消费）：key = 进入时的对话对象（对象切换自然失效） */
+let histState: { key: string; idx: number; draft: string } | null = null
+/** 当前对话对象（历史桶键）：群在场归群，否则当前 agent */
+const histKeyOf = (): string => ui.activeGroupId ?? ui.activeAgentId
+/** 历史翻阅退出/重置的统一收口（发送后也走这里） */
+const histReset = (): void => {
+  histState = null
+}
 const onComposerKeydown = (e: KeyboardEvent): void => {
   if (mention.value.open) {
     const n = mention.value.items.length
@@ -1363,6 +1375,41 @@ const onComposerKeydown = (e: KeyboardEvent): void => {
       if (slash.value.mode === 'session') slash.value = { open: true, mode: 'agent', start: -1, sel: 0, agentId: null, q: '' }
       else closeSlash() // resume 级无上级——直接关
     }
+    return
+  }
+  // ---- 输入历史（↑/↓ 翻阅——菜单关闭时；单行 input 箭头无默认行为，接管零冲突） ----
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault()
+    const key = histKeyOf()
+    const list = loadBucket(localStorage, key)
+    if (list.length === 0) return
+    if (histState === null || histState.key !== key) {
+      if (e.key === 'ArrowDown') return // 不在历史模式，↓ 无语义
+      histState = { key, idx: list.length, draft: ui.draft } // idx 从「最新之后」起——↑ 先到末条
+    }
+    if (e.key === 'ArrowUp') {
+      if (histState.idx <= 0) return // 已在最旧
+      histState.idx -= 1
+    } else {
+      if (histState.idx >= list.length) return
+      histState.idx += 1
+      if (histState.idx === list.length) {
+        ui.draft = histState.draft // 越过最新 → 退出历史，还原草稿
+        histState = null
+        return
+      }
+    }
+    ui.draft = list[histState.idx] ?? ''
+    // 填入后光标置尾（默认跳开头不顺手）；v-model DOM 更新在 nextTick
+    void nextTick(() => {
+      const el = draftEl.value
+      if (el) el.setSelectionRange(el.value.length, el.value.length)
+    })
+    return
+  }
+  if (e.key === 'Escape' && histState !== null) {
+    ui.draft = histState.draft // 直接退出历史，还原草稿
+    histState = null
     return
   }
   if (e.key === 'Enter') {
@@ -1468,6 +1515,10 @@ const send = async (): Promise<void> => {
   const text = ui.draft.trim()
   const atts = pendingAtts.value.length > 0 ? pendingAtts.value.map((a) => a.meta) : undefined
   if ((text === '' && atts === undefined) || sending.value) return
+  // 输入历史入桶（敲字时所在的对话对象——广播/@跳转等跨对象发送也归此处，↑ 翻「我在这个
+  // 对话框敲过的」；回车即记录，终端语义）。空文本不入（附件占位场景）
+  if (text !== '') pushHistory(localStorage, histKeyOf(), text)
+  histReset()
   // 视觉门控只约束图片附件（文本注入/存档不依赖视觉）
   if (atts !== undefined && atts.some((a) => a.mime.startsWith('image/')) && !modelSupportsImages.value) {
     toast.push('当前模型不支持图像输入——先在设置中为模型开启「视觉」，或移除图片', 'warning')
