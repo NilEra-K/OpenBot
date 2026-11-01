@@ -32,7 +32,9 @@ const detail400 = (detail: string | undefined): string | null => {
 }
 
 const briefOf = (detail: string | undefined): string =>
-  detail !== undefined && detail !== '' ? `｜端点原文：${detail.slice(0, 80)}${detail.length > 80 ? '…' : ''}` : ''
+  // v0.1.117b：原文上限 80 → 400 字（用户报障链取证需要——"unsupported" 后的定音词
+  // 在截断处之后；m-fail 可换行不撑 UI）
+  detail !== undefined && detail !== '' ? `｜端点原文：${detail.slice(0, 400)}${detail.length > 400 ? '…' : ''}` : ''
 
 /**
  * 失败原因一句话。code 人话优先；400 按原文细分；detail（abortReason 原文，如 `HTTP 400: {...}`）

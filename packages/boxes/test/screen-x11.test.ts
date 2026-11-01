@@ -158,11 +158,11 @@ describe('X11ScreenControl capture（截图管道——唯一临时文件/缩放
     expect(script).toContain("f=/tmp/.openbot-shot-$$.png") // 唯一临时文件（IDAT CRC 修复）
     expect(script).toContain('scrot --pointer -o')
     expect(script).toContain("-resize '1280x>'")
-    expect(script).toContain('-quality 80')
+    expect(script).toContain('png:-') // v0.1.117 PNG 输出（端点对 jpeg 400）
     expect(script).toContain('base64 -w0')
     expect(script).toContain('rm -f')
     expect(spec.env).toEqual({ DISPLAY: ':0' })
-    expect(capture.mime).toBe('image/jpeg')
+    expect(capture.mime).toBe('image/png')
     expect(capture.width).toBe(1280)
     expect(capture.height).toBe(720)
     expect(capture.screenWidth).toBe(1920)
@@ -179,7 +179,7 @@ describe('X11ScreenControl capture（截图管道——唯一临时文件/缩放
     const capture = await screen.capture('box-1', { maxWidth: 1920, quality: 85 })
     const script = execs[execs.length - 1]?.command[2] ?? ''
     expect(script).toContain("-resize '1920x>'")
-    expect(script).toContain('-quality 85')
+    expect(script).toContain('png:-')
     expect(capture.width).toBeUndefined() // 1280 屏不触发缩放（比例 1）
 
     const empty = new X11ScreenControl({ host: fakeHost(() => ({ ...OK, stdout: '  ' })).host })

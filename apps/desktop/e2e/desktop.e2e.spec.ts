@@ -1638,12 +1638,18 @@ test('computer-use（plan-computer-use）：工具注册门 + 截图回喂 image
     await page.locator('.composer-box input').fill('看看桌面')
     await page.locator('.composer-box input').press('Enter')
     await expect(page.locator('.m-text', { hasText: '桌面已看到' })).toBeVisible({ timeout: 30_000 })
-    // 第二轮请求（工具回喂后）的 tool 消息含 image_url part（openai-compat wire——mock 后端
-    // 的 exec 输出即 base64 位——链路形状断言而非图像有效性；标题请求按 title 标记排除）
+    // 第二轮请求（工具回喂后）：v0.1.116b openai 面 wire 形态——tool 消息纯文本（规范仅文本），
+    // 截图挪紧随的 user 消息携带 image_url（DeepSeek 对 tool 消息数组 content 报 400 的修复；
+    // mock 后端 exec 输出即 base64 位——链路形状断言而非图像有效性；标题请求按 title 标记排除）
     const second = mock.requests.filter((r) => !r.title).at(-1)
     const toolMsg = second?.messages.find((m) => (m as { role?: string }).role === 'tool')
-    expect(JSON.stringify(toolMsg)).toContain('image_url')
-    expect(JSON.stringify(toolMsg)).toContain('data:image/jpeg;base64,')
+    expect(JSON.stringify(toolMsg)).toContain('已截图') // tool 纯文本
+    expect(JSON.stringify(toolMsg)).not.toContain('image_url')
+    const msgs = second?.messages ?? []
+    const toolIdx = msgs.findIndex((m) => (m as { role?: string }).role === 'tool')
+    const imgUser = msgs.find((m, i) => i > toolIdx && (m as { role?: string }).role === 'user' && JSON.stringify(m).includes('image_url'))
+    expect(JSON.stringify(imgUser)).toContain('data:image/png;base64,') // v0.1.117 截图 PNG（端点对 jpeg 400）
+    expect(JSON.stringify(imgUser)).toContain('工具截图')
     // GUI 视图在场（computerEnabled）+ 接管状态机走真实 UI 链路（2026-09-04 裁定：接管入口
     // 收进 BoxOps 大屏）：开 GUI 视图 → 点小屏（冒泡开操作台）→ 大屏内点视口（首笔输入置锁）
     // →「你已接管」→ 接管真值单源（ctx 小屏同源呈现）→ 交还 → 两处回落旁观

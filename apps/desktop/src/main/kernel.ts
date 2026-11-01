@@ -636,14 +636,29 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
                 : new MockBoxBackend({ now: Date.now, ...mockStatsEnv(), ...(mockPipe !== undefined ? { pipe: mockPipe } : {}) })
   if (chosen.backendId !== 'mock') {
     _lap('preflight-begin')
-    // 轻量化（v0.1.57）：已有 Box 用首个发行版 exec true 探活（毫秒级）；仅零 Box 才真
-    // import probe——首启保护不变，常态启动不再重复解压 1.27GB rootfs（实测 21.5s 纯浪费）
+    // 轻量化（v0.1.57）：已有 Box 用发行版 exec true 探活（毫秒级）；仅零 Box 才真
+    // import probe——首启保护不变，常态启动不再重复解压 1.27GB rootfs（实测 21.5s 纯浪费）。
+    // v0.1.117d 韧化（用户真机实锤「Box 不存在：box-4」→ 整启动被降级 mock）：单盒账实不符
+    // （发行版瞬时缺席/wsl -l 时序波动）≠ 后端坏——逐盒探活，NOT_FOUND 跳过换下一个；
+    // 全部缺席 → probe create 通路验真；仅真执行故障（超时/VM 挂死）才降级 mock
     try {
       const existing = await backend.list()
-      const first = existing[0]
-      if (first !== undefined) {
-        await backend.exec(first.boxId, { command: ['true'], timeoutMs: 120_000 })
-      } else {
+      let probed = false
+      for (const box of existing) {
+        try {
+          await backend.exec(box.boxId, { command: ['true'], timeoutMs: 120_000 })
+          probed = true
+          break
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (msg.includes('Box 不存在')) {
+            console.warn(`[openbot] 预检跳过 ${box.boxId}（账实不符——发行版缺席，非后端故障）`)
+            continue
+          }
+          throw err
+        }
+      }
+      if (!probed && existing.length === 0) {
         const probeBox = await backend.create({ image: 'backend-probe' })
         await backend.teardown(probeBox)
       }
@@ -682,7 +697,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const hostScreenBridge: HostScreenBridge = {
     // 主屏物理像素（DIP × scaleFactor——desktopCapturer 采集与 SendInput 同一坐标系）
     geometry: () => primaryPhysical(),
-    captureFrame: async ({ maxWidth, quality, crop }) => {
+    captureFrame: async ({ maxWidth, quality, crop, png }) => {
       const geo = primaryPhysical()
       if (geo === null) throw new KernelError('SCREEN_CAPTURE_FAILED', '桌面会话不可用——无法采集主屏')
       const width = Math.min(maxWidth, geo.width)
@@ -706,7 +721,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         if (img.isEmpty()) throw new KernelError('SCREEN_CAPTURE_FAILED', '窗口裁剪后为空（窗口不可见？）')
       }
       const size = img.getSize()
-      return { bytes: new Uint8Array(img.toJPEG(quality)), width: size.width, height: size.height }
+      // png（v0.1.117）：静态截图回喂走 PNG（端点对 jpeg 报 unsupported image 400）；
+      // 缺省 jpeg 保持——GUI 视频流（mjpeg）依赖
+      return { bytes: new Uint8Array(png === true ? img.toPNG() : img.toJPEG(quality)), width: size.width, height: size.height }
     },
     // L2 零依赖帧泵（P9-2 裁定 D）：隐藏窗口 getUserMedia → JPEG 帧序列（mjpeg 管线直用）
     startFrameStream: (onFrame) => startHostScreenFramePump({ maxWidth: 1600, onFrame }),
@@ -1205,6 +1222,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     const capabilities = {
       ...(resolved.supportsImages !== undefined ? { supportsImages: resolved.supportsImages } : {}),
       ...(resolved.context1M !== undefined ? { context1M: resolved.context1M } : {}),
+      // 工具截图回喂形态（v0.1.116b 400 修复）：anthropic 协议原生 tool_result 带图（官方
+      // computer use 形态）；openai 面规范 tool content 仅文本——截图挪循环后 user 消息
+      ...(resolved.protocol === 'anthropic' ? { toolResultImages: true } : {}),
     }
     return resolved.protocol === 'anthropic'
       ? new AnthropicProvider({ config, capabilities })
@@ -2153,6 +2173,27 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       onStream: kernel.onStream,
       transcript: kernel.transcript,
       screen: kernel.screen,
+      // 截图净化（v0.1.117c 端点 400「image is not valid」根治）：nativeImage 解码 → ≤2048
+      // 缩放 → 重编码合法 PNG——修复传输链任何环节的字节损坏；不可解码返回 null（1×1
+      // 占位降级，如实不注坏图）
+      sanitizeImage: async (img) => {
+        try {
+          const decoded = nativeImage.createFromBuffer(Buffer.from(img.base64, 'base64'))
+          if (decoded.isEmpty()) return null
+          const { width, height } = decoded.getSize()
+          const MAX_EDGE = 2048
+          if (width > MAX_EDGE || height > MAX_EDGE) {
+            const k = MAX_EDGE / Math.max(width, height)
+            return {
+              base64: decoded.resize({ width: Math.round(width * k), height: Math.round(height * k) }).toPNG().toString('base64'),
+              mime: 'image/png',
+            }
+          }
+          return { base64: decoded.toPNG().toString('base64'), mime: 'image/png' }
+        } catch {
+          return null
+        }
+      },
       lock: guiLock,
       // 载体级动作闸（P9-1 裁定 F；P9-2 前缀判定——每条目一 box）：宿主屏幕上 computer
       // 动作恒过审批闸——「Box 内自由」在用户本机屏幕上不成立；截图不进闸（注册条目本身

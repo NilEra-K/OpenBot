@@ -40,7 +40,7 @@ const PS_GEOMETRY_SCRIPT =
   PS_DPI_INIT +
   'Add-Type -AssemblyName System.Windows.Forms; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; Write-Output ($b.Width.ToString() + \' \' + $b.Height.ToString())'
 
-/** 单帧截屏脚本：CopyFromScreen → JPEG（ImageFormat 缺省质量）→ base64 单行到 stdout。
+/** 单帧截屏脚本：CopyFromScreen → PNG（v0.1.117 弃 JPEG——端点对 jpeg 截图 400）→ base64 单行到 stdout。
  *  maxWidth 缩放：宽超契约时 Graphics.DrawImage 等比缩小（agent 回喂 token 纪律） */
 function psCaptureScript(maxWidth: number): string {
   return (
@@ -56,7 +56,7 @@ function psCaptureScript(maxWidth: number): string {
     '  $g2 = [System.Drawing.Graphics]::FromImage($small); ' +
     '  $g2.DrawImage($bmp, 0, 0, $small.Width, $small.Height); ' +
     '  $ms = New-Object System.IO.MemoryStream; ' +
-    '  $small.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); ' +
+    '  $small.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); ' +
     '} else { ' +
     '  $ms = New-Object System.IO.MemoryStream; ' +
     '  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); ' +
@@ -156,11 +156,11 @@ export class SshWindowsScreenControl implements ScreenControl {
     }
     const bytes = new Uint8Array(Buffer.from(b64, 'base64'))
     if (geo === null || geo.width <= maxWidth) {
-      return { bytes, mime: 'image/jpeg' }
+      return { bytes, mime: 'image/png' }
     }
     return {
       bytes,
-      mime: 'image/jpeg',
+      mime: 'image/png',
       width: maxWidth,
       height: Math.round((geo.height * maxWidth) / geo.width),
       screenWidth: geo.width,

@@ -64,8 +64,10 @@ export interface HostScreenFrame {
 export interface HostScreenBridge {
   /** 主屏物理像素几何（size × scaleFactor；null = 桌面会话不可用——如实） */
   geometry(): ScreenGeometry | null
-  /** 截一帧并缩放编码（desktopCapturer thumbnailSize 直出目标宽；crop = 窗口绑定裁剪，P9-2） */
-  captureFrame(opts: { maxWidth: number; quality: number; crop?: WindowRect }): Promise<HostScreenFrame>
+  /** 截一帧并缩放编码（desktopCapturer thumbnailSize 直出目标宽；crop = 窗口绑定裁剪，P9-2）。
+   *  png（v0.1.117）：true = PNG 编码（静态截图回喂——端点对 jpeg 报 400）；缺省 jpeg
+   *  （GUI 视频流 mjpeg 依赖——勿改缺省） */
+  captureFrame(opts: { maxWidth: number; quality: number; crop?: WindowRect; png?: boolean }): Promise<HostScreenFrame>
   /**
    * L2 零依赖帧泵（P9-2）：隐藏窗口 getUserMedia（Chromium WGC 底层）真 ~30fps 帧到达——
    * 缺席 = 该宿主无 L2 能力（L0 轮询兜底）。stop 后不再回调。
@@ -219,10 +221,10 @@ export class HostScreenControl implements ScreenControl {
       if (rect === null) {
         throw new KernelError(ScreenErrorCodes.SCREEN_CAPTURE_FAILED, `绑定窗口未在场（标题含「${this.#windowTitle}」）`)
       }
-      const frame = await this.#bridge.captureFrame({ maxWidth, quality, crop: rect })
+      const frame = await this.#bridge.captureFrame({ maxWidth, quality, crop: rect, png: true })
       return {
         bytes: frame.bytes,
-        mime: 'image/jpeg',
+        mime: 'image/png',
         width: frame.width,
         height: frame.height,
         screenWidth: rect.width,
@@ -230,13 +232,13 @@ export class HostScreenControl implements ScreenControl {
       }
     }
     const geo = this.#bridge.geometry()
-    const frame = await this.#bridge.captureFrame({ maxWidth, quality })
+    const frame = await this.#bridge.captureFrame({ maxWidth, quality, png: true })
     if (geo === null || frame.width >= geo.width) {
-      return { bytes: frame.bytes, mime: 'image/jpeg', width: frame.width, height: frame.height }
+      return { bytes: frame.bytes, mime: 'image/png', width: frame.width, height: frame.height }
     }
     return {
       bytes: frame.bytes,
-      mime: 'image/jpeg',
+      mime: 'image/png',
       width: frame.width,
       height: frame.height,
       screenWidth: geo.width,

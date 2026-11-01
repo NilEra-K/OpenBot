@@ -249,8 +249,9 @@ export class X11ScreenControl implements ScreenControl {
     const r = await this.#host.exec(boxId, {
       command: [
         'sh', '-c',
-        `f=/tmp/.openbot-shot-$$.png; g=/tmp/.openbot-shot-$$.jpg; ` +
-          `scrot${pointerFlag} -o "$f" && convert "$f" -resize '${maxWidth}x>' -quality ${quality} "$g" && base64 -w0 "$g"; rm -f "$f" "$g"`,
+        // v0.1.117 输出 PNG（弃 jpeg）：用户端点（DeepSeek 中转）对 jpeg 截图报 unsupported
+        // image 400（PNG 上传路径实证可过）；PNG 无损无质量参数
+        `f=/tmp/.openbot-shot-$$.png; scrot${pointerFlag} -o "$f" && convert "$f" -resize '${maxWidth}x>' png:- | base64 -w0; rm -f "$f"`,
       ],
       timeoutMs: 15_000,
       env: { DISPLAY: this.#display },
@@ -263,11 +264,11 @@ export class X11ScreenControl implements ScreenControl {
       throw new KernelError(ScreenErrorCodes.SCREEN_CAPTURE_FAILED, '截图输出为空（DISPLAY 未就绪或 scrot 不在场）')
     }
     const bytes = new Uint8Array(Buffer.from(b64, 'base64'))
-    if (geo === null || geo.width <= maxWidth) return { bytes, mime: 'image/jpeg' }
+    if (geo === null || geo.width <= maxWidth) return { bytes, mime: 'image/png' }
     // 'Wx>' 缩放规则：仅宽 >maxWidth 时缩，纵横比保持——缩后尺寸纯计算（零额外 exec）
     return {
       bytes,
-      mime: 'image/jpeg',
+      mime: 'image/png',
       width: maxWidth,
       height: Math.round((geo.height * maxWidth) / geo.width),
       screenWidth: geo.width,

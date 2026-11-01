@@ -205,7 +205,7 @@ describe('SshWindowsScreenControl（替身 host）', () => {
     const { host } = hostOf()
     const ctrl = new SshWindowsScreenControl({ host, execTimeoutMs: 500 })
     const cap = await ctrl.capture('win-h', {})
-    expect(cap.mime).toBe('image/jpeg')
+    expect(cap.mime).toBe('image/png')
     expect(Buffer.from(cap.bytes).toString('utf8')).toBe('frame')
     expect(cap.screenWidth).toBe(1920)
     expect(cap.width).toBe(1280)

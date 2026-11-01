@@ -694,7 +694,29 @@ describe('截图回喂分流（P8-4 后 UI 优化）：GUI 工具注册只看环
     execute: async () => ({ text: '已截图。截图 1:1', image: IMG }),
   })
 
-  it('有视觉（缺席=视为有视觉，向后兼容）：tool 消息含 image part', async () => {
+  it('有视觉 + anthropic 面（toolResultImages）：tool 消息含 image part（原生 tool_result 带图）', async () => {
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'computer_screenshot', args: {} }] },
+          { text: '看完了' },
+        ],
+      },
+      { extraTool: screenshotTool() },
+    )
+    // anthropic 能力位：MockChatProvider capabilities 动态挂 toolResultImages
+    ;(h.llms.get('a1')!.capabilities as Record<string, unknown>).toolResultImages = true
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '截图', nonce: 'n1' })
+    await waitIdle([a1])
+    const toolMsg = h.llms.get('a1')!.requests[1].messages.find((m) => m.role === 'tool') // 工具结果在第二轮 chat 的 messages 里
+    expect(toolMsg?.content).toEqual([
+      { type: 'text', text: '已截图。截图 1:1' },
+      { type: 'image', image: IMG },
+    ])
+  })
+
+  it('有视觉 + openai 面（缺省 toolResultImages=false）：tool 消息纯文本，图挪循环后 user 消息（DeepSeek tool image 400 修复）', async () => {
     const h = makeHarness(
       {
         a1: [
@@ -707,11 +729,15 @@ describe('截图回喂分流（P8-4 后 UI 优化）：GUI 工具注册只看环
     const a1 = await h.register('a1')
     await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '截图', nonce: 'n1' })
     await waitIdle([a1])
-    const toolMsg = h.llms.get('a1')!.requests[1].messages.find((m) => m.role === 'tool') // 工具结果在第二轮 chat 的 messages 里
-    expect(toolMsg?.content).toEqual([
-      { type: 'text', text: '已截图。截图 1:1' },
-      { type: 'image', image: IMG },
-    ])
+    const msgs = h.llms.get('a1')!.requests[1].messages
+    const toolMsg = msgs.find((m) => m.role === 'tool')
+    expect(toolMsg?.content).toBe('已截图。截图 1:1') // tool 纯文本——openai 面规范
+    // 紧随 tool 结果之后的 user 图消息（协议序：tool 收齐后 user）
+    const toolIdx = msgs.findIndex((m) => m.role === 'tool')
+    const imgUser = msgs[toolIdx + 1]
+    expect(imgUser?.role).toBe('user')
+    expect(JSON.stringify(imgUser?.content)).toContain('工具截图 1 张')
+    expect(JSON.stringify(imgUser?.content)).toContain('"image"')
   })
 
   it('无视觉（supportsImagesOf=false）：image part 降级为文本说明（部分端点对 image part 会 400）', async () => {

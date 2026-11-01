@@ -61,6 +61,11 @@ export interface ProviderCapabilities {
   supportsImages?: boolean
   /** 1M 上下文档位（v0.1.111 附件注入预算）：true=1M 档；缺省=128k 档（预算随窗口走） */
   context1M?: boolean
+  /** tool 消息携带 image part（v0.1.116b 工具截图 400 修复）：anthropic 协议原生支持
+   *  （tool_result block 与 tool_use 配对——官方 computer use 形态）；openai 面规范 tool
+   *  content 仅文本（DeepSeek 实测对 tool 消息数组 content 报 400 unsupported image）。
+   *  缺省 false（安全侧）——回喂分流：false 时截图挪至循环后 user 消息（Cookbook 惯例） */
+  toolResultImages?: boolean
 }
 
 /** 工具描述（argsSchema 为 JSON Schema 形状的可选约束，openai-compat 映射为 parameters） */

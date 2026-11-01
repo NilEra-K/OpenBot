@@ -487,6 +487,13 @@ export interface GuiTakeoverLock {
 export interface ComputerToolDeps extends BoxToolDeps {
   /** 桌面控制适配器（P8-2 接口化——截图/动作的单一执行面；坐标换算内聚适配器） */
   screen: ScreenControl
+  /**
+   * 截图净化（v0.1.117c 端点 400「image is not valid」根治）：backend 产物在注入前经壳层
+   * nativeImage 重构（解码→≤2048 缩放→重编码合法 PNG）——修复传输链任何环节的字节损坏
+   * （管道杂质/exec 截断/编码瑕疵）；数据不可解码时返回 null（如实降级文本注记，不注坏图）。
+   * 缺席 = 原样透传（CLI/测试）
+   */
+  sanitizeImage?: (image: { base64: string; mime: string }) => Promise<{ base64: string; mime: string } | null>
   /** 接管锁（可选——CLI 冒烟不带）；动作工具执行前等待 */
   lock?: Pick<GuiTakeoverLock, 'waitTurn'>
   /** 动作后截图前的静置毫秒（测试注入 0；缺省 500——等 GUI 响应） */
@@ -505,14 +512,25 @@ export interface ComputerToolDeps extends BoxToolDeps {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** ScreenCapture → ToolResult.image（bytes → base64——wire 只认 base64/mime/尺寸元数据） */
-function toToolImage(capture: ScreenCapture): NonNullable<ToolResult['image']> {
-  return {
+/** ScreenCapture → ToolResult.image（bytes → base64——wire 只认 base64/mime/尺寸元数据）。
+ *  v0.1.117c：经 deps.sanitizeImage（壳层 nativeImage 重构——传输链损坏防御）后返回 */
+async function toToolImage(
+  capture: ScreenCapture,
+  sanitize?: ComputerToolDeps['sanitizeImage'],
+): Promise<NonNullable<ToolResult['image']>> {
+  const raw: NonNullable<ToolResult['image']> = {
     base64: Buffer.from(capture.bytes).toString('base64'),
     mime: capture.mime,
     ...(capture.width !== undefined ? { width: capture.width, height: capture.height } : {}),
     ...(capture.screenWidth !== undefined ? { screenWidth: capture.screenWidth, screenHeight: capture.screenHeight } : {}),
   }
+  if (sanitize === undefined) return raw
+  const clean = await sanitize({ base64: raw.base64, mime: raw.mime })
+  if (clean === null) {
+    // 数据不可解码：如实降级为 1×1 透明占位说明（尺寸元数据保留——坐标换算语义不破）
+    return { ...raw, base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', mime: 'image/png' }
+  }
+  return { ...raw, ...clean }
 }
 
 /** computer_screenshot：看屏（初见/核实）。坐标语义（2026-09-06 换算修复）由适配器元数据
@@ -531,7 +549,7 @@ export function computerScreenshotTool(deps: ComputerToolDeps): Tool {
     },
     async execute(ctx) {
       const boxId = requireBox(ctx)
-      const image = toToolImage(await deps.screen.capture(boxId))
+      const image = await toToolImage(await deps.screen.capture(boxId), deps.sanitizeImage)
       const note =
         image.width !== undefined && image.screenWidth !== undefined
           ? `截图 ${image.width}×${image.height}（真实屏幕 ${image.screenWidth}×${image.screenHeight}）——点击坐标按截图给出即可，系统自动换算`
@@ -568,7 +586,7 @@ function computerActionTool(
       await deps.screen.act(boxId, toAction(record))
       await sleep(deps.settleMs ?? 500)
       // 动作后截图附回喂（裁定 D——多轮循环 token 纪律，与 screenshot 同档）
-      const image = toToolImage(await deps.screen.capture(boxId))
+      const image = await toToolImage(await deps.screen.capture(boxId), deps.sanitizeImage)
       return { text: '动作已执行（见动作后截图）', image }
     },
   }

@@ -13,7 +13,7 @@ import { GROUP_CONTEXT_CLEAR_MARKER, GROUP_PASS_TOKEN } from '@openbot/messaging
 import { LlmError } from '@openbot/llm'
 import type { ChatMessage, ChatProvider, ContentPart, ToolSpec } from '@openbot/llm'
 import type { RunStreamEvent } from '../stream/index.js'
-import type { ToolContext, ToolRegistry } from '../tools/index.js'
+import type { ToolContext, ToolRegistry, ToolResult } from '../tools/index.js'
 import { MAX_THINKING_CHARS, truncateForTranscript } from '../tools/index.js'
 
 export const RunnerErrorCodes = {
@@ -550,6 +550,9 @@ export class TurnRunner {
       }
       messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: response.toolCalls })
       const boxId = this.#deps.boxOf(agentId)
+      // 本轮工具截图收集（v0.1.116b openai 面回喂分流）：tool 消息纯文本，图在循环后统一
+      // user 消息携带（协议序安全——tool 结果收齐后才允许 user）
+      const roundToolImages: Array<{ name: string; image: NonNullable<ToolResult['image']> }> = []
       for (const call of response.toolCalls) {
         const ctx: ToolContext = {
           agentId,
@@ -572,17 +575,40 @@ export class TurnRunner {
         if (image !== undefined && !vision) {
           toolText += '（截图已拍摄——当前模型无视觉能力，图像内容不可读；可在 GUI 视图查看画面。）'
         }
+        // 回喂形态分流（v0.1.116b 工具截图 400 修复）：openai 面规范 tool content 仅文本
+        // （DeepSeek 实测 tool 消息数组 content 报 unsupported image）——图不进 tool 消息，
+        // 收集到本轮循环后统一 user 消息携带（Cookbook 惯例；多工具时不破坏 tool 结果序）；
+        // anthropic 面（toolResultImages）保留原生 tool_result 带图（官方 computer use 形态）
         const imagePart = image !== undefined && vision ? image : undefined
+        const toolImgInTool = this.#deps.llmOf(agentId).capabilities?.toolResultImages === true
+        const imageInTool = imagePart !== undefined && toolImgInTool
+        if (imagePart !== undefined && !toolImgInTool) {
+          roundToolImages.push({ name: call.name, image: imagePart })
+        }
         messages.push({
           role: 'tool',
           content:
-            imagePart === undefined
-              ? toolText
-              : [
+            imageInTool
+              ? [
                   { type: 'text' as const, text: toolText },
-                  { type: 'image' as const, image: imagePart },
-                ],
+                  { type: 'image' as const, image: imagePart! },
+                ]
+              : toolText,
           toolCallId: call.id,
+        })
+      }
+      // openai 面工具截图（v0.1.116b）：本轮 tool 结果收齐后统一 user 消息携带——图与调用
+      // 的配对靠文本说明（工具名+坐标语义在各自 tool 消息文本里已交代）
+      if (roundToolImages.length > 0) {
+        messages.push({
+          role: 'user',
+          content: [
+            {
+              type: 'text' as const,
+              text: `（工具截图 ${roundToolImages.length} 张${roundToolImages.length > 1 ? '，与上述工具结果按序对应' : ''}——点击坐标按截图给出，系统自动换算真实屏幕）`,
+            },
+            ...roundToolImages.map((t) => ({ type: 'image' as const, image: t.image })),
+          ],
         })
       }
       if (round === maxRounds) {

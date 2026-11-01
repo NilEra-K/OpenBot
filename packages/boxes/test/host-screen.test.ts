@@ -166,7 +166,7 @@ describe('HostScreenControl（替身进程 + 替身桥）', () => {
   it('capture：桥出帧 + 物理几何元数据（缩放坐标系语义）', async () => {
     const ctrl = new HostScreenControl({ bridge: bridgeOf() })
     const cap = await ctrl.capture(HOST_SCREEN_BOX_ID, {})
-    expect(cap.mime).toBe('image/jpeg')
+    expect(cap.mime).toBe('image/png')
     expect(cap.width).toBe(1280)
     expect(cap.screenWidth).toBe(1920)
     expect(cap.screenHeight).toBe(1080)
