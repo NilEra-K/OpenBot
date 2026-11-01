@@ -105,9 +105,10 @@ export interface TurnRunnerDeps {
    * 附件本体读取（v0.1.102 图片一期，装配注入——FsAdapter 只读 utf8 故走专用 dep）：
    * 用户消息图片附件 → ContentPart image（base64）；文本类附件附带 utf8 文本（二期——
    * runner 保持环境无关，解码归壳层）。null = 文件缺失/不可读——如实降级为文本注记
-   * （不静默丢附件）。缺席 = 装配无文件系统（CLI/测试）——附件一律文本注记
+   * （不静默丢附件）。缺席 = 装配无文件系统（CLI/测试）——附件一律文本注记。
+   * mime（v0.1.115b 可选覆盖）：壳层预压缩转码后修正实际格式（如巨图缩放转 PNG）
    */
-  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string } | null>
+  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string; mime?: string } | null>
   /**
    * 审批闸门（可选——2026-09-06 预算打穿问用户）：在场时工具轮预算打穿**不再自作主张终止**，
    * 经闸门发起「预算续期」授权请求（tool='tool_budget'，弹窗/自动批准按装配方实现）——
@@ -309,7 +310,7 @@ export class TurnRunner {
         continue
       }
       if (att.mime.startsWith('image/')) {
-        if (vision) parts.push({ type: 'image', image: { base64: loaded.base64, mime: att.mime } })
+        if (vision) parts.push({ type: 'image', image: { base64: loaded.base64, mime: loaded.mime ?? att.mime } })
         else parts.push({ type: 'text', text: `（图片附件 ${att.name}——当前模型无视觉能力，图像内容不可读）` })
         continue
       }

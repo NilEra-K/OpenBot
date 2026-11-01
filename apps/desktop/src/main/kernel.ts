@@ -10,7 +10,7 @@
  * - settings 命令面 + provider 热切换（key 密文经 safeStorage；系统加密不可用时 base64 降级并标前缀）
  * - 崩溃恢复：审批账本 pending 项重发 requested 事件（UI 重新弹窗）
  */
-import { app, desktopCapturer, safeStorage, screen as electronScreen } from 'electron'
+import { app, desktopCapturer, nativeImage, safeStorage, screen as electronScreen } from 'electron'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
@@ -1046,6 +1046,21 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
       if (!resolved.startsWith(`${dir}/`)) return Promise.resolve(null)
       try {
         const bytes = readFileSync(resolved)
+        // 图片预压缩（v0.1.115b 图片 400 报障根治）：最长边 >2048 等比缩放（nativeImage——
+        // Electron 内置零依赖）。3200 万像素级原图超视觉端点分辨率上限被首发即拒
+        // （.messages[N].image[0] 400——用户实测 4762×6735）；缩放统一转 PNG（mime 同步
+        // 修正，防 PNG 数据标原 mime 被拒）。2048 长边在视觉理解与各端点安全区之间；
+        // 原图仍在盘（存档/全览不受影响）
+        if (meta.mime.startsWith('image/')) {
+          const img = nativeImage.createFromPath(resolved)
+          const { width, height } = img.getSize()
+          const MAX_EDGE = 2048
+          if (width > MAX_EDGE || height > MAX_EDGE) {
+            const scale = MAX_EDGE / Math.max(width, height)
+            const resized = img.resize({ width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) })
+            return Promise.resolve({ base64: resized.toPNG().toString('base64'), mime: 'image/png' })
+          }
+        }
         const base64 = bytes.toString('base64')
         // 文本类（二期）：一并给 utf8 文本（runner 注入用——解码归壳层，runner 保持环境无关）
         const text = isTextualAttachment(meta.mime, meta.path) ? bytes.toString('utf8') : undefined

@@ -456,14 +456,22 @@ onMounted(() => {
 onBeforeUnmount(() => { if (gaugeTimer !== undefined) window.clearInterval(gaugeTimer) })
 
 const endedOutcomeLabel = computed(() => {
-  // 群轮 run 不在此交代（其终态归群流注记）——只看该 agent 的私聊/协作 run
+  // 群轮 run 不在此交代（其终态归群流注记）——只看该 agent 的私聊/协作 run。
+  // v0.1.115b 用户裁定：失败详情（人话+原文）不挤 m-meta（长文撑爆 meta 行）——meta 只留短状态
   const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId && r.kind !== 'group').at(-1)
   if (!last) return null
   if (last.state === 'aborted') return '本轮已中止——未产出终答（过程与思考见上方）'
-  if (last.state === 'failed') return `失败——${failureText(last.code, last.abortReason)}（过程与思考见上方）`
+  if (last.state === 'failed') return '执行失败——原因见下方'
   if (last.state === 'escaped') return '已转后台继续——完成后结果仍会送达会话'
   if (last.state === 'reaped') return '后台已结束——终答若已产出会在上方'
   return null
+})
+
+/** 失败详情条（stream 末端——v0.1.115b）：人话归因 + 端点原文摘录，可换行；不再进 m-meta */
+const failureDetail = computed(() => {
+  const last = kernel.runs.filter((r) => r.agentId === ui.activeAgentId && r.kind !== 'group').at(-1)
+  if (!last || last.state !== 'failed') return null
+  return failureText(last.code, last.abortReason)
 })
 
 // ---- 思考块折叠（渲染局部态——抽屉开合归 renderer，解耦纪律 #1） ----
@@ -1868,6 +1876,11 @@ const GROUP_ICON =
                     :title="kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复进上下文' : '移出上下文（保留记录）'"
                     @click="toggleTombstone(kernel.messages[unit.msgIndex!]!)"
                   >{{ kernel.messages[unit.msgIndex!]!.tombstoned ? '恢复' : '移出' }}</button>
+                </div>
+                <!-- 失败详情条（v0.1.115b 用户裁定）：stream 末端独立行——人话+端点原文可换行，不挤 m-meta -->
+                <div v-if="unit.kind === 'ended' && failureDetail" class="m-fail">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>
+                  <span>{{ failureDetail }}</span>
                 </div>
               </div>
             </div>

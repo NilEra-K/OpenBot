@@ -75,7 +75,7 @@ export interface AssembleOptions {
    * 用户消息图片附件 → ContentPart image。缺席 = 无文件系统装配（CLI/测试）——附件一律
    * 文本降级注记（TurnRunner.loadAttachment 同语义）。
    */
-  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string } | null>
+  loadAttachment?: (meta: { path: string; mime: string }) => Promise<{ base64: string; text?: string; mime?: string } | null>
   /**
    * 用量采集（会话引擎 v2 · P1）：runner 每轮 chat 带 usage 则上报——desktop 落
    * data/agents/<id>/usage.jsonl（水位/密度校准数据源）。缺席 = 无文件系统（CLI/测试不采）
