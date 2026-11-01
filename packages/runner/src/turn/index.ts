@@ -6,7 +6,7 @@ import { extractSession, sessionView } from './session-view.js'
  * 重启后对话流可恢复；不进 llm 历史）。参考：ARCHITECTURE.md §3.6/§7。
  */
 import { KernelError } from '@openbot/core'
-import type { ActiveRun, EventBus, RunExecutor } from '@openbot/core'
+import type { ActiveRun, AttachmentMeta, EventBus, RunExecutor } from '@openbot/core'
 import type { TranscriptStore } from '@openbot/state'
 import type { A2aRunPayload, GroupTurnPayload, UserChatRunPayload } from '@openbot/messaging'
 import { GROUP_CONTEXT_CLEAR_MARKER, GROUP_PASS_TOKEN } from '@openbot/messaging'
@@ -126,6 +126,13 @@ export interface TurnRunnerDeps {
   /** 用量采集（会话引擎 v2 · P1）：chat 返回带 usage 则上报——壳层落 usage.jsonl（水位/密度
    *  校准数据源）。runner 环境无关，落盘归装配；缺席 = 无文件系统（CLI/测试不采） */
   recordUsage?: (agentId: string, usage: { promptTokens: number; completionTokens: number }, model: string) => void
+  /**
+   * agent 附图落盘（v0.1.118 截图直发）：run 期间最后一张净化截图随终答投递——壳层按
+   * 附件体系（sha256 寻址落 attachments 目录）存本体并回 AttachmentMeta。缺席 = 无文件
+   * 系统（CLI/测试）——终答不带附件（能力缺席不造假）。
+   * 附图只走呈现层（transcript meta + renderer 缩略）——历史组装仅轻注记不重发（模型不重背）
+   */
+  saveAgentImage?: (agentId: string, image: { base64: string; mime: string }) => Promise<AttachmentMeta | null>
   /** 窗口档位（会话引擎 v2 · P2 Composer）：agent 生效模型 context1M → 1M；缺省 128k */
   windowTokensOf?: (agentId: string) => number
   /** 上下文压力信号（P3 自动 compact——默认开）：组装发生级③整轮丢弃时上报；装配挂异步
@@ -428,6 +435,10 @@ export class TurnRunner {
     let roundsBudget = maxRounds // 可续期预算（2026-09-06：打穿先问用户，批准=续期原地继续）
     let budgetRenewals = 0
     let chatRound = 0 // chat 序号（llm 流事件标注，含终答轮）
+    // run 级最后截图（v0.1.118 截图直发）：终答随附（呈现层——用户「截图发我」场景；
+    // 每次截图覆盖——「发我看」语义=最终画面状态，中间操作帧不刷屏）。声明在轮循环外
+    // （run 级存活——截图轮与终答轮不同轮时不丢失）
+    let lastShot: { base64: string; mime: string } | null = null
     for (;;) {
       // 轮间中止检查点：工具已返回但 run 已被取消/抢占时立即终止——不再发起下一轮 llm
       // （exec 由后端 signal 杀进程；此检查点兜住审批等不感知 signal 的等待返回后的收尾）
@@ -512,13 +523,23 @@ export class TurnRunner {
           })
           input.session.emitFinal(messageId, text, run.runId)
         } else {
+          // 终答附图（v0.1.118 截图直发）：run 最后一张净化截图随终答——呈现层持久，
+          // 历史组装仅轻注记（见 toChatMessages）——模型不重背
+          const finalAtts = await this.#finalAttachments(agentId, lastShot)
           await this.#deps.transcript.append(agentId, 'agent', {
             messageId,
             text,
             replyTo: input.originMessageId,
             runId: run.runId,
+            ...(finalAtts !== null ? { attachments: finalAtts } : {}),
           })
-          this.#deps.bus.emit('v1.message.agent', { messageId, agentId, text, runId: run.runId })
+          this.#deps.bus.emit('v1.message.agent', {
+            messageId,
+            agentId,
+            text,
+            runId: run.runId,
+            ...(finalAtts !== null ? { attachments: finalAtts } : {}),
+          })
         }
         return { text }
       }
@@ -542,10 +563,10 @@ export class TurnRunner {
           if (approved) {
             roundsBudget += maxRounds // 续期：再给一轮额度（当前轮计入新窗口）
           } else {
-            await this.#wrapupAndThrow(agentId, input, run, messages, chatRound, maxRounds, emit)
+            await this.#wrapupAndThrow(agentId, input, run, messages, chatRound, maxRounds, emit, lastShot)
           }
         } else {
-          await this.#wrapupAndThrow(agentId, input, run, messages, chatRound, maxRounds, emit)
+          await this.#wrapupAndThrow(agentId, input, run, messages, chatRound, maxRounds, emit, lastShot)
         }
       }
       messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: response.toolCalls })
@@ -584,6 +605,9 @@ export class TurnRunner {
         const imageInTool = imagePart !== undefined && toolImgInTool
         if (imagePart !== undefined && !toolImgInTool) {
           roundToolImages.push({ name: call.name, image: imagePart })
+        }
+        if (imagePart !== undefined) {
+          lastShot = { base64: imagePart.base64, mime: imagePart.mime } // v0.1.118 终答随附（覆盖=最后一张）
         }
         messages.push({
           role: 'tool',
@@ -635,6 +659,7 @@ export class TurnRunner {
     chatRound: number,
     maxRounds: number,
     emit: (event: Omit<RunStreamEvent, 'agentId' | 'runId'>) => void,
+    lastShot: { base64: string; mime: string } | null = null,
   ): Promise<never> {
     const nextChatRound = chatRound + 1
     messages.push({
@@ -672,7 +697,7 @@ export class TurnRunner {
       text: truncateForTranscript(wrapupThinking, MAX_THINKING_CHARS),
       final: false,
     })
-    await this.#deliverFinal(agentId, input, run, wrapupText)
+    await this.#deliverFinal(agentId, input, run, wrapupText, lastShot) // v0.1.118 附图透传
     throw new KernelError(
       RunnerErrorCodes.RUN_TOOL_BUDGET_EXCEEDED,
       `工具轮次超过预算 ${maxRounds}（run ${run.runId}）——已向用户交代进展`,
@@ -707,7 +732,13 @@ export class TurnRunner {
   }
 
   /** 终答投递（正常终轮与预算收尾轮共用）：transcript 落档 + 事件出（群/私聊分流同构） */
-  async #deliverFinal(agentId: string, input: TurnInput, run: { runId: string }, text: string): Promise<void> {
+  async #deliverFinal(
+    agentId: string,
+    input: TurnInput,
+    run: { runId: string },
+    text: string,
+    lastShot: { base64: string; mime: string } | null = null,
+  ): Promise<void> {
     const messageId = this.#deps.nextMessageId()
     if (input.session) {
       // supersede：旧轮终答静默丢弃（收尾轮同判——旧轮不该在被打断后还往群流说话）
@@ -721,14 +752,32 @@ export class TurnRunner {
       })
       input.session.emitFinal(messageId, text, run.runId)
     } else {
+      const finalAtts = await this.#finalAttachments(agentId, lastShot) // v0.1.118 终答附图（收尾轮同款）
       await this.#deps.transcript.append(agentId, 'agent', {
         messageId,
         text,
         replyTo: input.originMessageId,
         runId: run.runId,
+        ...(finalAtts !== null ? { attachments: finalAtts } : {}),
       })
-      this.#deps.bus.emit('v1.message.agent', { messageId, agentId, text, runId: run.runId })
+      this.#deps.bus.emit('v1.message.agent', {
+        messageId,
+        agentId,
+        text,
+        runId: run.runId,
+        ...(finalAtts !== null ? { attachments: finalAtts } : {}),
+      })
     }
+  }
+
+  /** 终答附图（v0.1.118）：壳层落盘得 meta；无截图/无落盘能力 → null（不带附件） */
+  async #finalAttachments(
+    agentId: string,
+    lastShot: { base64: string; mime: string } | null,
+  ): Promise<AttachmentMeta[] | null> {
+    if (lastShot === null || this.#deps.saveAgentImage === undefined) return null
+    const meta = await this.#deps.saveAgentImage(agentId, lastShot)
+    return meta === null ? null : [meta]
   }
 }
 
@@ -756,7 +805,13 @@ export function toChatMessages(records: { kind: string; payload: unknown }[], vi
           : ''
       messages.push({ role: 'user', content: attNote !== '' && text !== '' ? `${text}\n${attNote}` : text + attNote })
     } else if (record.kind === 'agent') {
-      messages.push({ role: 'assistant', content: text })
+      // agent 附图历史轻注记（v0.1.118）：只让模型知道「发过图」，不重发本体（模型不重背）
+      const atts = payload['attachments']
+      const attNote =
+        Array.isArray(atts) && atts.length > 0
+          ? `\n（附图：${atts.map((a) => (typeof (a as { name?: unknown })?.name === 'string' ? (a as { name: string }).name : '?')).join('、')}）`
+          : ''
+      messages.push({ role: 'assistant', content: text + attNote })
     } else if (record.kind === 'a2a-in') {
       const from = typeof payload['from'] === 'string' ? payload['from'] : '?'
       messages.push({ role: 'user', content: `[A2A ${from}] ${text}` })

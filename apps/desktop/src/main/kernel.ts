@@ -1086,6 +1086,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         return Promise.resolve(null)
       }
     },
+    // agent 附图落盘（v0.1.118 截图直发）：run 最后一张净化截图随终答——与上传同款
+    // sha256 内容寻址（同图零拷贝去重）；命名截图时间戳（用户气泡呈现原名）
+    saveAgentImage: async (agentId, image) => {
+      try {
+        const bytes = Buffer.from(image.base64, 'base64')
+        if (bytes.length === 0 || bytes.length > 8 * 1024 * 1024) return null
+        const dir = `${userDataRoot}/attachments`
+        mkdirSync(dir, { recursive: true })
+        const id = createHash('sha256').update(bytes).digest('hex')
+        const ext = image.mime === 'image/png' ? 'png' : image.mime === 'image/jpeg' ? 'jpg' : 'bin'
+        const path = `${dir}/${id}.${ext}`
+        if (!existsSync(path)) writeFileSync(path, bytes)
+        const ts = new Date()
+        const pad = (n: number): string => String(n).padStart(2, '0')
+        const name = `截图-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.${ext}`
+        return { id, name, mime: image.mime, size: bytes.length, path }
+      } catch {
+        return null // 落盘失败如实不带附件（终答照常投递）
+      }
+    },
     // 用量采集落盘（会话引擎 v2 · P1 UsageLedger）：runner 上报 → data/agents/<id>/usage.jsonl
     // append（水位条/密度校准数据源；usage 是遥测——不进事件总线，读取走 v1.usage.latest 命令）
     recordUsage: (agentId, usage, model) => {

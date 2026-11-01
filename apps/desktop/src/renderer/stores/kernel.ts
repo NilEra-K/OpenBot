@@ -110,7 +110,8 @@ export interface ChatMessage {
   groupId?: string
   /** 群发言模式（2026-10-18 模式体系）：group-user 在场——徽标（独立作答/汇总/点名） */
   groupMode?: 'independent' | 'summary' | 'mention' | 'debate'
-  /** 图片附件（v0.1.102 一期）：user 消息在场——气泡缩略图行（dataURI 经 attachmentUri 取） */
+  /** 图片附件（v0.1.102 一期）：user 消息在场——气泡缩略图行（dataURI 经 attachmentUri 取）。
+   *  v0.1.118：agent 消息同构（截图直发——run 最后一张净化截图随终答） */
   attachments?: AttachmentMeta[]
   /** 乐观占位：命令响应/事件到达前为 true（UI 显示发送中态） */
   pending?: boolean
@@ -1199,13 +1200,13 @@ export const useKernelStore = defineStore('kernel', {
         const msg = p as { messageId?: string; text?: string; from?: string; to?: string }
         if (typeof msg.messageId !== 'string' || typeof msg.text !== 'string') continue
         if (this.messages.some((m) => m.messageId === msg.messageId)) continue // 事件流已覆盖
-        const userAtts = record.kind === 'user' ? (p as { attachments?: AttachmentMeta[] }).attachments : undefined
-        if (userAtts !== undefined) for (const a of userAtts) void this.attachmentUri(a.id, a.mime).catch(() => {})
+        const msgAtts = (p as { attachments?: AttachmentMeta[] }).attachments // user 与 agent（v0.1.118 附图）同构
+        if (msgAtts !== undefined) for (const a of msgAtts) void this.attachmentUri(a.id, a.mime).catch(() => {})
         const mapped: ChatMessage | null =
           record.kind === 'user'
-            ? { messageId: msg.messageId, kind: 'user', from: 'user', to: agentId, text: msg.text, at: record.at, ...(userAtts !== undefined ? { attachments: userAtts } : {}) }
+            ? { messageId: msg.messageId, kind: 'user', from: 'user', to: agentId, text: msg.text, at: record.at, ...(msgAtts !== undefined ? { attachments: msgAtts } : {}) }
             : record.kind === 'agent'
-              ? { messageId: msg.messageId, kind: 'agent', from: agentId, to: 'user', text: msg.text, at: record.at }
+              ? { messageId: msg.messageId, kind: 'agent', from: agentId, to: 'user', text: msg.text, at: record.at, ...(msgAtts !== undefined ? { attachments: msgAtts } : {}) }
               : record.kind === 'a2a-out' && typeof msg.to === 'string'
                 ? { messageId: msg.messageId, kind: 'a2a', from: agentId, to: msg.to, text: msg.text, at: record.at }
                 : record.kind === 'a2a-in' && typeof msg.from === 'string'
@@ -1319,6 +1320,11 @@ export const useKernelStore = defineStore('kernel', {
         }
         case 'v1.message.agent':
           this.bumpEdge(event.payload.agentId, 'user')
+          // agent 附图预取（v0.1.118 修复：事件路径缺预取致气泡缩略空白——与 user 发送/
+          // 历史回放同款：气泡渲染不等网络）
+          if (event.payload.attachments !== undefined) {
+            for (const a of event.payload.attachments) void this.attachmentUri(a.id, a.mime).catch(() => {})
+          }
           this.messages.push({
             messageId: event.payload.messageId,
             kind: 'agent',
@@ -1326,6 +1332,8 @@ export const useKernelStore = defineStore('kernel', {
             to: 'user',
             text: event.payload.text,
             at: event.at,
+            // agent 附图（v0.1.118 截图直发）：呈现层持久（transcript 回放同款投影）
+            ...(event.payload.attachments !== undefined ? { attachments: event.payload.attachments } : {}),
           })
           // 正文预览块让位真消息（v0.1.43）：终答事件可先于流 end 到达（事件时序）——不看 state
           // 直接删（live/end 都删；流 end 随后到达时块已除名，onStreamEnd 无操作）；思考块保留

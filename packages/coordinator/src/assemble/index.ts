@@ -81,6 +81,8 @@ export interface AssembleOptions {
    * data/agents/<id>/usage.jsonl（水位/密度校准数据源）。缺席 = 无文件系统（CLI/测试不采）
    */
   recordUsage?: (agentId: string, usage: { promptTokens: number; completionTokens: number }, model: string) => void
+  /** agent 附图落盘（v0.1.118 截图直发）：run 最后一张净化截图随终答投递（呈现层持久） */
+  saveAgentImage?: (agentId: string, image: { base64: string; mime: string }) => Promise<import('@openbot/core').AttachmentMeta | null>
   /**
    * 实例前缀：跨重启的 id 唯一性（msg/run/appr id 重启后不从零重数——历史去重的正确性前提）。
    * 默认每次启动随机；确定性冒烟（CLI）注入固定值。
@@ -404,6 +406,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     // 附件本体读取（v0.1.102）：desktop 注入的文件系统通道原样透传（缺席=文本降级）
     ...(options.loadAttachment !== undefined ? { loadAttachment: options.loadAttachment } : {}),
     ...(options.recordUsage !== undefined ? { recordUsage: options.recordUsage } : {}),
+    ...(options.saveAgentImage !== undefined ? { saveAgentImage: options.saveAgentImage } : {}),
     tools,
     boxOf: (agentId) => boxes.get(agentId) ?? null,
     nextMessageId,

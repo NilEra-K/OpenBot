@@ -45,6 +45,8 @@ interface HarnessOptions {
   windowTokensOf?: (agentId: string) => number
   /** 压力信号（P3 自动 compact） */
   onContextPressure?: (agentId: string, sessionKey: string) => void
+  /** agent 附图落盘（v0.1.118 截图直发） */
+  saveAgentImage?: (agentId: string, image: { base64: string; mime: string }) => Promise<{ id: string; name: string; mime: string; size: number; path: string } | null>
 }
 
 function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: HarnessOptions = {}) {
@@ -146,6 +148,7 @@ function makeHarness(llmSteps: Record<string, readonly MockStep[]>, options: Har
     ...(options.recordUsage !== undefined ? { recordUsage: options.recordUsage } : {}),
     ...(options.windowTokensOf !== undefined ? { windowTokensOf: options.windowTokensOf } : {}),
     ...(options.onContextPressure !== undefined ? { onContextPressure: options.onContextPressure } : {}),
+    ...(options.saveAgentImage !== undefined ? { saveAgentImage: options.saveAgentImage } : {}),
     // 与 assemble 同构（P5 Step 4 修复）：supersede 旧轮终答写入前拦截
     isGroupTurnStale: (p) => groups.isStale(p),
   })
@@ -968,5 +971,63 @@ describe('ContextComposer（会话引擎 v2 · P2 预算窗口）', () => {
     expect(lastPrompt).not.toContain('第1问：') // 老轮已丢（级③）
     expect(pressure.length).toBeGreaterThanOrEqual(1) // 压力信号
     expect(pressure[0]!.agentId).toBe('a1')
+  })
+})
+
+describe('agent 附图（v0.1.118 截图直发）', () => {
+  it('run 期间有截图 → 终答消息携带 attachments（呈现层）；历史回放为轻注记不重发', async () => {
+    const saved: Array<{ agentId: string; name: string }> = []
+    const IMG = { base64: 'aXNob3Q=', mime: 'image/png', width: 1280, height: 720 }
+    const screenshotTool: import('../src/index.js').Tool = {
+      spec: { name: 'computer_screenshot' },
+      execute: async () => ({ text: '已截图。截图 1:1', image: IMG }),
+    }
+    const h = makeHarness(
+      {
+        a1: [
+          { toolCalls: [{ id: 'c1', name: 'computer_screenshot', args: {} }] },
+          { text: '给你看' },
+          { text: '好的' }, // 第三步：下一轮 run——验证历史回放轻注记
+        ],
+      },
+      {
+        extraTool: screenshotTool,
+        saveAgentImage: async (agentId, image) => {
+          saved.push({ agentId, name: '截图-测试.png' })
+          return { id: 'hash1', name: '截图-测试.png', mime: image.mime, size: 100, path: `/tmp/hash1.png` }
+        },
+      },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '截图发我', nonce: 'n1' })
+    await waitIdle([a1])
+    const records = await h.transcript.readAll('a1')
+    const agentMsg = records.find((r) => r.kind === 'agent')
+    if (agentMsg === undefined) {
+      throw new Error('无 agent 记录；kinds=' + records.map((r) => r.kind).join(',') +
+        '；runs=' + h.events.filter((e) => e.type.startsWith('v1.lifecycle')).map((e) => e.type.replace('v1.lifecycle.', '') + ':' + ((e.payload as { code?: string }).code ?? '')).join('|') +
+        '；llmReqs=' + h.llms.get('a1')!.requests.length)
+    }
+    expect((agentMsg?.payload as { attachments?: unknown[] }).attachments).toHaveLength(1)
+    expect(saved[0]!.agentId).toBe('a1')
+    // 历史回放轻注记：下一轮 run 的请求里，终答 assistant 消息带「（附图：」而非图本体
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '收到', nonce: 'n2' })
+    await waitIdle([a1])
+    const msgs = h.llms.get('a1')!.requests.at(-1)!.messages
+    const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant')
+    expect(String(lastAssistant?.content)).toContain('给你看')
+    expect(String(lastAssistant?.content)).toContain('（附图：截图-测试.png）')
+  })
+
+  it('无截图的 run → 终答不带 attachments（零变化）', async () => {
+    const h = makeHarness({ a1: [{ text: '纯文本' }] }, {
+      saveAgentImage: async () => ({ id: 'x', name: 'x.png', mime: 'image/png', size: 1, path: '/tmp/x' }),
+    })
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: 'hi', nonce: 'n1' })
+    await waitIdle([a1])
+    const records = await h.transcript.readAll('a1')
+    const agentMsg = records.find((r) => r.kind === 'agent')
+    expect((agentMsg?.payload as { attachments?: unknown }).attachments).toBeUndefined()
   })
 })

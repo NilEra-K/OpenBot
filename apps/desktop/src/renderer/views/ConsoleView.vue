@@ -1861,6 +1861,20 @@ const GROUP_ICON =
                   </div>
                 </template>
 
+                <!-- agent 附图（v0.1.118 截图直发）：终答之下缩略行（user 气泡 m-atts 同款语汇） -->
+                <div v-if="unit.msgIndex !== undefined && kernel.messages[unit.msgIndex]!.attachments" class="m-atts">
+                  <template v-for="att in kernel.messages[unit.msgIndex]!.attachments" :key="att.id">
+                    <img
+                      v-if="att.mime.startsWith('image/')"
+                      class="m-att"
+                      :src="attUris[att.id]"
+                      :alt="att.name"
+                      :title="att.name"
+                      @click="attUris[att.id] !== undefined && (attPreview = { uri: attUris[att.id]!, name: att.name })"
+                    />
+                    <span v-else class="m-att-file mono" :title="att.name"><span class="m-att-badge"><FileBadge :name="att.name" /></span>{{ att.name }}</span>
+                  </template>
+                </div>
                 <!-- 最终文本（markdown）；进行中且尚无任何输出块 → 三个点占位（首 token 到达即被实况取代） -->
                 <div v-if="unit.msgIndex !== undefined" class="m-text md" :class="{ 'is-tombstoned': kernel.messages[unit.msgIndex]!.tombstoned }" v-html="renderMarkdown(kernel.messages[unit.msgIndex]!.text, mentionNames)"></div>
                 <div v-if="unit.msgIndex !== undefined && kernel.messages[unit.msgIndex]!.tombstoned" class="m-tomb-note">已移出上下文（记录保留，后续对话不再携带）</div>

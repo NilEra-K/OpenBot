@@ -112,6 +112,9 @@ export interface MessageAgentPayload {
   agentId: string
   text: string
   runId?: string
+  /** agent 附图（v0.1.118 截图直发）：run 期间最后一张净化截图随终答投递——呈现层持久
+   *  （transcript meta + attachments 本体），历史组装仅轻注记不重发（模型不重背） */
+  attachments?: AttachmentMeta[]
 }
 
 /** A2A 私聊（双侧 transcript 镜像；isRedriven 防环见 messaging） */
