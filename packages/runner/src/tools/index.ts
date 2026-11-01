@@ -592,15 +592,123 @@ function computerActionTool(
   }
 }
 
+/**
+ * computer_move：鼠标移动（只移动不点击——悬停/移位/绕行语义）。points 为按顺序
+ * 经过的一串点（1~8 个）：**整条路径一次调用一次审批**（多段绕行不要拆成多次移动）。
+ * behavior 两档：direct（缺省）=利落直达——只给终点什么都不传就是直接移动过去；
+ * human=拟人移动（自然弧线、变速、随机起手习惯如先甩一下鼠标——每次随机抽取）。
+ * 与动作族同门（接管锁 + 宿主屏审批闸 + 移动后截图）；注入走适配器 humanMove
+ * （样条连续、途经点不停顿——转圈顺滑），适配器缺席时降级普通 move（回喂如实注明）。
+ */
+function computerMoveTool(deps: ComputerToolDeps): Tool {
+  return {
+    spec: {
+      name: 'computer_move',
+      description:
+        '移动鼠标（只移动、不点击）。points 是按顺序经过的坐标点列表（1~8 个，末点停留）——' +
+        '整条路径**一次调用完成**（不要拆成多次移动）；转圈/绕行给 6~8 个圆周点路径更顺滑。' +
+        'behavior 缺省 direct=利落直达（快、近直线——一般移动用这档即可）；需要模拟真人操作时' +
+        '传 human（自然弧线、变速、随机起手习惯——如先甩一下鼠标再动，每次随机）。' +
+        '坐标按截图分辨率给出（系统自动换算）；移动后截图随回喂返回（核实悬停效果）',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          points: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 8,
+            items: {
+              type: 'object',
+              properties: {
+                x: { type: 'number', description: '横坐标（像素，截图分辨率坐标系）' },
+                y: { type: 'number', description: '纵坐标（像素）' },
+              },
+              required: ['x', 'y'],
+              additionalProperties: false,
+            },
+            description:
+              '按顺序经过的坐标点（从鼠标当前位置出发依次经过，末点停留）。' +
+              '例：移到一处 [{"x":640,"y":360}]；绕一圈再停到输入框 [{"x":900,"y":200},{"x":640,"y":520},{"x":640,"y":360}]',
+          },
+          behavior: {
+            type: 'string',
+            enum: ['direct', 'human'],
+            description: '移动风格（可选，缺省 direct）：direct=利落直达；human=拟人移动（真人操作模拟）',
+          },
+          durationMs: { type: 'number', description: '全程总时长毫秒（可选，缺省按距离自适应；上限 10000）' },
+        },
+        required: ['points'],
+        additionalProperties: false,
+      },
+    },
+    async execute(ctx, args) {
+      const boxId = requireBox(ctx)
+      const record = asRecord(args)
+      // 自纠化校验（exec 的 argv 先例）：非空点列、每点 xy 数字——回显实收 + 正确示例
+      const raw = record['points']
+      if (
+        !Array.isArray(raw) || raw.length === 0 || raw.length > 8 ||
+        raw.some((p) => typeof p !== 'object' || p === null || !Number.isFinite((p as Record<string, unknown>)['x']) || !Number.isFinite((p as Record<string, unknown>)['y']))
+      ) {
+        const received = JSON.stringify(raw)?.slice(0, 200) ?? '（无）'
+        throw new KernelError(
+          ToolErrorCodes.TOOL_ARGS_INVALID,
+          `参数 points 必须是 1~8 个 {x,y} 坐标点数组（收到：${received}）。` +
+            `例：移到一处 [{"x":640,"y":360}]；绕行 [{"x":900,"y":200},{"x":640,"y":360}]`,
+        )
+      }
+      const points = (raw as Array<Record<string, unknown>>).map((p) => ({ x: numArg(p['x']), y: numArg(p['y']) }))
+      const behaviorRaw = record['behavior']
+      if (behaviorRaw !== undefined && behaviorRaw !== 'direct' && behaviorRaw !== 'human') {
+        throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, `参数 behavior 只接受 direct/human（收到：${JSON.stringify(behaviorRaw)}）`)
+      }
+      const dRaw = record['durationMs']
+      const durationMs =
+        typeof dRaw === 'number' && Number.isFinite(dRaw) ? Math.min(Math.max(Math.trunc(dRaw), 0), 10_000) : undefined
+      // 载体级动作闸 + 接管锁：与动作族同款（移动也是输入注入主权面；一次调用一次审批）
+      if (deps.actionGate !== undefined && deps.actionGate.appliesTo(boxId)) {
+        const r = await requestToolApproval(
+          deps.actionGate.gate,
+          ctx,
+          'computer_move',
+          deps.actionGate.reason?.(boxId),
+        )
+        if (!r.approved) return r.denial
+      }
+      await deps.lock?.waitTurn()
+      const dest = points[points.length - 1]!
+      const via = points.length > 1 ? `经过 ${points.length} 个点` : ''
+      let note: string
+      if (deps.screen.humanMove !== undefined) {
+        await deps.screen.humanMove(
+          boxId,
+          points,
+          durationMs !== undefined || behaviorRaw !== undefined
+            ? { ...(behaviorRaw !== undefined ? { behavior: behaviorRaw } : {}), ...(durationMs !== undefined ? { durationMs } : {}) }
+            : undefined,
+        )
+        note =
+          behaviorRaw === 'human'
+            ? `鼠标已沿拟人轨迹${via ? `（${via}）` : ''}移动到 (${dest.x}, ${dest.y})`
+            : `鼠标已${via ? `（${via}）` : ''}移动到 (${dest.x}, ${dest.y})`
+      } else {
+        // 降级普通 move：直达末点（多途经点无瞬移表达面——如实注明）
+        await deps.screen.act(boxId, { kind: 'move', x: dest.x, y: dest.y })
+        note = `鼠标已移动到 (${dest.x}, ${dest.y})（本载体不支持人味轨迹，已直接移动）`
+      }
+      await sleep(deps.settleMs ?? 500)
+      const image = await toToolImage(await deps.screen.capture(boxId), deps.sanitizeImage)
+      return { text: `${note}（见移动后截图）`, image }
+    },
+  }
+}
+
 /** computer 工具族全套（装配层按注册门条件注册） */
 export function computerTools(deps: ComputerToolDeps): Tool[] {
-  const num = (v: unknown): number => {
-    const n = typeof v === 'number' ? v : Number(v)
-    if (!Number.isFinite(n)) throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, '坐标必须是数字')
-    return Math.round(n)
-  }
+  const num = numArg
   return [
     computerScreenshotTool(deps),
+    computerMoveTool(deps),
     computerActionTool(deps, { name: 'computer_click', description: '点击沙箱桌面坐标 (x, y)——左键单击', argsSchema: { type: 'object', properties: { x: { type: 'number', description: '横坐标（像素，截图分辨率坐标系）' }, y: { type: 'number', description: '纵坐标（像素）' } }, required: ['x', 'y'], additionalProperties: false } }, (a) =>
       ({ kind: 'click', button: 1, x: num(a['x']), y: num(a['y']) }),
     ),
@@ -629,4 +737,11 @@ export function computerTools(deps: ComputerToolDeps): Tool[] {
 function requireText(v: unknown): string {
   if (typeof v !== 'string' || v === '') throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, '参数必须是非空字符串')
   return v
+}
+
+/** 坐标参数校验（动作族与 move 共用）：数字（或可强转）→ 取整；否则稳定码报错 */
+function numArg(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n)) throw new KernelError(ToolErrorCodes.TOOL_ARGS_INVALID, '坐标必须是数字')
+  return Math.round(n)
 }

@@ -15,7 +15,9 @@
  */
 import { KernelError } from '@openbot/core'
 import { ScreenErrorCodes } from './index.js'
+import { humanTrackPath } from './human-track.js'
 import type {
+  HumanMoveOptions,
   ScreenAction,
   ScreenCapture,
   ScreenCaptureOptions,
@@ -25,7 +27,7 @@ import type {
   ScreenStreamSession,
 } from './index.js'
 import type { ScreenControlHost } from './index.js'
-import { HOST_INJECT_SCRIPT, attachWinChannel, coalesceMoves, psEncodeCommand, serializeHostActionAbs } from './win-protocol.js'
+import { HOST_INJECT_SCRIPT, attachWinChannel, coalesceMoves, psEncodeCommand, serializeHostActionAbs, serializeHostTrackAbs } from './win-protocol.js'
 import type { WinChannel } from './win-protocol.js'
 
 /** 截图契约宽（runner 工具族 capture 缺省档——act 换算的分母，与 X11/宿主屏幕同一契约） */
@@ -186,6 +188,25 @@ export class SshWindowsScreenControl implements ScreenControl {
             : action
     channel.write(serializeHostActionAbs(scaled, geo, 'agent'))
     await channel.waitForAcks(this.#actAckTimeoutMs) // SendInput 真实完成才返回（错误可见 + 往返可测）
+  }
+
+  async humanMove(boxId: string, points: Array<{ x: number; y: number }>, opts: HumanMoveOptions = {}): Promise<void> {
+    if (points.length === 0) return
+    // 与宿主屏幕整屏模式同构（无窗口绑定）：pos 查询 from（屏幕绝对像素）→ 契约换算 →
+    // 绝对域逐段生成 → s|/m| 帧行一次写入（PS 侧节奏——ssh 网络抖动免疫）
+    const channel = await this.#ensureChannel(boxId)
+    const geo = await this.geometry(boxId)
+    if (geo === null) {
+      throw new KernelError(ScreenErrorCodes.SCREEN_ACT_FAILED, '目标屏幕几何不可用（桌面会话未登录？）')
+    }
+    channel.write(['pos'])
+    const from = await channel.readPos(this.#actAckTimeoutMs)
+    const scale = geo.width > CAPTURE_CONTRACT_WIDTH ? geo.width / CAPTURE_CONTRACT_WIDTH : 1
+    const absPoints = points.map((p) => ({ x: p.x * scale, y: p.y * scale }))
+    for (const p of absPoints) serializeHostActionAbs({ kind: 'move', x: p.x, y: p.y }, geo, 'agent') // 可达性验证
+    const frames = humanTrackPath(from, absPoints, opts)
+    channel.write(serializeHostTrackAbs(frames, geo))
+    await channel.waitForAcks(frames.reduce((a, f) => a + f.dtMs, 0) + this.#actAckTimeoutMs)
   }
 
   supportsStream(): boolean {

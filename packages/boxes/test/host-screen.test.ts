@@ -5,10 +5,18 @@
  * 全程替身 spawner/runner/bridge——零真实进程、零真实屏幕。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { HOST_INJECT_SCRIPT, coalesceMoves, keyToVk, serializeHostAction } from '../src/screen/win-protocol.js'
+import {
+  HOST_INJECT_SCRIPT,
+  attachWinChannel,
+  coalesceMoves,
+  keyToVk,
+  serializeHostAction,
+  serializeHostTrackAbs,
+} from '../src/screen/win-protocol.js'
 import { HOST_SCREEN_BOX_ID, HostScreenControl } from '../src/screen/host-screen.js'
 import { ScreenControlRouter } from '../src/screen/index.js'
 import { HostScreenBoxBackend } from '../src/backend-hostscreen/index.js'
+import { humanTrack } from '../src/screen/human-track.js'
 import type { PipeProcess } from '../src/procexec/index.js'
 import type { ScreenAction, ScreenControl, ScreenGeometry } from '../src/screen/index.js'
 
@@ -125,6 +133,53 @@ describe('注入脚本形状（argv 锁死的脚本对位）', () => {
     expect(HOST_INJECT_SCRIPT).toContain("'m' { [W.Inj]::Move")
     expect(HOST_INJECT_SCRIPT).toContain("'kdb' { [W.Inj]::ButtonDown")
   })
+
+  it('人味协议分支：s（PS 侧节奏）与 pos（光标查询）在场', () => {
+    expect(HOST_INJECT_SCRIPT).toContain("'s' { [System.Threading.Thread]::Sleep")
+    expect(HOST_INJECT_SCRIPT).toContain("'pos' { [W.Inj]::CursorPos")
+    expect(HOST_INJECT_SCRIPT).toContain('GetCursorPos')
+  })
+})
+
+describe('serializeHostTrackAbs + readPos（人味轨迹的协议面）', () => {
+  it('帧序列 → s|/m| 行交替（每帧前插节奏行）；user 模式钳制越界帧', () => {
+    const lines = serializeHostTrackAbs(
+      [
+        { x: 10, y: 20, dtMs: 16 },
+        { x: -50, y: 2000, dtMs: 20 }, // 越界（1920×1080）→ 像素域钳到 0/1079 再归一化
+        { x: 960, y: 540, dtMs: 16 },
+      ],
+      GEO,
+    )
+    const norm = (px: number, span: number): number => Math.min(65535, Math.max(0, Math.round((px * 65536) / span)))
+    expect(lines).toEqual([
+      's|16',
+      `m|${norm(10, 1920)}|${norm(20, 1080)}`,
+      's|20',
+      `m|${norm(0, 1920)}|${norm(1079, 1080)}`,
+      's|16',
+      `m|${norm(960, 1920)}|${norm(540, 1080)}`,
+    ])
+  })
+
+  it('attachWinChannel.readPos：P|x|y 回包解析；坏行不误 resolve（超时抛错）', async () => {
+    const pipe = {
+      write: () => {},
+      onData: (cb: (c: Uint8Array) => void) => {
+        pipe.emit = (s: string) => cb(new TextEncoder().encode(s))
+      },
+      onExit: () => {},
+      stderrTail: () => '',
+      emit: (_s: string) => {},
+    }
+    const ch = attachWinChannel(pipe)
+    const p = ch.readPos(200)
+    pipe.emit('P|123|456\n')
+    await expect(p).resolves.toEqual({ x: 123, y: 456 })
+    const bad = ch.readPos(50)
+    pipe.emit('P|abc|def\n')
+    await expect(bad).rejects.toMatchObject({ code: 'SCREEN_ACT_FAILED', message: expect.stringContaining('光标位置查询超时') })
+  })
 })
 
 describe('HostScreenControl（替身进程 + 替身桥）', () => {
@@ -160,6 +215,69 @@ describe('HostScreenControl（替身进程 + 替身桥）', () => {
     const ctrl = new HostScreenControl({ bridge: bridgeOf(null), spawner })
     await expect(ctrl.act(HOST_SCREEN_BOX_ID, { kind: 'key', key: 'Return' })).rejects.toMatchObject({
       code: 'SCREEN_ACT_FAILED',
+    })
+  })
+
+  it('humanMove：pos 查询 from → 契约换算 → s|/m| 交替行（终点对齐归一化坐标）→ ack 清零完成', async () => {
+    const { procs, spawner } = spawnerOf()
+    const ctrl = new HostScreenControl({ bridge: bridgeOf(), spawner, readyTimeoutMs: 500 })
+    const done = ctrl.humanMove(HOST_SCREEN_BOX_ID, [{ x: 640, y: 360 }], { seed: 42, durationMs: 600 })
+    await new Promise((r) => setTimeout(r, 10))
+    const proc = procs[0]
+    proc.emit('ready\n')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(proc.written[0]).toBe('ping\n') // 通道活性探针（既有机制）
+    proc.emit('pong\nok\n')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(proc.written[1]).toBe('pos\n') // from 事实源先行
+    proc.emit('P|100|80\nok\n') // P| 回包 + pos 行 ack
+    await new Promise((r) => setTimeout(r, 10))
+    const lines = (proc.written[2] ?? '').split('\n').filter((l) => l !== '')
+    expect(lines.length).toBeGreaterThanOrEqual(16) // 非瞬移——帧序在场
+    for (let i = 0; i < lines.length; i++) {
+      expect(lines[i].startsWith(i % 2 === 0 ? 's|' : 'm|')).toBe(true) // 节奏行/位移行交替
+    }
+    // 终点对齐：to 640×1.5=960 / 360×1.5=540（1280 契约 → 1920 真实）
+    const norm = (px: number, span: number): number => Math.min(65535, Math.max(0, Math.round((px * 65536) / span)))
+    expect(lines[lines.length - 1]).toBe(`m|${norm(960, 1920)}|${norm(540, 1080)}`)
+    proc.emit(`${'ok\n'.repeat(lines.length)}`)
+    await expect(done).resolves.toBeUndefined()
+  })
+
+  it('humanMove 窗口绑定：rect 现查 → to 窗口本地换算 + 原点偏移（终点 = 归一化绝对坐标）', async () => {
+    const { procs, spawner } = spawnerOf()
+    const ctrl = new HostScreenControl({ bridge: bridgeOf(), spawner, readyTimeoutMs: 500, windowTitle: '记事本' })
+    const done = ctrl.humanMove(HOST_SCREEN_BOX_ID, [{ x: 320, y: 180 }], { seed: 1, durationMs: 400 })
+    await new Promise((r) => setTimeout(r, 10))
+    const proc = procs[0]
+    proc.emit('ready\n')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(proc.written[0]).toBe('ping\n')
+    proc.emit('pong\nok\n')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(proc.written[1]).toBe('pos\n')
+    proc.emit('P|100|50\nok\n')
+    await new Promise((r) => setTimeout(r, 10))
+    expect((proc.written[2] ?? '').startsWith('rect|')).toBe(true)
+    proc.emit('R|100|50|640|480\nok\n') // 窗口 640×480 → scale=1（≤1280 契约）
+    await new Promise((r) => setTimeout(r, 10))
+    const lines = (proc.written[3] ?? '').split('\n').filter((l) => l !== '')
+    // to 本地 (320,180) → 绝对 = 原点 (100,50) + 本地 = (420,230)
+    const norm = (px: number, span: number): number => Math.min(65535, Math.max(0, Math.round((px * 65536) / span)))
+    expect(lines[lines.length - 1]).toBe(`m|${norm(420, 1920)}|${norm(230, 1080)}`)
+    proc.emit(`${'ok\n'.repeat(lines.length)}`)
+    await expect(done).resolves.toBeUndefined()
+  })
+
+  it('humanMove：P| 回包超时 → SCREEN_ACT_FAILED（光标事实源僵死可见）', async () => {
+    const { procs, spawner } = spawnerOf()
+    const ctrl = new HostScreenControl({ bridge: bridgeOf(), spawner, readyTimeoutMs: 500, actAckTimeoutMs: 60 })
+    const done = ctrl.humanMove(HOST_SCREEN_BOX_ID, [{ x: 640, y: 360 }])
+    await new Promise((r) => setTimeout(r, 10))
+    procs[0].emit('ready\n')
+    await expect(done).rejects.toMatchObject({
+      code: 'SCREEN_ACT_FAILED',
+      message: expect.stringContaining('光标位置查询超时'),
     })
   })
 
@@ -281,6 +399,20 @@ describe('ScreenControlRouter（按 boxId 分发——消费方零载体感知�
     const spy = vi.spyOn(host, 'dispose' as never)
     router.dispose()
     expect(spy).toHaveBeenCalled()
+  })
+
+  it('humanMove 透传：适配器在场转发；缺席适配器如实 BOX_UNSUPPORTED（未来载体护栏）', async () => {
+    const withMove = {
+      ...fakeAdapter('m'),
+      humanMove: async (boxId: string, pts: Array<{ x: number; y: number }>) => `${boxId}:${pts.map((p) => `${p.x},${p.y}`).join('>')}`,
+    }
+    const bare = fakeAdapter('bare')
+    const router = new ScreenControlRouter({
+      resolve: (boxId) => (boxId === 'box-with' ? (withMove as ScreenControl) : bare),
+      adapters: [withMove, bare],
+    })
+    await expect(router.humanMove('box-with', [{ x: 5, y: 6 }, { x: 7, y: 8 }])).resolves.toBe('box-with:5,6>7,8')
+    await expect(router.humanMove('box-bare', [{ x: 5, y: 6 }])).rejects.toMatchObject({ code: 'BOX_UNSUPPORTED' })
   })
 })
 

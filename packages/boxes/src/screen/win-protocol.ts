@@ -182,6 +182,20 @@ export function coalesceMoves(actions: ScreenAction[]): ScreenAction[] {
   return out
 }
 
+/**
+ * 人味轨迹帧序列 → PS 行序列（computer_move）：每帧前插 `s|dt`（PS 侧 Thread.Sleep——
+ * 节奏免疫 ssh 网络抖动）+ `m|x|y`（user 模式钳制——侧偏中间帧可能贴边出屏，那是生成器
+ * 的中间态不是模型坐标错误，钳制兜底；目标 to 本身的越界拒绝在调用侧先行验证）。
+ */
+export function serializeHostTrackAbs(frames: Array<{ x: number; y: number; dtMs: number }>, span: ScreenGeometry): string[] {
+  const lines: string[] = []
+  for (const f of frames) {
+    lines.push(`s|${Math.max(0, Math.trunc(f.dtMs))}`)
+    lines.push(...serializeHostActionAbs({ kind: 'move', x: f.x, y: f.y }, span, 'user'))
+  }
+  return lines
+}
+
 // ---------------------------------------------------------------------------
 // PowerShell 注入脚本（常驻 stdin 行循环；Add-Type 首编译由常驻摊薄——传输无关：
 // 本机 spawn argv 直传 / 机内 -EncodedCommand 单 token）
@@ -207,6 +221,8 @@ export const HOST_INJECT_CS = [
   '    const uint LD = 0x0002, LU = 0x0004, RD = 0x0008, RU = 0x0010, MD = 0x0020, MU = 0x0040;',
   '    const uint KUP = 0x0002, UNI = 0x0004;',
   '    [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }',
+  '    [StructLayout(LayoutKind.Sequential)] struct PT { public int X, Y; }',
+  '    [DllImport("user32.dll")] static extern bool GetCursorPos(out PT p);',
   '    delegate bool EnumProc(IntPtr h, IntPtr l);',
   '    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);',
   '    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);',
@@ -227,14 +243,16 @@ export const HOST_INJECT_CS = [
   '    static string Enc(string s) { return Convert.ToBase64String(Encoding.UTF8.GetBytes(s)); }',
   '    public static void ListWindows() { EnumWindows((h, l) => { if (!IsWindowVisible(h)) return true; int n = GetWindowTextLength(h); if (n <= 0) return true; var sb = new StringBuilder(n + 1); GetWindowText(h, sb, sb.Capacity); RECT r; if (!GetWindowRect(h, out r)) return true; Console.Out.WriteLine("W|" + h.ToString() + "|" + r.L + "|" + r.T + "|" + (r.R - r.L) + "|" + (r.B - r.T) + "|" + Enc(sb.ToString())); return true; }, IntPtr.Zero); Console.Out.WriteLine("W|end"); }',
   '    public static string FindWindowRect(string title) { IntPtr fh = IntPtr.Zero; EnumWindows((h, l) => { if (!IsWindowVisible(h)) return true; int n = GetWindowTextLength(h); if (n <= 0) return true; var sb = new StringBuilder(n + 1); GetWindowText(h, sb, sb.Capacity); if (sb.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) { fh = h; return false; } return true; }, IntPtr.Zero); if (fh == IntPtr.Zero) return null; RECT r; if (!GetWindowRect(fh, out r)) return null; return r.L + "|" + r.T + "|" + (r.R - r.L) + "|" + (r.B - r.T); }',
+  '    public static void CursorPos() { PT p; if (!GetCursorPos(out p)) throw new Exception("GetCursorPos failed"); Console.Out.WriteLine("P|" + p.X + "|" + p.Y); }',
   '  }',
   '}',
 ].join('\n')
 
 /** 注入脚本（导出供单测锁形状）。协议行——请求：ping / m|nx|ny / c|btn|count|interval /
  *  w|delta|count|interval / kd|vk ku|vk kp|vk / kdb|btn kub|btn / t|b64|delayMs /
- *  wlist / rect|b64。应答：ready / ok / err / W|hwnd|x|y|w|h|b64 … W|end / R|… 或 R|-。
- *  每条请求行处理完回一行 ok（err=异常，ack 照减放行、异常文本走 stderr）。 */
+ *  wlist / rect|b64 / s|ms（帧间节奏——人味轨迹的 PS 侧 sleep，免疫 ssh 网络抖动）/
+ *  pos（当前光标位置查询）。应答：ready / ok / err / P|x|y / W|hwnd|x|y|w|h|b64 … W|end /
+ *  R|… 或 R|-。每条请求行处理完回一行 ok（err=异常，ack 照减放行、异常文本走 stderr）。 */
 export const HOST_INJECT_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "Add-Type -TypeDefinition @'\n" + HOST_INJECT_CS + "\n'@",
@@ -248,6 +266,8 @@ export const HOST_INJECT_SCRIPT = [
   '    switch ($p[0]) {',
   "      'ping' { [Console]::Out.WriteLine('pong') }",
   "      'm' { [W.Inj]::Move([int]$p[1], [int]$p[2]) }",
+  "      's' { [System.Threading.Thread]::Sleep([int]$p[1]) }",
+  "      'pos' { [W.Inj]::CursorPos() }",
   "      'c' { [W.Inj]::ClickAt([uint32]$p[1], [int]$p[2], [int]$p[3]) }",
   "      'w' { [W.Inj]::Wheel([int]$p[1], [int]$p[2], [int]$p[3]) }",
   "      'kp' { [W.Inj]::Tap([uint16]$p[1]) }",
@@ -299,6 +319,8 @@ export interface WinChannel {
   readWindowList(timeoutMs: number): Promise<HostWindowInfo[]>
   /** 等待 rect 回包（R|x|y|w|h / R|-；null = 窗口未在场） */
   readRect(timeoutMs: number): Promise<WindowRect | null>
+  /** 等待光标位置回包（P|x|y——人味轨迹的 from 事实源；超时/通道退出抛错） */
+  readPos(timeoutMs: number): Promise<{ x: number; y: number }>
 }
 
 /** 窗口矩形（物理像素，屏幕绝对坐标） */
@@ -322,6 +344,7 @@ export function attachWinChannel(pipe: WinPipeFace, hooks?: { onReady?: () => vo
   let windowItems: HostWindowInfo[] | null = null
   let windowWake: (() => void) | null = null
   let rectWake: ((r: WindowRect | null) => void) | null = null
+  let posWake: ((p: { x: number; y: number }) => void) | null = null
   let buffer = ''
   pipe.onData((chunk) => {
     buffer += new TextDecoder('utf8').decode(chunk)
@@ -372,6 +395,11 @@ export function attachWinChannel(pipe: WinPipeFace, hooks?: { onReady?: () => vo
           rectWake?.([x, y, w, h].every((n) => Number.isFinite(n)) && w > 0 && h > 0 ? { x, y, width: w, height: h } : null)
         }
         rectWake = null
+      } else if (line.startsWith('P|')) {
+        const seg = line.split('|')
+        const [x, y] = [Number(seg[1]), Number(seg[2])]
+        if ([x, y].every((n) => Number.isFinite(n))) posWake?.({ x, y })
+        posWake = null
       }
       idx = buffer.indexOf('\n')
     }
@@ -427,6 +455,17 @@ export function attachWinChannel(pipe: WinPipeFace, hooks?: { onReady?: () => vo
         rectWake = (r) => {
           clearTimeout(timer)
           resolve(r)
+        }
+      }),
+    readPos: (timeoutMs: number) =>
+      new Promise<{ x: number; y: number }>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          posWake = null
+          reject(new KernelError(ScreenErrorCodes.SCREEN_ACT_FAILED, `光标位置查询超时（${timeoutMs}ms）`))
+        }, timeoutMs)
+        posWake = (p) => {
+          clearTimeout(timer)
+          resolve(p)
         }
       }),
   }

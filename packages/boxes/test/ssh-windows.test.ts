@@ -246,4 +246,29 @@ describe('SshWindowsScreenControl（替身 host）', () => {
     s.close()
     expect(pipes[0]!.killed).toBe(true)
   })
+
+  it('humanMove：pos 查询 from → 契约换算 → s|/m| 交替行（终点归一化对齐）→ ack 清零完成', async () => {
+    const { host, pipes } = hostOf()
+    const ctrl = new SshWindowsScreenControl({ host, execTimeoutMs: 500, actAckTimeoutMs: 500 })
+    const done = ctrl.humanMove('win-h', [{ x: 640, y: 360 }], { seed: 42, durationMs: 600 })
+    await new Promise((r) => setTimeout(r, 10))
+    const pipe = pipes[0]!
+    pipe.emit('ready\n')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(pipe.written[0]).toBe('ping\n') // 通道探针（既有机制）
+    pipe.emit('pong\nok\n')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(pipe.written[1]).toBe('pos\n')
+    pipe.emit('P|100|80\nok\n')
+    await new Promise((r) => setTimeout(r, 10))
+    const lines = (pipe.written[2] ?? '').split('\n').filter((l) => l !== '')
+    expect(lines.length).toBeGreaterThanOrEqual(16)
+    for (let i = 0; i < lines.length; i++) {
+      expect(lines[i].startsWith(i % 2 === 0 ? 's|' : 'm|')).toBe(true)
+    }
+    const norm = (px: number, span: number): number => Math.min(65535, Math.max(0, Math.round((px * 65536) / span)))
+    expect(lines[lines.length - 1]).toBe(`m|${norm(960, 1920)}|${norm(540, 1080)}`) // 640×1.5 / 360×1.5
+    pipe.emit(`${'ok\n'.repeat(lines.length)}`)
+    await expect(done).resolves.toBeUndefined()
+  })
 })

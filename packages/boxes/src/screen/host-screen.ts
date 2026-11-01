@@ -29,9 +29,12 @@ import {
   attachWinChannel,
   coalesceMoves,
   serializeHostActionAbs,
+  serializeHostTrackAbs,
 } from './win-protocol.js'
 import type { HostWindowInfo, WinChannel, WindowRect } from './win-protocol.js'
+import { humanTrackPath } from './human-track.js'
 import type {
+  HumanMoveOptions,
   ScreenAction,
   ScreenCapture,
   ScreenCaptureOptions,
@@ -295,6 +298,57 @@ export class HostScreenControl implements ScreenControl {
             : action
     channel.write(serializeHostActionAbs(scaled, geo, 'agent'))
     await channel.waitForAcks(this.#actAckTimeoutMs) // SendInput 真实完成才返回（错误可见 + 往返可测）
+  }
+
+  async humanMove(
+    _boxId: string,
+    points: Array<{ x: number; y: number }>,
+    opts: HumanMoveOptions = {},
+  ): Promise<void> {
+    if (points.length === 0) return
+    const channel = await this.#ensureChannel()
+    // from 事实源：PS 侧 GetCursorPos（屏幕绝对真实像素）——人味轨迹必须从当前位置连续出发
+    channel.write(['pos'])
+    const from = await channel.readPos(this.#actAckTimeoutMs)
+
+    if (this.#windowTitle !== null) {
+      // 窗口模式：points 截图坐标（窗口本地 1280 契约）→ 本地验证（agent 拒——模型错误可见）
+      // → 窗口本地真实像素 → 屏幕绝对；from 已是绝对。轨迹统一在绝对域生成（人在真实屏幕上走）
+      const rect = await this.#windowRect()
+      if (rect === null) this.#windowGone()
+      const screen = this.#bridge.geometry()
+      if (screen === null) {
+        throw new KernelError(ScreenErrorCodes.SCREEN_ACT_FAILED, '宿主屏幕几何不可用（桌面会话未就绪）')
+      }
+      const scale = rect.width > CAPTURE_CONTRACT_WIDTH ? rect.width / CAPTURE_CONTRACT_WIDTH : 1
+      const absPoints = points.map((p) => {
+        const local = localOf(p.x, p.y, rect, 'agent')
+        return { x: rect.x + local.x * scale, y: rect.y + local.y * scale }
+      })
+      // 全部途经点可达性验证（越界抛——任一点给错都该可见）
+      for (const p of absPoints) serializeHostActionAbs({ kind: 'move', x: p.x, y: p.y }, screen, 'agent')
+      const frames = humanTrackPath(from, absPoints, opts)
+      channel.write(serializeHostTrackAbs(frames, screen))
+      await channel.waitForAcks(this.#trackAckTimeoutMs(frames))
+      return
+    }
+
+    // 整屏模式：截图坐标 → 真实像素（1280 契约换算）；轨迹在绝对（=整屏本地）域生成
+    const geo = this.#bridge.geometry()
+    if (geo === null) {
+      throw new KernelError(ScreenErrorCodes.SCREEN_ACT_FAILED, '宿主屏幕几何不可用（桌面会话未就绪）')
+    }
+    const scale = geo.width > CAPTURE_CONTRACT_WIDTH ? geo.width / CAPTURE_CONTRACT_WIDTH : 1
+    const absPoints = points.map((p) => ({ x: p.x * scale, y: p.y * scale }))
+    for (const p of absPoints) serializeHostActionAbs({ kind: 'move', x: p.x, y: p.y }, geo, 'agent') // 可达性验证
+    const frames = humanTrackPath(from, absPoints, opts)
+    channel.write(serializeHostTrackAbs(frames, geo))
+    await channel.waitForAcks(this.#trackAckTimeoutMs(frames))
+  }
+
+  /** 轨迹注入的 ack 等待预算：帧 sleep 总和（PS 侧节奏）+ 处理余量（actAckTimeoutMs） */
+  #trackAckTimeoutMs(frames: Array<{ dtMs: number }>): number {
+    return frames.reduce((a, f) => a + f.dtMs, 0) + this.#actAckTimeoutMs
   }
 
   supportsStream(): boolean {

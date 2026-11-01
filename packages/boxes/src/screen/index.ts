@@ -15,6 +15,8 @@
  */
 import { KernelError } from '@openbot/core'
 import type { ExecResult, ExecSpec, PipeSession, PipeSpec } from '../types.js'
+import { humanTrackPath } from './human-track.js'
+import type { TrackFrame } from './human-track.js'
 
 export const ScreenErrorCodes = {
   SCREEN_CAPTURE_FAILED: 'SCREEN_CAPTURE_FAILED',
@@ -75,6 +77,16 @@ export interface ScreenStreamOptions {
   codec?: ScreenStreamCodec
 }
 
+/** 人味移动参数（computer_move）：points 由模型给「到哪」，其余全可选——什么都不传
+ *  （单点 + 无 behavior）= 利落直达（直接移动过去，不强加人味）。behavior/轨迹细节由
+ *  内核决定；seed 仅测试注入（确定性断言），生产缺省随机 */
+export interface HumanMoveOptions {
+  /** 行为模式：direct=利落直达（缺省）；human=拟人移动（花活/弧线/变速——每次随机抽取） */
+  behavior?: 'direct' | 'human'
+  durationMs?: number
+  seed?: number
+}
+
 /** 截图参数（缺省=agent 回喂档：1280 宽 / q80 / 含光标——token 纪律） */
 export interface ScreenCaptureOptions {
   maxWidth?: number
@@ -95,6 +107,13 @@ export interface ScreenControl {
    * 输入动作（agent 路径——坐标按**截图坐标**语义，适配器内部换算到真实屏幕）
    */
   act(boxId: string, action: ScreenAction): Promise<void>
+  /**
+   * 人味移动（computer_move）：从**当前光标位置**出发依次经过 points 各点（每段人类轨迹
+   * ——贝塞尔侧偏+变速+段端自然减速）、末点停留；整条路径一次注入（一次审批语义）。
+   * points 为空 = 无动作。缺席 = 该载体不支持（调用方降级普通 move）。可选方法：
+   * 测试替身/未来适配器零负担。
+   */
+  humanMove?(boxId: string, points: Array<{ x: number; y: number }>, opts?: HumanMoveOptions): Promise<void>
   /**
    * 实况采集常驻会话（单屏清场与孤儿补刀内聚适配器；几何查询失败落 1920x1080 兜底放行）
    */
@@ -175,6 +194,27 @@ export function serializeScreenAction(action: ScreenAction, scale: number | null
     case 'type':
       return `xdotool type --delay ${action.delayMs ?? 0} -- ${shQuote(action.text)}`
   }
+}
+
+/**
+ * 人味轨迹帧序列 → 单条 sh 命令串（computer_move 的 X11 注入形态）：逐帧 `xdotool
+ * mousemove` + `sleep`（busybox/coreutils 都支持小数秒）——**单次 exec** 完成全部帧
+ * （逐帧 act = 逐帧 exec 往返，帧率节奏全毁）。帧坐标须已是真实屏幕坐标（humanMove 侧
+ * 对 from/to 换算后生成——本函数只透传，scale 供未换算帧的调用方使用）；X 服务器天然把
+ * 越界坐标钳到屏内——侧偏中间帧无需额外钳制。
+ */
+export function serializeHumanTrack(frames: TrackFrame[], scale: number | null): string {
+  const s = scale ?? 1
+  return frames
+    .map((f) => `xdotool mousemove ${Math.round(f.x * s)} ${Math.round(f.y * s)}; sleep ${(f.dtMs / 1000).toFixed(3)}`)
+    .join('; ')
+}
+
+/** getmouselocation 输出解析（`x:640 y:512 screen:0 window:…`——真实屏幕坐标） */
+function parseMouseLocation(stdout: string): { x: number; y: number } | null {
+  const m = /^x:(-?\d+)\s+y:(-?\d+)\s/.exec(stdout.trim())
+  if (m === null) return null
+  return { x: Number(m[1]), y: Number(m[2]) }
 }
 
 /** 采集进程 pid 记档（kill 补刀依据；单屏纪律下每容器一个固定名足够） */
@@ -286,6 +326,36 @@ export class X11ScreenControl implements ScreenControl {
     })
     if (r.exitCode !== 0) {
       throw new KernelError(ScreenErrorCodes.SCREEN_ACT_FAILED, `xdotool 失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
+    }
+  }
+
+  async humanMove(boxId: string, points: Array<{ x: number; y: number }>, opts: HumanMoveOptions = {}): Promise<void> {
+    if (points.length === 0) return
+    const scale = (await this.#scaleOf(boxId)) ?? 1
+    const absPoints = points.map((p) => ({ x: p.x * scale, y: p.y * scale }))
+    // from 事实源：真实屏幕坐标（与换算后的 points 同域）；查询失败降级 from=首点——首段
+    // 距离 <1px 退化单帧直达，路径从首点正常开始（当前位置未知时不瞎猜起点瞬跳）
+    let from = absPoints[0]!
+    try {
+      const r = await this.#host.exec(boxId, {
+        command: ['xdotool', 'getmouselocation'],
+        timeoutMs: 5_000,
+        env: { DISPLAY: this.#display },
+      })
+      if (r.exitCode === 0) from = parseMouseLocation(r.stdout) ?? from
+    } catch {
+      // 查询通道异常：同上降级
+    }
+    const frames = humanTrackPath(from, absPoints, opts)
+    const totalMs = frames.reduce((a, f) => a + f.dtMs, 0)
+    const r = await this.#host.exec(boxId, {
+      command: ['sh', '-c', serializeHumanTrack(frames, null)],
+      // 多段路径时长可长（8 段最坏 ~11s）——预算随总时长 + shell 开销余量
+      timeoutMs: totalMs + 6_000,
+      env: { DISPLAY: this.#display },
+    })
+    if (r.exitCode !== 0) {
+      throw new KernelError(ScreenErrorCodes.SCREEN_ACT_FAILED, `人味移动失败（exit ${r.exitCode}）：${r.stderr.trim()}`)
     }
   }
 
@@ -455,6 +525,16 @@ export class ScreenControlRouter implements ScreenControl {
 
   act(boxId: string, action: ScreenAction): Promise<void> {
     return this.#resolve(boxId).act(boxId, action)
+  }
+
+  humanMove(boxId: string, points: Array<{ x: number; y: number }>, opts?: HumanMoveOptions): Promise<void> {
+    const adapter = this.#resolve(boxId)
+    if (adapter.humanMove === undefined) {
+      // 如实拒绝（调用方工具层的降级判据是 humanMove 缺席——Router 在场但适配器没实现的
+      // 组合：X11 恒有、宿主屏恒有，此分支实际是未来新适配器的护栏）
+      return Promise.reject(new KernelError('BOX_UNSUPPORTED', '该载体的桌面控制适配器不支持人味移动'))
+    }
+    return adapter.humanMove(boxId, points, opts)
   }
 
   stream(boxId: string, opts?: ScreenStreamOptions): Promise<ScreenStreamSession> {

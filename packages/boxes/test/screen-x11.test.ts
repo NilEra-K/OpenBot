@@ -6,7 +6,7 @@
  * 这些断言原散布在 runner/computer-tools 与 coordinator/gui-stream 测试——随命令上收适配器。
  */
 import { describe, expect, it } from 'vitest'
-import { ScreenErrorCodes, X11ScreenControl, probeX11Toolset, serializeScreenAction } from '../src/screen/index.js'
+import { ScreenErrorCodes, X11ScreenControl, probeX11Toolset, serializeHumanTrack, serializeScreenAction } from '../src/screen/index.js'
 import type { ScreenAction, ScreenControlHost } from '../src/screen/index.js'
 import type { ExecResult, ExecSpec, PipeSession, PipeSpec } from '../src/types.js'
 
@@ -120,6 +120,77 @@ describe('X11ScreenControl 几何与坐标换算', () => {
     await expect(screen.act('box-1', { kind: 'key', key: 'Return' })).rejects.toMatchObject({
       code: ScreenErrorCodes.SCREEN_ACT_FAILED,
     })
+  })
+})
+
+describe('humanMove（人味移动——X11 注入形态）', () => {
+  it('getmouselocation 查 from（真实像素）→ 契约换算 → 单次 exec 逐帧 mousemove+sleep；途经点按序、末帧=末点×scale', async () => {
+    const { host, execs } = fakeHost((spec) => {
+      if (spec.command.includes('getdisplaygeometry')) return { ...OK, stdout: '1920 1080' }
+      if (spec.command[0] === 'xdotool' && spec.command[1] === 'getmouselocation') {
+        return { ...OK, stdout: 'x:100 y:80 screen:0 window:123' }
+      }
+      return OK
+    })
+    const screen = new X11ScreenControl({ host, display: ':0' })
+    await screen.humanMove('box-1', [
+      { x: 900, y: 180 },
+      { x: 640, y: 360 },
+    ], { seed: 42, durationMs: 900 })
+    // exec 序：geometry → getmouselocation → 轨迹（单次——多段也是一条 shell 串）
+    expect(execs[1]?.command).toEqual(['xdotool', 'getmouselocation'])
+    expect(execs).toHaveLength(3)
+    const script = String(execs[2]?.command[2])
+    expect(execs[2]?.command.slice(0, 2)).toEqual(['sh', '-c'])
+    expect(script.startsWith('xdotool mousemove ')).toBe(true)
+    expect(script).toContain('; sleep 0.')
+    // 样条连续穿过途经点（不驻留但路过 40px 邻域）：900×1.5=1350,180×1.5=270（1280 契约→1920）
+    const coords = [...script.matchAll(/xdotool mousemove (\d+) (\d+)/g)].map((m) => ({
+      x: Number(m[1]),
+      y: Number(m[2]),
+    }))
+    expect(coords.some((c) => Math.hypot(c.x - 1350, c.y - 270) <= 40)).toBe(true)
+    const segs = script.split('; ')
+    const finalMove = segs[segs.length - 2] // 最后一个 sleep 前的 move（串以 sleep 结尾）
+    expect(finalMove).toBe('xdotool mousemove 960 540')
+  })
+
+  it('from 查询失败（exit≠0）→ 降级首段直达（行为等价普通 move——不瞎猜起点）', async () => {
+    const { host, execs } = fakeHost((spec) => {
+      if (spec.command.includes('getdisplaygeometry')) return { ...OK, stdout: '1280 800' }
+      if (spec.command[1] === 'getmouselocation') return { ...OK, exitCode: 1 }
+      return OK
+    })
+    const screen = new X11ScreenControl({ host })
+    await screen.humanMove('box-1', [{ x: 640, y: 360 }], { seed: 7 })
+    const script = String(execs[execs.length - 1]?.command[2])
+    expect(script).toBe('xdotool mousemove 640 360; sleep 0.016') // from=首点 → 首段退化单帧
+  })
+
+  it('轨迹 exec 失败（exit≠0）→ SCREEN_ACT_FAILED（错误可见）', async () => {
+    const { host } = fakeHost((spec) => {
+      if (spec.command.includes('getdisplaygeometry')) return { ...OK, stdout: '1280 800' }
+      if (spec.command[1] === 'getmouselocation') return { ...OK, stdout: 'x:10 y:10 screen:0 window:1' }
+      return { ...OK, exitCode: 1, stderr: 'no display' }
+    })
+    const screen = new X11ScreenControl({ host })
+    await expect(screen.humanMove('box-1', [{ x: 600, y: 400 }], { seed: 7 })).rejects.toMatchObject({
+      code: ScreenErrorCodes.SCREEN_ACT_FAILED,
+      message: expect.stringContaining('人味移动失败'),
+    })
+  })
+
+  it('serializeHumanTrack：帧 → 串接命令（mousemove 后跟 sleep，秒三位小数）；scale 供未换算帧', () => {
+    expect(
+      serializeHumanTrack(
+        [
+          { x: 10, y: 20, dtMs: 16 },
+          { x: 30, y: 40, dtMs: 20 },
+        ],
+        null,
+      ),
+    ).toBe('xdotool mousemove 10 20; sleep 0.016; xdotool mousemove 30 40; sleep 0.020')
+    expect(serializeHumanTrack([{ x: 100, y: 200, dtMs: 16 }], 1.5)).toContain('xdotool mousemove 150 300')
   })
 })
 
