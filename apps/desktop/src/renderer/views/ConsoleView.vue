@@ -452,9 +452,10 @@ let gaugeTimer: number | undefined
 // 内容高度锚定（2026-11-01 收编塌缩报障根治）：高度是**过程**——思考卡折叠过渡
 // （240ms grid-rows）、图片加载、markdown 迟滞渲染都让 scrollHeight 持续变化，任何
 // 时刻式置底（scrollToBottom 的双 rAF）都会被后续变化甩掉（收编塌缩时视口悬在半空、
-// 终答正文不在视野——真机实录实证）。声明式兜底：贴底意图（isNearBottom）下内容根
-// 一变尺寸即随动置底——覆盖一切现在与未来的高度变化源，零时长猜测。上翻阅读
-// （isNearBottom false）不受打扰；置底不改内容尺寸，无回流环。
+// 终答正文不在视野——真机实录实证）。声明式兜底：贴底意图（stickyBottom，2026-11-02
+// 由瞬时 isNearBottom 判定升级——慢放抖动不再脱靶断链）下内容根一变尺寸即随动置底
+// ——覆盖一切现在与未来的高度变化源，零时长猜测。上翻阅读（sticky=false）不受打扰；
+// 置底不改内容尺寸，无回流环。
 let streamResizeObserver: ResizeObserver | undefined
 onMounted(() => {
   gaugeTimer = window.setInterval(() => {
@@ -464,7 +465,7 @@ onMounted(() => {
   if (inner === null) return
   streamResizeObserver = new ResizeObserver(() => {
     const el = streamEl.value
-    if (el !== null && isNearBottom()) el.scrollTop = el.scrollHeight
+    if (el !== null && stickyBottom.value) el.scrollTop = el.scrollHeight
   })
   streamResizeObserver.observe(inner)
 })
@@ -829,14 +830,21 @@ const scrollToBottom = (): void => {
     )
   })
 }
-/** 视口是否已在底部附近（贴底跟随的前置判定：用户上翻查看历史时不打扰） */
+/** 视口是否已在底部附近（跳底按钮显隐等**瞬时位置**判定的用途） */
 const isNearBottom = (): boolean => {
   const el = streamEl.value
   if (!el) return true
   return el.scrollHeight - el.scrollTop - el.clientHeight < 80
 }
-const followIfNearBottom = (): void => {
-  if (isNearBottom()) scrollToBottom()
+
+/** 贴底跟随意图（sticky-bottom，2026-11-02）：用户在底部 = 跟随（内容增长强制置底）；
+ *  上翻 = 停止跟随；回底 = 恢复。替代跟随链上的瞬时 isNearBottom 判定——内容增长把
+ *  视口「物理推离」底部不触发 scroll 事件，意图不会误翻；流式慢放期间高度持续抖动，
+ *  瞬时判定会被脱靶断链（跟随后终答落在视野外——「必须刷新才能看到结果」的根因之一） */
+const stickyBottom = ref(true)
+/** 跟随置底（内容增长的唯一跟随入口——只看意图，不看瞬时位置） */
+const followIfSticky = (): void => {
+  if (stickyBottom.value) scrollToBottom()
 }
 
 // ---- 滚动定位交互（2026-09-06 用户报障「开会在顶部」）：会话切换/历史批量填充强制定底；
@@ -848,6 +856,8 @@ const onStreamScroll = (): void => {
   const el = streamEl.value
   if (el === null) return
   atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  // 意图翻转只在用户滚动时发生（内容增长不触发 scroll）：贴底即跟随、上翻即停
+  stickyBottom.value = atBottom.value
   atTop.value = el.scrollTop < 40
   if (atBottom.value) newCount.value = 0
   // 轮锚是内容坐标（不随滚动变）——滚动时只用缓存锚值算当前轮，**零 DOM 读**
@@ -996,9 +1006,9 @@ watch(
       scrollToBottom()
       newCount.value = 0
     } else if (delta > 0) {
-      // 普通新消息：贴底跟随；上翻阅读不打扰但计数提示
-      followIfNearBottom()
-      if (!isNearBottom()) newCount.value += delta
+      // 普通新消息：按跟随意图置底；上翻阅读不打扰但计数提示
+      followIfSticky()
+      if (!stickyBottom.value) newCount.value += delta
     }
     void nextTick(measureRail)
   },
@@ -1006,8 +1016,9 @@ watch(
 watch(
   () => [ui.activeAgentId, ui.activeGroupId],
   () => {
-    // 会话切换：清计数 + 强制定底（历史异步填充期间由上面的批量分支接续保障）
+    // 会话切换：清计数 + 恢复跟随意图 + 强制定底（历史异步填充期间由上面的批量分支接续保障）
     newCount.value = 0
+    stickyBottom.value = true
     lastMsgCount = kernel.messages.length
     scrollToBottom()
   },
@@ -1015,9 +1026,9 @@ watch(
 // 实况增长（思考增量 / 执行输出 / 流块新增与状态迁移）与进行中单元出现：贴底跟随
 watch(
   () => kernel.streams.map((s) => `${s.key}:${s.stdout.length}:${s.stderr.length}:${s.state}`).join('|'),
-  followIfNearBottom,
+  followIfSticky,
 )
-watch(() => kernel.runs.length, followIfNearBottom)
+watch(() => kernel.runs.length, followIfSticky)
 // 流块批量出现（历史加载的伪 exec/思考块投影）：与 messages 批量同判——强制定底
 let lastStreamCount = kernel.streams.length
 watch(
@@ -1026,7 +1037,7 @@ watch(
     const delta = len - lastStreamCount
     lastStreamCount = len
     if (delta >= 3) scrollToBottom()
-    else followIfNearBottom()
+    else followIfSticky()
     void nextTick(measureRail)
   },
 )

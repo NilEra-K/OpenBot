@@ -699,6 +699,19 @@ describe('TurnRunner 流事件（onStream）', () => {
     expect(second.at(-1)?.reason).toContain('脚本')
   })
 
+  it('失败轮思考留痕（2026-11-02 事实完整性）：流到一半失败——transcript 补落已收思考', async () => {
+    // 实况已收思考增量（onThinking 回调过）、chat 抛错：throw 路径也落 thinking 记录
+    // ——刷新/重启回放不丢已见内容（此前只有成功路径在轮末落盘）
+    const h = makeHarness({ a1: [{ reasoning: '想到一半', fail: '端点 500' }] })
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: 'q1', nonce: 'n1' })
+    await waitIdle([a1])
+    const records = await h.transcript.readAll('a1')
+    const thinking = records.find((r) => r.kind === 'thinking')
+    expect(thinking?.payload).toMatchObject({ runId: 'a1-run-1', round: 1, text: '想到一半', final: false })
+    expect(records.some((r) => r.kind === 'agent')).toBe(false) // 失败轮无终答
+  })
+
   it('无 onStream：流事件不发，过程记录照写（回归）', async () => {
     const h = makeHarness({
       a1: [{ text: '直接回答' }],

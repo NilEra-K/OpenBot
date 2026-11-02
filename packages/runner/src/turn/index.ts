@@ -486,6 +486,18 @@ export class TurnRunner {
         emit({ type: 'end', stream: 'llm' })
       } catch (err) {
         emit({ type: 'abort', stream: 'llm', reason: err instanceof Error ? err.message : String(err) })
+        // 失败轮思考留痕（2026-11-02 事实完整性）：渲染端实况已收思考（abort 流事件前有
+        // chunk 增量），transcript 同步截断留档——刷新/重启回放不丢已见内容（成功路径在
+        // 轮末 append；此处补齐 throw 路径，落盘失败不掩盖原错误）
+        await this.#deps.transcript
+          .append(sessionKey, 'thinking', {
+            runId: run.runId,
+            round: chatRound,
+            startedAt: roundStartedAt,
+            text: truncateForTranscript(thinkingText, MAX_THINKING_CHARS),
+            final: false,
+          })
+          .catch(() => {})
         throw err
       }
       // 用量采集（会话引擎 v2 · P1）：端点带 usage 则上报（壳层落 usage.jsonl——水位/密度数据源）

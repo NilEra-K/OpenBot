@@ -382,6 +382,43 @@ const guiListeners = new Set<GuiStreamListener>()
 /** 已拉取 transcript 历史的 agent（懒加载去重；内核不重启时 SSE 重放已覆盖） */
 const loadedHistory = new Set<string>()
 
+// ---- 流实况合帧缓冲与终结原语（2026-11-02 流呈现根治） ----
+
+/** 块封存原子操作（run 终结的单一实现）：置 end + think 块补时长——已收内容如实保留 */
+function sealBlock(block: LiveStreamBlock): void {
+  block.state = 'end'
+  if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
+}
+
+/** llm 流轮次登记（open meta 携带 round，惰性建块时取——回放判重 loadHistory 按
+ *  runId+round 匹配实况块，块缺 round 判重永假：「renderer 刷新而内核还活」同轮思考双卡） */
+const llmRounds = new Map<string, number>()
+
+/** 合帧缓冲条目：同块增量聚合（stdout/stderr 分槽） */
+interface PendingChunk {
+  record: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number }
+  think: boolean
+  stdout: string
+  stderr: string
+}
+
+/**
+ * 合帧缓冲（渲染节奏与到达节奏解耦）：WS chunk 到达只入缓冲，50ms 批量应用到块——
+ * 每 chunk 一次全量重渲（长思考数万字 × 数百 chunk）会把 renderer 主线程打满，
+ * WS onmessage 排队慢放（SSE 低频事件插队先消化——「通知已到思考还在蹦字」的病根）。
+ * 键 = stream:runId:seq:think（块身份）；flush 时机：定时批量 + end/断线/run 终结前强制。
+ */
+const pendingChunks = new Map<string, PendingChunk>()
+
+let flushTimer: ReturnType<typeof setTimeout> | undefined
+function scheduleFlush(): void {
+  if (flushTimer !== undefined) return
+  flushTimer = setTimeout(() => {
+    flushTimer = undefined
+    useKernelStore().flushStreamBuffers()
+  }, 50)
+}
+
 export const useKernelStore = defineStore('kernel', {
   state: () => ({
     connected: false,
@@ -443,10 +480,19 @@ export const useKernelStore = defineStore('kernel', {
     /** 群终答 runId 集合（群轮过程私聊隔离的判据）：群流装载（group-agent 记录）与
      *  v1.group.message 实况收集——识别「成员档案里的遗留群轮过程记录」（新数据已落群流） */
     groupRunIds: [] as string[],
-    /** 已终答 runId 集合（v0.1.122 迟到碎片根治）：终答事件（含回放）到达即记录——WS 流与
-     *  事件总线是两条独立通道，终答可先于流式尾部 chunk 到达（真机实证：碎片晚 9.5s），
-     *  此后晚到的该 run chunk 一律不建块（内容已由终答消息完整承载，碎片只会残留） */
+    /** 已终结 runId 集合（v0.1.122 迟到碎片根治 → 2026-11-02 语义分层）：
+     *  终答事件（含群/回放）与 lifecycle.finished 到达即记档——run **语义终结**优先于流
+     *  物理 end 帧（两通道独立竞速，真机实证碎片晚 9.5s）。终结后：live 块就地封存、
+     *  新建块直接以 end 态落定（不冒充进行中）；思考/exec 晚到增量归档续写（内容补全） */
     finalizedRunIds: [] as string[],
+    /** 已终答 runId 集合（正文掐断判据——比 finalized 更窄）：终答消息到达即记档，
+     *  此后晚到**正文**增量丢弃（内容已由终答消息完整承载，建块即碎片残留）；failed/
+     *  aborted 轮无终答不记——晚到正文是「最后事实」的唯一承载，归档保留 */
+    answeredRunIds: [] as string[],
+    /** 已作废 runId 集合（呈现作废——/clear 边界废黜）：边界时该 agent 在场的一切 run，
+     *  此后到达的增量（含思考归档）一律丢弃——清空点之后不得再冒旧内容（竞速晚到
+     *  的旧 run 思考增量会在清空后重建块复活，E2E 间歇实证）；边界后的新 run 不受影响 */
+    voidedRunIds: [] as string[],
     messages: [] as ChatMessage[],
     pendingApprovals: [] as PendingApproval[],
     execs: [] as ExecCard[],
@@ -580,6 +626,10 @@ export const useKernelStore = defineStore('kernel', {
       unsubscribe = null
       streamClient?.close()
       streamClient = null
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer)
+        flushTimer = undefined
+      }
       client = null
       this.connected = false
     },
@@ -1230,10 +1280,12 @@ export const useKernelStore = defineStore('kernel', {
         // ---- 领域消息映射（user/agent/a2a + 群 kinds——P5 Step 4；agentId 参数即会话键，群传 groupId） ----
         const msg = p as { messageId?: string; text?: string; from?: string; to?: string }
         if (typeof msg.messageId !== 'string' || typeof msg.text !== 'string') continue
-        // 终答 runId 收集（v0.1.122）：回放路径与事件路径幂等合流（事件先到已记档）——
-        // 重启回放后同 run 的晚到碎片同样掐断（私聊 agent 与群 group-agent 两键统一）
-        if ((record.kind === 'agent' || record.kind === 'group-agent') && typeof p['runId'] === 'string' && !this.finalizedRunIds.includes(p['runId'])) {
-          this.finalizedRunIds.push(p['runId'])
+        // 终答 runId 收集（v0.1.122 → 2026-11-02 已终结/已终答双记档）：回放路径与事件路径
+        // 幂等合流（事件先到已记档）——重启回放后同 run 的晚到正文增量同样掐断
+        // （私聊 agent 与群 group-agent 两键统一）
+        if ((record.kind === 'agent' || record.kind === 'group-agent') && typeof p['runId'] === 'string') {
+          if (!this.finalizedRunIds.includes(p['runId'])) this.finalizedRunIds.push(p['runId'])
+          if (!this.answeredRunIds.includes(p['runId'])) this.answeredRunIds.push(p['runId'])
         }
         if (this.messages.some((m) => m.messageId === msg.messageId)) continue // 事件流已覆盖
         const msgAtts = (p as { attachments?: AttachmentMeta[] }).attachments // user 与 agent（v0.1.118 附图）同构
@@ -1329,8 +1381,20 @@ export const useKernelStore = defineStore('kernel', {
           // 过程事实同窗口语义（2026-10-13 用户报障 /clear 后思考块残屏）：思考块/正文预览
           // （streams）与 exec 卡（execs）随边界一并移除——此前只清 messages 残屏；boot 路径
           // 本就按边界跳过全部记录（loadHistory），此处补齐实时路径。resume 重放不受影响
-          // （loadHistory 按去重规则重新投影，状态等价）
+          // （loadHistory 按去重规则重新投影，状态等价）。2026-11-02 补：合帧缓冲同步作废
+          // ——清了块不清缓冲，残留增量在其后的 flush 重建块复活（清空后冒卡，竞速间歇）
           const clearedAgent = event.payload.agentId
+          // 作废记档（2026-11-02）：边界时该 agent 在场的一切 run——其后到达的增量（含
+          // 思考归档）一律丢弃；边界后的新 run（queued 事件重建）不在记档时点、不受影响
+          for (const r of this.runs.filter((r) => r.agentId === clearedAgent)) {
+            if (!this.voidedRunIds.includes(r.runId)) this.voidedRunIds.push(r.runId)
+          }
+          for (const [key, e] of [...pendingChunks]) {
+            if (e.record.agentId === clearedAgent) {
+              pendingChunks.delete(key)
+              if (!this.voidedRunIds.includes(e.record.runId)) this.voidedRunIds.push(e.record.runId)
+            }
+          }
           this.streams = this.streams.filter((s) => s.agentId !== clearedAgent || s.at >= event.at)
           this.execs = this.execs.filter(
             (e) => e.runId?.split('-run-')[0] !== clearedAgent || e.at >= event.at,
@@ -1371,13 +1435,14 @@ export const useKernelStore = defineStore('kernel', {
             // agent 附图（v0.1.118 截图直发）：呈现层持久（transcript 回放同款投影）
             ...(event.payload.attachments !== undefined ? { attachments: event.payload.attachments } : {}),
           })
-          // 正文预览块让位真消息（v0.1.43）：终答事件可先于流 end 到达（事件时序）——不看 state
-          // 直接删（live/end 都删；流 end 随后到达时块已除名，onStreamEnd 无操作）；思考块保留。
-          // v0.1.122 补漏：事件也可能先于流式**尾部 chunk**到达——删除只扫得到当时在场的块，
-          // 晚到的碎片会另建新块（真机实证「图片？」碎片晚终答 9.5s 残留）——runId 记档，
-          // onStreamChunk 据此掐死「终答后再建块」
-          if (typeof event.payload.runId === 'string' && !this.finalizedRunIds.includes(event.payload.runId)) {
-            this.finalizedRunIds.push(event.payload.runId)
+          // run 语义终结（2026-11-02 原则统一：事件先于流尾部到达时）：在途缓冲落块 + 该 run
+          // 全部 live 块封存（思考块不再以 live 态慢放蹦字——「通知已到思考还在输出」根治）
+          // + 记档（终答已到 → 晚到正文丢弃；思考/exec 归档续写，内容补全不冒充进行中）。
+          // 正文块随收编移除（v0.1.113 一次回复一个气泡；runId 缺席的历史宽容路径按 agent 删）
+          if (typeof event.payload.runId === 'string') {
+            this.finalizeRun(event.payload.runId)
+            this.markRunFinalized(event.payload.runId)
+            this.markRunAnswered(event.payload.runId)
           }
           this.streams = this.streams.filter(
             (b) => !(b.agentId === event.payload.agentId && b.stream === 'llm' && b.think !== true),
@@ -1461,12 +1526,14 @@ export const useKernelStore = defineStore('kernel', {
             ? { groupMode: p.mode }
             : {}),
           })
-          // 正文预览块让位（同 v1.message.agent 语义）：成员群终答到达即清其正文 live 块——
-          // 群轮正文的家在群流（此前缺失致同一句话在成员私聊呈现两遍：预览气泡 + relay 行）。
-          // runId 记档（v0.1.122 同 v1.message.agent：掐死终答后晚到碎片另建块）
+          // run 语义终结（2026-11-02 同 v1.message.agent 统一：封存 + 记档）：群终答 run 的
+          // 块在成员私聊视图本就按 isGroupRun 过滤，封存是状态一致性而非呈现必需。正文块
+          // 随收编移除（群轮正文的家在群流——此前缺失致同一句话在成员私聊呈现两遍）
           if (p.kind === 'agent') {
-            if (typeof p.runId === 'string' && !this.finalizedRunIds.includes(p.runId)) {
-              this.finalizedRunIds.push(p.runId)
+            if (typeof p.runId === 'string') {
+              this.finalizeRun(p.runId)
+              this.markRunFinalized(p.runId)
+              this.markRunAnswered(p.runId)
             }
             this.streams = this.streams.filter(
               (b) => !(b.agentId === p.from && b.stream === 'llm' && b.think !== true),
@@ -1589,6 +1656,12 @@ export const useKernelStore = defineStore('kernel', {
           return
         }
         case 'v1.lifecycle.finished': {
+          // run 终态 = 语义终结（2026-11-02 原则统一）：全部实况（llm+exec）立即封存、晚到
+          // 增量丢弃——finished 事件先于流尾部到达时，思考块/exec 卡不再以 live 态慢放。
+          // 失败轮无终答事件（正文块留存为「最后事实」），本封存是其呈现停摆的唯一入口。
+          // escaped 转后台不进本分支——run 仍在跑，如实保留实况
+          this.finalizeRun(event.payload.runId)
+          this.markRunFinalized(event.payload.runId)
           const run = this.runs.find((r) => r.runId === event.payload.runId)
           if (run) {
             run.state = event.payload.state
@@ -1656,8 +1729,13 @@ export const useKernelStore = defineStore('kernel', {
     onStreamOpen(meta: NonNullable<import('../lib/stream').RunStreamOpenMeta['meta']>): void {
       const key = `${meta.runId}:${meta.stream}:${meta.seq}`
       if (this.streams.some((s) => s.key === key)) return // 防重（重连竞态）
-      // llm 流不预开块（v0.1.43）：一个 open 对应 think/text 双通道——首 chunk 按 th 开对应块
-      if (meta.stream === 'llm') return
+      // llm 流不预开块（v0.1.43）：一个 open 对应 think/text 双通道——首 chunk 按 th 开对应块。
+      // round 先登记（2026-11-02）：惰性建块时取——回放判重（loadHistory thinking 投影）按
+      // runId+round 匹配，块缺 round 则判重永假（renderer 刷新而内核还活 → 同轮思考双卡）
+      if (meta.stream === 'llm') {
+        if (meta.round !== undefined) llmRounds.set(`${meta.runId}:${meta.seq}`, meta.round)
+        return
+      }
       this.streams.push({
         key,
         agentId: meta.agentId,
@@ -1679,51 +1757,110 @@ export const useKernelStore = defineStore('kernel', {
       record: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number },
       chunk: { t: string; ch?: 'stdout' | 'stderr'; th?: boolean },
     ): void {
+      // 作废 run（/clear 边界废黜）的一切增量丢弃——清空点之后不得再冒旧内容
+      if (this.voidedRunIds.includes(record.runId)) return
+      // 已终答 run 的**正文**增量丢弃（v0.1.122 语义，2026-11-02 精化为 answered 判据）：
+      // 内容已由终答消息完整承载，晚到正文只会残留碎片气泡。思考/exec 不掐——归档接收
+      // （见 applyStreamChunk：终结 run 的块以 end 态落定，增量补全内容但**不冒充进行中**
+      // ——E2E 实证终答事件可先于全部流增量到达，丢弃会让整轮思考在实况期不可见）
+      if (chunk.th !== true && record.stream === 'llm' && this.answeredRunIds.includes(record.runId)) return
+      // 合帧缓冲：到达节奏与渲染节奏解耦（50ms 批量 apply——见 pendingChunks 注释）
+      const key = `${record.stream}:${record.runId}:${record.seq}:${chunk.th === true ? 1 : 0}`
+      const pending = pendingChunks.get(key)
+      if (pending !== undefined) {
+        if (chunk.ch === 'stderr') pending.stderr += chunk.t
+        else pending.stdout += chunk.t
+      } else {
+        pendingChunks.set(key, {
+          record,
+          think: chunk.th === true,
+          stdout: chunk.ch === 'stderr' ? '' : chunk.t,
+          stderr: chunk.ch === 'stderr' ? chunk.t : '',
+        })
+      }
+      scheduleFlush()
+    },
+
+    /** 缓冲增量的同步应用（找块/建块/追加——onStreamChunk 的同步内核，flush 逐条调用） */
+    applyStreamChunk(
+      record: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number },
+      text: string,
+      opts: { think?: boolean; channel?: 'stdout' | 'stderr' } = {},
+    ): void {
+      if (text === '') return
       if (record.stream === 'llm') {
-        // 终答后晚到**正文**碎片掐断（v0.1.122）：终答事件先于流式尾部 chunk 到达时（两通道
-        // 独立竞速，真机实证碎片晚 9.5s），正文已由终答消息完整承载——晚到正文 chunk 不建块
-        // （建了就是无主残留：「图片？」半段气泡报障实锤）。思考通道不掐：终答后到达的思考
-        // 卡是过程事实（v0.1.43「思考块保留」语义——E2E 思考双通道用例实证此路径常态存在）
-        if (chunk.th !== true && this.finalizedRunIds.includes(record.runId)) return
+        // 掐断复查（flush 时 run 可能已终答）：正文丢弃；思考归档接收
+        if (opts.think !== true && this.answeredRunIds.includes(record.runId)) return
         // llm 双通道（v0.1.43）：th=true → 思考块 / 缺省 → 正文块（live 预览气泡）。
-        // open 不预开——首 chunk 惰性建，th 交替时各自续写已有通道块。
-        // 身份配对（v0.1.121）：find 以流代际 seq 为准——断线吞 end 后旧块即使滞留 live，
-        // 新流（新 seq）也绝不续写进它（「旧正文＋终答」拼接残留的结构根除）
+        // 身份配对（v0.1.121）：find 以流代际 seq 为准（不看 state——终结块的增量续写是
+        // 内容补全：块保持 end 态不复活 live；新流（新 seq）结构上不可能写进旧块）
         let block = [...this.streams].reverse().find(
           (s) =>
             s.runId === record.runId &&
             s.stream === 'llm' &&
-            s.state === 'live' &&
             s.seq === record.seq &&
-            (s.think === true) === (chunk.th === true),
+            (s.think === true) === (opts.think === true),
         )
         if (block === undefined) {
+          const round = llmRounds.get(`${record.runId}:${record.seq}`)
+          // 终结 run 的晚到思考卡直接以 end 态落定（过程事实补全，不冒充进行中——
+          // 不转盲文不显「思考中」；durationMs 缺席即头部不显时长，诚实降级）
+          const finalized = this.finalizedRunIds.includes(record.runId)
           block = {
-            key: `${record.runId}:llm${chunk.th === true ? ':think' : ':text'}:${Date.now()}`,
+            key: `${record.runId}:llm${opts.think === true ? ':think' : ':text'}:${Date.now()}`,
             agentId: record.agentId,
             runId: record.runId,
             stream: 'llm',
             seq: record.seq,
+            ...(round !== undefined ? { round } : {}),
             stdout: '',
             stderr: '',
-            state: 'live',
+            state: finalized ? 'end' : 'live',
             at: Date.now(),
-            ...(chunk.th === true ? { think: true } : {}),
+            ...(opts.think === true ? { think: true } : {}),
           }
           this.streams.push(block)
         }
-        block.stdout += chunk.t
+        block.stdout += text
         return
       }
       const block = [...this.streams].reverse().find(
-        (s) => s.runId === record.runId && s.stream === record.stream && s.state === 'live' && s.seq === record.seq,
+        (s) => s.runId === record.runId && s.stream === record.stream && s.seq === record.seq,
       )
       if (!block) return
-      if (chunk.ch === 'stderr') block.stderr += chunk.t
-      else block.stdout += chunk.t
+      if (opts.channel === 'stderr') block.stderr += text
+      else block.stdout += text
+    },
+
+    /** 合帧缓冲批量应用（定时批量；end/断线/run 终结前由对应路径强制调用保内容完整） */
+    flushStreamBuffers(): void {
+      if (pendingChunks.size === 0) return
+      const entries = [...pendingChunks.values()]
+      pendingChunks.clear()
+      for (const e of entries) {
+        if (e.stdout !== '') this.applyStreamChunk(e.record, e.stdout, e.think ? { think: true } : {})
+        if (e.stderr !== '') this.applyStreamChunk(e.record, e.stderr, { channel: 'stderr' })
+      }
+    },
+
+    /** 指定 run 的缓冲强制落块（终结路径专用：封存/关块前保证已收内容完整落块） */
+    flushRunPending(runId: string): void {
+      for (const [key, e] of [...pendingChunks]) {
+        if (e.record.runId !== runId) continue
+        pendingChunks.delete(key)
+        if (e.stdout !== '') this.applyStreamChunk(e.record, e.stdout, e.think ? { think: true } : {})
+        if (e.stderr !== '') this.applyStreamChunk(e.record, e.stderr, { channel: 'stderr' })
+      }
+    },
+
+    /** 丢弃全部未应用缓冲（测试隔离/视图重置场景——正常运行路径不调用） */
+    discardStreamBuffers(): void {
+      pendingChunks.clear()
     },
 
     onStreamEnd(record: { agentId: string; runId: string; stream: 'llm' | 'exec'; seq: number }, reason?: string): void {
+      // 关块前强制 flush：缓冲中的已收增量先落块（内容完整 + think 时长基准准确）
+      this.flushRunPending(record.runId)
       // 失败原因原文归档到 run（v0.1.113）：失败轮往往无产出块（llm 块惰性建）——原文若只标
       // 块必丢；存 run 上供 toast/过程条人话呈现（llm.abort 的 reason=err.message 含端点诊断）
       if (reason !== undefined) {
@@ -1736,11 +1873,35 @@ export const useKernelStore = defineStore('kernel', {
         (s) => s.runId === record.runId && s.stream === record.stream && s.seq === record.seq && s.state === 'live',
       )
       for (const block of live) {
-        block.state = reason === undefined ? 'end' : 'abort'
-        // 思考块时长回写（v0.1.113 思考头「已思考 · Ns」）——此刻即结束时刻
-        if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
-        if (reason !== undefined) block.abortReason = reason
+        if (reason === undefined) sealBlock(block)
+        else {
+          block.state = 'abort'
+          // 思考块时长回写（v0.1.113 思考头「已思考 · Ns」）——此刻即结束时刻
+          if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
+          block.abortReason = reason
+        }
       }
+    },
+
+    /** run 实况终结（2026-11-02 终结路径单一实现）：run **语义终结**（终答/finished 事件）
+     *  优先于流物理 end 帧（两通道独立竞速）——该 run 全部 live 块（llm 正文/思考 + exec）
+     *  就地封存，已收内容如实保留。此后晚到增量由 markRunFinalized 记档丢弃 */
+    finalizeRun(runId: string): void {
+      this.flushRunPending(runId) // 在途缓冲先落块（封存保留的「已收内容」含缓冲增量）
+      for (const block of this.streams) {
+        if (block.runId !== runId || block.state !== 'live') continue
+        sealBlock(block)
+      }
+    },
+
+    /** run 终结记档：此后新建块以 end 态落定（live 块由 finalizeRun 封存） */
+    markRunFinalized(runId: string): void {
+      if (!this.finalizedRunIds.includes(runId)) this.finalizedRunIds.push(runId)
+    },
+
+    /** run 终答记档（正文掐断判据——终答消息已承载正文内容） */
+    markRunAnswered(runId: string): void {
+      if (!this.answeredRunIds.includes(runId)) this.answeredRunIds.push(runId)
     },
 
     /** 流连接断开（v0.1.121 拼接残留根治·其一）：全量 live 块就地封存（state 置 end）——hub
@@ -1749,10 +1910,10 @@ export const useKernelStore = defineStore('kernel', {
      *  本封存退居呈现语义：让假活态立即消失。置 end 而非 abort：断线不等于失败，已收内容
      *  如实保留（丢尾前缀由 isPreviewDup 让位收尾） */
     onStreamsDisconnected(): void {
+      this.flushStreamBuffers() // 断线前缓冲全量落块（已收内容如实保留）
       for (const block of this.streams) {
         if (block.state !== 'live') continue
-        block.state = 'end'
-        if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
+        sealBlock(block)
       }
     },
 

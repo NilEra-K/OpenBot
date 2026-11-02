@@ -182,10 +182,12 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     // —— 对话流聚合（P3 调整）：worker1 会话——思考块在流内（llm 增量全部轮次留痕），
     // task 卡内嵌输出区（$ 命令行 + mock 输出一体），ctx 右栏纯化为一块显示器 ——
     await expect(page.locator('.think', { hasText: '执行结果回来了' }).first()).toBeVisible({ timeout: 15_000 }) // v0.1.48：思考卡显示真思考（reasoning；.first 容双块镜像）
-    // v0.1.113 思考头 B 版：完成态 = 满点 ⠿ + 「已思考」+ mono 时长（live→end 回写 durationMs）
+    // v0.1.113 思考头 B 版：完成态 = 满点 ⠿ + 「已思考」+ mono 时长（live→end 回写 durationMs）。
+    // 时长徽记不断言：mock 环回下终答事件可先于全量流增量到达（main 进程 ws.send 排队、SSE
+    // 直写），思考卡以归档态落定（end 直建、起点未知——诚实降级不显时长，与历史回放块同款；
+    // live→end 的时长回写由 kernel-streams 单测锚定）
     await expect(page.locator('.think .think-spin', { hasText: '⠿' }).first()).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.think .think-tag', { hasText: '已思考' }).first()).toBeVisible()
-    await expect(page.locator('.think .think-dur').first()).toBeVisible()
     await expect(page.locator('.task .bt-line', { hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.task .bt-line', { hasText: 'mock: ls /work' })).toBeVisible()
     const screen = page.locator('.ctx-screen')

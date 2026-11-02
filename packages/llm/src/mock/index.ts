@@ -9,11 +9,14 @@
 import { LlmError, LlmErrorCodes } from '../provider/index.js'
 import type { ChatProvider, ChatRequest, ChatResponse, ToolCall } from '../provider/index.js'
 
-/** 脚本一步：text 与 toolCalls 可任意组合；reasoning = 思考增量（v0.1.48 真思考持久化测试面） */
+/** 脚本一步：text 与 toolCalls 可任意组合；reasoning = 思考增量（v0.1.48 真思考持久化测试面）；
+ *  fail = 本步端点失败（2026-11-02 失败轮思考留痕测试面：先流式回调 reasoning——「流到
+ *  一半失败」形态，再抛错） */
 export interface MockStep {
   text?: string | null
   toolCalls?: ToolCall[]
   reasoning?: string
+  fail?: string
 }
 
 export interface MockChatProviderOptions {
@@ -54,6 +57,15 @@ export class MockChatProvider implements ChatProvider {
       )
     }
     this.#cursor += 1
+    // 本步端点失败：先流 reasoning（如有）再抛——「流到一半失败」的确定性形态
+    if (step.fail !== undefined) {
+      if (request.onThinking && step.reasoning !== undefined) {
+        for (let i = 0; i < step.reasoning.length; i += MOCK_CHUNK_CODE_UNITS) {
+          request.onThinking(step.reasoning.slice(i, i + MOCK_CHUNK_CODE_UNITS))
+        }
+      }
+      throw new LlmError(LlmErrorCodes.LLM_REQUEST_FAILED, step.fail)
+    }
     const response: ChatResponse = {
       text: step.text ?? null,
       toolCalls: step.toolCalls ? [...step.toolCalls] : [],
