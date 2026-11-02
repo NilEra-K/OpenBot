@@ -610,28 +610,49 @@ const toggleAutoLaunch = async (): Promise<void> => {
   toast.push(next ? '已开启开机自启动' : '已关闭开机自启动', 'success')
 }
 
-// ---- 执行预算（2026-11-01 可配置化）：草稿 + 显式保存（显式保存语汇与数据目录/自动化
-//      表单一致；NumStepper 手输清空不回写——保存端 clamp 双保险兜底同 cron 范式） ----
+// ---- 执行预算（2026-11-02 三段值域定稿）：-1 = 无限制 / 0 = 禁用工具（仅轮数）/ 1~上限。
+//      草稿 + 显式保存；NumStepper 三段交互已在组件内归一（顶格＋/越界手输 → -1），此处
+//      再 clamp 兜底（组件手输清空不回写——NaN 回旧值同 cron 范式）
 const maxRoundsDraft = ref(kernel.maxToolRounds)
 watch(() => kernel.maxToolRounds, (v) => (maxRoundsDraft.value = v))
+const normalizeRounds = (raw: number): number => {
+  const n = Math.round(raw)
+  if (!Number.isFinite(n)) return kernel.maxToolRounds // 清空/乱——保持已存值
+  if (n < 0) return 0
+  return n > 1024 ? -1 : n
+}
 const saveMaxRounds = async (): Promise<void> => {
-  const rounds = Math.max(0, Math.min(9999, Math.round(maxRoundsDraft.value) || 0))
+  const rounds = normalizeRounds(maxRoundsDraft.value)
   try {
     await kernel.setMaxToolRounds(rounds)
     maxRoundsDraft.value = rounds
-    toast.push(rounds === 0 ? '工具轮预算已设为无限制——新任务立即生效' : `工具轮预算已更新为 ${rounds}——新任务立即生效（进行中的任务保持原预算）`, 'success')
+    const label = rounds === -1 ? '无限制' : rounds === 0 ? '禁用工具' : `${rounds} 轮`
+    toast.push(`工具轮预算已设为 ${label}——新任务立即生效（进行中的任务保持原预算）`, 'success')
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
+  }
+}
+const toggleSystemNotify = async (): Promise<void> => {
+  try {
+    await kernel.setSystemNotify(!kernel.systemNotify)
+    toast.push(kernel.systemNotify ? '系统通知已开启——任务终态会提醒' : '系统通知已关闭', 'success')
   } catch (err) {
     toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
 }
 const deadlineDraft = ref(kernel.runDeadlineMin)
 watch(() => kernel.runDeadlineMin, (v) => (deadlineDraft.value = v))
+const normalizeDeadline = (raw: number): number => {
+  const n = Math.round(raw)
+  if (!Number.isFinite(n)) return kernel.runDeadlineMin
+  return n < 1 || n > 1440 ? -1 : n // 0 与 1440+ 都是无限制（用户裁定）——归一哨兵
+}
 const saveDeadline = async (): Promise<void> => {
-  const minutes = Math.max(0, Math.min(1440, Math.round(deadlineDraft.value) || 0))
+  const minutes = normalizeDeadline(deadlineDraft.value)
   try {
     await kernel.setRunDeadline(minutes)
     deadlineDraft.value = minutes
-    toast.push(minutes === 0 ? '总时长上限已设为无限制——新任务立即生效' : `总时长上限已更新为 ${minutes} 分钟——新任务立即生效（进行中的任务保持原时长）`, 'success')
+    toast.push(minutes === -1 ? '总时长上限已设为无限制——新任务立即生效' : `总时长上限已更新为 ${minutes} 分钟——新任务立即生效（进行中的任务保持原时长）`, 'success')
   } catch (err) {
     toast.push(err instanceof Error ? err.message : String(err), 'danger')
   }
@@ -2214,31 +2235,47 @@ const wslRelevant = computed(
         </div>
       </div>
 
-      <!-- 执行预算（2026-11-01 可配置化，原硬编码 16 轮 + 15 分钟）：保存即热生效（新任务立即用新值） -->
+      <!-- 系统通知（2026-11-02 用户需求）：run 终态经系统通知提醒——保存即热生效 -->
+      <div class="settings-card">
+        <div class="appearance-row">
+          <div class="appearance-main">
+            <div class="appearance-name">系统通知</div>
+            <div class="appearance-desc">Agent 的任务到达终态（完成 / 失败 / 中止 / 转后台）时发送系统通知，正文带终答摘要——挂后台等结果不用盯窗口。Windows / macOS / Linux 通用；Linux 需桌面环境自带通知服务。开启立即生效。</div>
+          </div>
+          <button
+            class="switch"
+            :class="{ 'is-on': kernel.systemNotify }"
+            role="switch"
+            :aria-checked="kernel.systemNotify"
+            aria-label="允许系统通知"
+            @click="toggleSystemNotify"
+          ></button>
+        </div>
+      </div>
+
+      <!-- 执行预算（2026-11-02 三段值域定稿）：-1 无限制 / 0 禁用工具（仅轮数）/ 1~上限；保存热生效 -->
       <div class="set-sec-row">
         <div class="set-sec">执行预算</div>
-        <HelpTip text="单次任务（run）的执行护栏。工具轮预算 = 工具循环轮数上限，0 = 无限制——到达非零上限时 Agent 不会无声失败：先经审批闸门弹窗问您（批准=再给一轮额度原地继续；拒绝=结束并由 Agent 交代进展）。总时长上限 = 单次任务的总运行时长，0 = 无限制（缺省）——无进展超过 5 分钟仍会自动转后台并告知（这是卡死检测，不是时长限制）。保存后新任务立即生效；进行中的任务保持开始时的预算。" />
+        <HelpTip text="单次任务（run）的执行护栏，三段取值：工具轮预算 0 = 禁用工具（模型不带任何工具，纯对话）、1~1024 = 轮数上限（顶格再 ＋ 即无限制）、无限制 = 不再因轮数终止；到达非零上限时 Agent 不会无声失败——先经审批闸门弹窗问您（批准=再给一轮额度原地继续，拒绝=结束并交代进展）。总时长上限 1~1440 分钟，0 与超过 1440 均为无限制（缺省）；无进展超过 5 分钟仍会自动转后台并告知（卡死检测，不是时长限制）。保存后新任务立即生效；进行中的任务保持开始时的预算。" />
       </div>
       <div class="settings-card">
         <div class="appearance-row">
           <div class="appearance-main">
             <div class="appearance-name">工具轮预算</div>
-            <div class="appearance-desc">每次任务的工具循环轮数上限（0 = 无限制，最大 9999）；到达非零上限时先问您是否续期，拒绝则由 Agent 交代进展后结束。保存后新任务立即生效。</div>
+            <div class="appearance-desc">每次任务的工具循环轮数上限：0 = 禁用工具（纯对话）、1~1024 = 轮数、无限制 = 不再因轮数终止。保存后新任务立即生效。</div>
           </div>
           <div class="budget-edit">
-            <NumStepper v-model="maxRoundsDraft" :min="0" :max="9999" num-class="budget-num" aria-label="工具轮预算" />
-            <span v-if="maxRoundsDraft === 0" class="chip budget-unlimited">无限制</span>
+            <NumStepper v-model="maxRoundsDraft" :min="0" :max="1024" :unlimited-value="-1" muted-zero num-class="budget-num" aria-label="工具轮预算" />
             <button class="btn btn-primary btn-sm" :disabled="maxRoundsDraft === kernel.maxToolRounds" @click="saveMaxRounds">保存</button>
           </div>
         </div>
         <div class="appearance-row">
           <div class="appearance-main">
             <div class="appearance-name">总时长上限</div>
-            <div class="appearance-desc">单次任务的总运行时长上限（分钟，0 = 无限制——缺省，最大 1440）；无进展超过 5 分钟的卡死检测不受此影响。保存后新任务立即生效。</div>
+            <div class="appearance-desc">单次任务的总运行时长上限（分钟）：1~1440 分钟、无限制 = 不限时（缺省）；无进展超过 5 分钟的卡死检测不受此影响。保存后新任务立即生效。</div>
           </div>
           <div class="budget-edit">
-            <NumStepper v-model="deadlineDraft" :min="0" :max="1440" num-class="budget-num" aria-label="总时长上限（分钟）" />
-            <span v-if="deadlineDraft === 0" class="chip budget-unlimited">无限制</span>
+            <NumStepper v-model="deadlineDraft" :min="1" :max="1440" :unlimited-value="-1" unlimited-at="both" num-class="budget-num" aria-label="总时长上限（分钟）" />
             <button class="btn btn-primary btn-sm" :disabled="deadlineDraft === kernel.runDeadlineMin" @click="saveDeadline">保存</button>
           </div>
         </div>

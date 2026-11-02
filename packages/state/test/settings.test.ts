@@ -315,14 +315,16 @@ describe('已安装插件（2026-10-19 插件视图一期：安装态管理）',
   })
 })
 
-describe('工具轮预算（2026-11-01 可配置化：硬编码 16 → 设置项）', () => {
-  it('缺省 16（旧文件无字段=缺席语义）；set 后读取；0（无限制）合法存取', async () => {
+describe('工具轮预算（2026-11-02 三段值域：-1 无限制 / 0 禁用 / 1~1024 轮数）', () => {
+  it('缺省 16；三段值合法存取（-1 / 0 / 1024）', async () => {
     const { store } = makeStore()
     expect(await store.getMaxToolRounds()).toBe(16)
-    await store.setMaxToolRounds(32)
-    expect(await store.getMaxToolRounds()).toBe(32)
+    await store.setMaxToolRounds(-1)
+    expect(await store.getMaxToolRounds()).toBe(-1)
     await store.setMaxToolRounds(0)
     expect(await store.getMaxToolRounds()).toBe(0)
+    await store.setMaxToolRounds(1024)
+    expect(await store.getMaxToolRounds()).toBe(1024)
   })
 
   it('覆盖写入不动其他字段（providers 等）', async () => {
@@ -334,14 +336,42 @@ describe('工具轮预算（2026-11-01 可配置化：硬编码 16 → 设置项
   })
 })
 
-describe('run 总时长上限（2026-11-01 用户裁定去硬兜底：配置化，0=无限制）', () => {
-  it('缺省 0 = 无限制（旧文件无字段=缺席语义）；set 后读取', async () => {
+describe('run 总时长上限（2026-11-02 三段值域：-1 无限制 / 1~1440 分钟；0 与旧值归一）', () => {
+  it('缺省 -1（无限制）；有效分钟存取；旧语义 0 归一 -1', async () => {
     const { store } = makeStore()
-    expect(await store.getRunDeadlineMin()).toBe(0)
+    expect(await store.getRunDeadlineMin()).toBe(-1)
     await store.setRunDeadlineMin(30)
     expect(await store.getRunDeadlineMin()).toBe(30)
+    await store.setRunDeadlineMin(-1)
+    expect(await store.getRunDeadlineMin()).toBe(-1)
+    // 旧数据兼容：上一版 0 = 无限制——读取端归一 -1（不破坏性迁移）
     await store.setRunDeadlineMin(0)
-    expect(await store.getRunDeadlineMin()).toBe(0)
+    expect(await store.getRunDeadlineMin()).toBe(-1)
+  })
+})
+
+describe('系统通知（2026-11-02 用户需求：run 终态系统提醒）', () => {
+  it('缺省 false；开关存取', async () => {
+    const { store } = makeStore()
+    expect(await store.getSystemNotify()).toBe(false)
+    await store.setSystemNotify(true)
+    expect(await store.getSystemNotify()).toBe(true)
+    await store.setSystemNotify(false)
+    expect(await store.getSystemNotify()).toBe(false)
+  })
+})
+
+describe('parseLoose 白名单（2026-11-02 根因修复：新字段不登记即被 load 丢弃——重启丢回缺省）', () => {
+  it('预算/通知字段跨 store 实例持久（模拟重启重读文件——白名单登记实证）', async () => {
+    const { fs, store } = makeStore()
+    await store.setMaxToolRounds(1024)
+    await store.setRunDeadlineMin(30)
+    await store.setSystemNotify(true)
+    // 重启恢复（同 fs 新实例=缓存隔离，从落盘 JSON 重走 parseLoose）
+    const reopened = new SettingsStore({ fs, root: 'data', encrypt: enc, decrypt: dec })
+    expect(await reopened.getMaxToolRounds()).toBe(1024)
+    expect(await reopened.getRunDeadlineMin()).toBe(30)
+    expect(await reopened.getSystemNotify()).toBe(true)
   })
 })
 

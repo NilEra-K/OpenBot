@@ -464,10 +464,12 @@ export const useKernelStore = defineStore('kernel', {
     defaultProvider: null as string | null,
     /** 默认模型 id（v2 供应商 1:N 模型：defaultProvider 下的生效模型；null = 缺省取首个） */
     defaultModel: null as string | null,
-    /** 工具轮预算（2026-11-01 可配置化）：run 单次工具循环轮数上限——装配期决策，设置后重启生效 */
+    /** 工具轮预算（2026-11-02 三段值域）：-1 = 无限制 / 0 = 禁用工具 / 1~1024 = 轮数 */
     maxToolRounds: 16,
-    /** run 总时长上限（分钟；2026-11-01 用户裁定去硬兜底）：0 = 无限制——装配期决策，重启生效 */
-    runDeadlineMin: 0,
+    /** run 总时长上限（分钟；2026-11-02 三段值域）：-1 = 无限制（缺省）/ 1~1440 分钟 */
+    runDeadlineMin: -1,
+    /** 系统通知（2026-11-02）：Agent run 终态经系统通知提醒——保存即热生效 */
+    systemNotify: false,
     /** 回退端点档案名（P4 Step 11；null = 未设置） */
     fallbackProvider: null as string | null,
     /** LLM 生效事实（状态栏投影；activeLane = 最近一轮成功响应实际走的通道） */
@@ -859,7 +861,7 @@ export const useKernelStore = defineStore('kernel', {
     },
     /** 刷新 provider 配置（boot 与 settings 视图操作后调用） */
     async refreshSettings(): Promise<void> {
-      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null; defaultModel: string | null; fallbackProvider: string | null; maxToolRounds: number; runDeadlineMin: number }>('v1.settings.list')
+      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null; defaultModel: string | null; fallbackProvider: string | null; maxToolRounds: number; runDeadlineMin: number; systemNotify: boolean }>('v1.settings.list')
       this.providers = state.providers
       this.defaultProvider = state.defaultProvider
       this.defaultModel = state.defaultModel
@@ -867,6 +869,7 @@ export const useKernelStore = defineStore('kernel', {
       this.providerConfigured = state.defaultProvider !== null
       this.maxToolRounds = state.maxToolRounds
       this.runDeadlineMin = state.runDeadlineMin
+      this.systemNotify = state.systemNotify
     },
     /** 工具轮预算落盘（2026-11-01 设置页策略区）：装配期决策——重启生效（与沙箱偏好同语义） */
     async setMaxToolRounds(rounds: number): Promise<void> {
@@ -877,6 +880,11 @@ export const useKernelStore = defineStore('kernel', {
     async setRunDeadline(minutes: number): Promise<void> {
       await this.call('v1.settings.setRunDeadline', { minutes })
       this.runDeadlineMin = minutes
+    },
+    /** 系统通知开关（2026-11-02）：保存即热生效（主进程内存 flag） */
+    async setSystemNotify(enabled: boolean): Promise<void> {
+      await this.call('v1.settings.setSystemNotify', { enabled })
+      this.systemNotify = enabled
     },
     /** 新增/更新 provider（同名替换；apiKey 省略=保留原密文），成功后刷新配置态 */
     async upsertProvider(input: ProviderInput): Promise<void> {

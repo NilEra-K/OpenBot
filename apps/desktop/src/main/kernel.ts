@@ -10,7 +10,7 @@
  * - settings 命令面 + provider 热切换（key 密文经 safeStorage；系统加密不可用时 base64 降级并标前缀）
  * - 崩溃恢复：审批账本 pending 项重发 requested 事件（UI 重新弹窗）
  */
-import { app, desktopCapturer, nativeImage, safeStorage, screen as electronScreen } from 'electron'
+import { app, desktopCapturer, nativeImage, Notification, safeStorage, screen as electronScreen } from 'electron'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { KernelError } from '@openbot/core'
@@ -1133,16 +1133,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     screen: screenRouter,
     // save/recall 工具 + 会话装配「此前记忆」注入（每轮同步读缓存；addAgent 预载）
     memory: memoryStore,
-    // run 策略（2026-09-06 进展驱动 grace 语义；2026-11-01 时长硬限配置化）：grace = 无进展
+    // run 策略（2026-09-06 进展驱动 grace 语义；2026-11-02 时长三段值域）：grace = 无进展
     // 5 分钟才逃逸（慢模型长思考/多轮工具循环在动就不算停滞——保留，真卡死的检测）；
-    // deadline = 总时长硬限——用户裁定去兜底，settings 缺省 0 = 无限制（0 → Infinity：
-    // sched 的 deadline 判定是比较式非定时器，永假天然不触发，内核零改动）
-    runPolicy: { graceMs: 300_000, deadlineMs: runDeadlineMin === 0 ? Number.POSITIVE_INFINITY : runDeadlineMin * 60_000 },
-    // 工具轮预算（2026-11-01 可配置化：设置页策略区，缺省 16）：复杂任务（装环境/多文件/
-    // 调试）合法轮数多——配合收尾轮机制（预算打穿时模型仍会交代进展）+ 审批闸门续期
-    // （打穿先问用户），不再无声失败。0 = 无限制（round > Infinity 永假，内核零改动）。
-    // 装配期决策，改动重启生效
-    maxToolRounds: maxToolRoundsCfg === 0 ? Number.POSITIVE_INFINITY : maxToolRoundsCfg,
+    // deadline = 总时长上限——settings -1 = 无限制（缺省，→ Infinity：sched 的 deadline
+    // 判定是比较式非定时器，永假天然不触发，内核零改动）；0 为旧语义（无限制）一并归一
+    runPolicy: { graceMs: 300_000, deadlineMs: runDeadlineMin <= 0 ? Number.POSITIVE_INFINITY : runDeadlineMin * 60_000 },
+    // 工具轮预算（2026-11-02 三段值域：-1 无限制 / 0 禁用工具 / 1~1024 轮数）：复杂任务
+    // （装环境/多文件/调试）合法轮数多——非零上限打穿时经审批闸门问用户续期 + 收尾轮交代，
+    // 不再无声失败。-1 → Infinity（round > Infinity 永假，内核零改动）；0 原样传 runner
+    // （LLM 请求不带工具定义——真禁用）。装配期读一次 + 设置命令热应用，两路幂等
+    maxToolRounds: maxToolRoundsCfg === -1 ? Number.POSITIVE_INFINITY : maxToolRoundsCfg,
     // 真实时钟：确定性断言只存在于内核测试与 CLI（plan-p2 风险与地雷）
     approvalGateFactory: (deps) => {
       approvalGate = new ManualApprovalGate(deps)
@@ -1293,24 +1293,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         fallbackProvider: current.fallbackProvider ?? null,
         maxToolRounds: await settings.getMaxToolRounds(),
         runDeadlineMin: await settings.getRunDeadlineMin(),
+        systemNotify: await settings.getSystemNotify(),
       }
     })
-    // 工具轮预算（2026-11-01 可配置化）：0~9999（0 = 无限制）；落盘即热应用（kernel.setRunBudget
-    // 突变 turn deps——新任务立即生效，在途任务保持原预算），重启由装配读 settings 幂等同值
+    // 工具轮预算（2026-11-02 三段值域）：-1 = 无限制 / 0 = 禁用工具 / 1~1024 = 轮数；
+    // 落盘即热应用（kernel.setRunBudget 突变 turn deps——新任务立即生效，在途保持原预算）
     .register('v1.settings.setMaxToolRounds', async (payload) => {
-      const { rounds } = z.object({ rounds: z.number().int().min(0).max(9999) }).parse(payload)
+      const { rounds } = z.object({ rounds: z.number().int().min(-1).max(1024) }).parse(payload)
       await settings.setMaxToolRounds(rounds)
-      kernel.setRunBudget({ maxToolRounds: rounds === 0 ? Number.POSITIVE_INFINITY : rounds })
+      kernel.setRunBudget({
+        maxToolRounds: rounds === -1 ? Number.POSITIVE_INFINITY : rounds,
+      })
       return { ok: true, rounds }
-    }, z.object({ rounds: z.number().int().min(0).max(9999) }))
-    // run 总时长上限（2026-11-01 用户裁定去 15 分钟硬兜底）：分钟 0~1440；0 = 无限制。
-    // 落盘即热应用（调度器策略基线合并——新入队 run 生效，在途保持）
+    }, z.object({ rounds: z.number().int().min(-1).max(1024) }))
+    // run 总时长上限（2026-11-02 三段值域）：-1 = 无限制（缺省）/ 1~1440 分钟；落盘即热应用
     .register('v1.settings.setRunDeadline', async (payload) => {
-      const { minutes } = z.object({ minutes: z.number().int().min(0).max(1440) }).parse(payload)
+      const { minutes } = z.object({ minutes: z.number().int().min(-1).max(1440) }).parse(payload)
       await settings.setRunDeadlineMin(minutes)
-      kernel.setRunBudget({ deadlineMs: minutes === 0 ? Number.POSITIVE_INFINITY : minutes * 60_000 })
+      kernel.setRunBudget({ deadlineMs: minutes === -1 ? Number.POSITIVE_INFINITY : minutes * 60_000 })
       return { ok: true, minutes }
-    }, z.object({ minutes: z.number().int().min(0).max(1440) }))
+    }, z.object({ minutes: z.number().int().min(-1).max(1440) }))
     .register('v1.settings.upsertProvider', async (payload) => {
       const view = await settings.upsert(providerInputSchema.parse(payload))
       await applyProvider() // 同名=default 或无默认时也可能切换，统一重应用
@@ -2353,6 +2355,51 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   kernel.bus.on('v1.system.roster', () => {
     void refreshAgentNames()
   })
+
+  // ---- 系统通知（2026-11-02 用户需求）：Agent run 终态经系统通知提醒 ----
+  // Electron Notification 三平台统一路径（win/mac/linux）。平台容错如实降级：Linux 依赖
+  // 桌面通知服务（D-Bus org.freedesktop.Notifications——WM-only 环境缺席）；macOS 开发态
+  // 未打包（无 bundle id）系统可能不显示——isSupported + try/catch 双保险静默。
+  // 内存 flag 保存即热生效（与执行预算同款）；点击聚焦窗口待壳层注入回调（backlog）
+  let systemNotify = await settings.getSystemNotify()
+  /** 各 agent 最近终答截断（通知正文——finished 事件不含文本，缓存于 message.agent） */
+  const lastAgentText = new Map<string, string>()
+  kernel.bus.on('v1.message.agent', (event) => {
+    const { agentId, text } = event.payload as { agentId: string; text: string }
+    lastAgentText.set(agentId, text.length > 120 ? `${text.slice(0, 120)}…` : text)
+    if (lastAgentText.size > 50) {
+      const oldest = lastAgentText.keys().next().value
+      if (oldest !== undefined) lastAgentText.delete(oldest)
+    }
+  })
+  kernel.bus.on('v1.lifecycle.finished', (event) => {
+    if (!systemNotify || !Notification.isSupported()) return
+    const { state, agentId } = event.payload as LifecycleFinishedPayload
+    const outcome =
+      state === 'succeeded'
+        ? '任务完成'
+        : state === 'failed'
+          ? '执行失败'
+          : state === 'aborted'
+            ? '已中止'
+            : state === 'escaped'
+              ? '已转后台'
+              : '已结束'
+    try {
+      new Notification({
+        title: `${agentNames.get(agentId) ?? agentId} · ${outcome}`,
+        body: lastAgentText.get(agentId) ?? '',
+      }).show()
+    } catch {
+      /* 平台通知服务缺席——如实静默（不打断主链路） */
+    }
+  })
+  kernel.transport.register('v1.settings.setSystemNotify', async (payload) => {
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(payload)
+    await settings.setSystemNotify(enabled)
+    systemNotify = enabled // 热生效（内存 flag——下一个终态即生效）
+    return { ok: true, enabled }
+  }, z.object({ enabled: z.boolean() }))
 
   /** inbound turn 终答配对：`<roomId>:<requestId>` → { 执行 agentId, 回程房间 }（FIFO 消费） */
   const pendingTurns = new Map<string, { roomId: string; agentId: string }>()

@@ -325,6 +325,27 @@ describe('TurnRunner chat（工具循环）', () => {
     ])
   })
 
+  it('预算 0 = 禁用工具（2026-11-02 三段值域）：LLM 请求不带工具定义——纯对话，无打穿无续期', async () => {
+    const h = makeHarness(
+      { a1: [{ text: '纯对话回复（模型看不到任何工具）' }] },
+      { maxToolRounds: 0 },
+    )
+    const a1 = await h.register('a1')
+    await h.messaging.sendUserMessage({ toAgentId: 'a1', text: '你好', nonce: 'n0' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    expect(a1.isIdle).toBe(true)
+    // 请求层：tools 空数组（模型物理上无从调用——与收尾轮 [] 禁用同构）
+    const req = h.llms.get('a1')!.requests[0]!
+    expect(req.tools).toEqual([])
+    // 正常终答 + run succeeded（无预算打穿、无续期询问）
+    const finalMsg = h.events.find((e) => e.type === 'v1.message.agent')
+    expect(finalMsg?.payload).toMatchObject({ agentId: 'a1', text: '纯对话回复（模型看不到任何工具）' })
+    const finished = h.events.find((e) => e.type === 'v1.lifecycle.finished')
+    expect(finished?.payload).toMatchObject({ state: 'succeeded' })
+    // 无任何工具执行
+    expect(h.backend.calls.length).toBe(0)
+  })
+
   it('预算预警：最后可用轮的工具结果后注入收尾提示（软着陆——引导模型主动总结）', async () => {
     const h = makeHarness(
       {

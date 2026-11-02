@@ -15,6 +15,13 @@ process.on('uncaughtException', (err) => {
   console.error('[openbot] uncaughtException:', err)
 })
 
+// AppUserModelID（2026-11-02 系统通知实装）：Windows 的 toast 通知必须绑定 AUMID——
+// 未设置时系统静默吞掉 Electron 通知（show 不报错、通知中心无痕——真机报障实证）。
+// 开发/打包统一固定 appId（com.openbot.desktop）——开发态的显示名/图标经注册表 AUMID
+// 元数据注册（HKCU AppUserModelId 键：DisplayName/IconUri——Windows 官方 toast 身份机制），
+// 打包态由安装器自带正确身份。mac/linux 无此概念，设置是无害幂等
+app.setAppUserModelId('com.openbot.desktop')
+
 // 装配配置（E2E 用）：隔离 userData 到临时目录——测试数据绝不写进用户真实数据区
 const e2eUserData = process.env.OPENBOT_USER_DATA
 if (e2eUserData) {

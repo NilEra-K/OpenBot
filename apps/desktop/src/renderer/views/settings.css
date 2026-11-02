@@ -970,11 +970,6 @@
   flex: none;
 }
 
-/* 0 = 无限制徽记（2026-11-01 用户裁定语义）：chip 语汇轻标 */
-.budget-unlimited {
-  flex: none;
-}
-
 .appearance-name {
   font-size: 13px;
   font-weight: 650;

@@ -108,14 +108,18 @@ export interface AppSettings {
   sandboxDataDir?: string
   /** 每运行时数据目录（2026-10-20 行级设置）：runtimeId → 目录（目录型后端生效，其余如实不可设） */
   sandboxDataDirs?: Record<string, string>
-  /** 工具轮预算（2026-11-01 用户需求：硬编码 16 → 可配置）：run 单次允许的工具循环轮数上限，
-   *  打穿经审批闸门问用户续期（批准=再给一轮额度）；缺席 = 16（装配期决策，改动重启生效——
-   *  与沙箱偏好同语义）。可选字段（旧文件读取端兼容，version 不动） */
+  /** 工具轮预算（2026-11-02 三段值域定稿）：-1 = 无限制（哨兵，JSON 存不了 Infinity）；
+   *  0 = 禁用工具（模型不带工具定义，纯对话）；1~1024 = 轮数上限（UI/校验约束——读到
+   *  更大的旧值原样保留，运行时兼容）。缺席 = 16（装配期决策，改动热生效） */
   maxToolRounds?: number
-  /** run 总时长上限（2026-11-01 用户裁定：去掉 15 分钟硬兜底）：单位分钟；**0 = 无限制**
-   *  （装配转 Infinity——deadline 判定是比较式非定时器，永假天然不触发）；缺席 = 0（无限制）。
-   *  失控防线=grace 无进展检测 + 手动中止。可选字段（旧文件读取端兼容，version 不动） */
+  /** run 总时长上限（2026-11-02 三段值域定稿）：单位分钟；-1 = 无限制（缺省——用户裁定
+   *  去硬兜底；读取端把旧语义 0 一并归一为 -1）；1~1440 = 分钟上限。无进展 5 分钟的
+   *  卡死检测（grace）不受此影响 */
   runDeadlineMin?: number
+  /** 系统通知（2026-11-02 用户需求）：true = Agent 的 run 到达终态时经系统通知提醒
+   *  （Electron Notification——win/mac/linux 三平台统一路径）。缺省 false。保存即热
+   *  生效（主进程内存 flag，与执行预算同款） */
+  systemNotify?: boolean
 }
 
 /** 展示形状：给 renderer/命令面，绝无 key 材料 */
@@ -401,8 +405,8 @@ export class SettingsStore {
     return settings.sandboxDataDirs?.[runtimeId] ?? null
   }
 
-  /** 工具轮预算（2026-11-01 可配置化）：缺席回 16（装配缺省——runner 的 8 是内核缺省，
-   *  桌面上调语义在此固化）；范围校验归命令面 zod（1~64），store 层存取原值 */
+  /** 工具轮预算（2026-11-02 三段值域）：缺席回 16；-1 = 无限制 / 0 = 禁用 / 1~1024 = 轮数
+   *  （超 1024 的旧值原样保留——运行时兼容，UI 保存端钳制）。范围校验归命令面 zod */
   async getMaxToolRounds(): Promise<number> {
     const settings = await this.load()
     return settings.maxToolRounds ?? 16
@@ -413,16 +417,28 @@ export class SettingsStore {
     await this.#save({ ...settings, maxToolRounds: rounds })
   }
 
-  /** run 总时长上限（分钟；2026-11-01 配置化）：缺席回 0 = 无限制（用户裁定去硬兜底）；
-   *  范围校验归命令面 zod（0~1440），store 层存取原值 */
+  /** run 总时长上限（分钟；2026-11-02 三段值域）：缺席与旧语义 0 一并归一 -1 = 无限制；
+   *  1~1440 = 分钟（超界旧值原样保留）。范围校验归命令面 zod */
   async getRunDeadlineMin(): Promise<number> {
     const settings = await this.load()
-    return settings.runDeadlineMin ?? 0
+    if (settings.runDeadlineMin === undefined || settings.runDeadlineMin === 0) return -1
+    return settings.runDeadlineMin
   }
 
   async setRunDeadlineMin(minutes: number): Promise<void> {
     const settings = await this.load()
     await this.#save({ ...settings, runDeadlineMin: minutes })
+  }
+
+  /** 系统通知（2026-11-02）：缺省 false；无类型约束外的校验（布尔即合法） */
+  async getSystemNotify(): Promise<boolean> {
+    const settings = await this.load()
+    return settings.systemNotify === true
+  }
+
+  async setSystemNotify(enabled: boolean): Promise<void> {
+    const settings = await this.load()
+    await this.#save({ ...settings, systemNotify: enabled })
   }
 
   async setRuntimeDataDir(runtimeId: string, dir: string | null): Promise<void> {
@@ -579,6 +595,11 @@ function parseLoose(raw: string | null): AppSettings {
       roleTemplates?: unknown
       installedPlugins?: unknown
       providers?: Array<Record<string, unknown>>
+      maxToolRounds?: unknown
+      runDeadlineMin?: unknown
+      systemNotify?: unknown
+      sandboxDataDir?: unknown
+      sandboxDataDirs?: unknown
     }
     if (parsed && (parsed.version === 1 || parsed.version === 2) && Array.isArray(parsed.providers)) {
       const providers = parsed.providers
@@ -631,6 +652,16 @@ function parseLoose(raw: string | null): AppSettings {
         ...(parsed.relays !== undefined ? { relays: parsed.relays } : {}),
         // P7 早期单房间字段：读兼容保留（getRelays 回退），写入走 relays
         ...(parsed.relay !== undefined ? { relay: parsed.relay } : {}),
+        // ---- 白名单补漏（2026-11-02 根因修复）：parseLoose 按字段挑拣返回，新字段不登记
+        // 就会在每次 load 时被丢弃——「保存成功、重启丢回缺省」（工具轮预算 1024 重启变 16、
+        // 系统通知静默——真机报障实证）。sandboxDataDir(s) 为 2026-10-20 存量同漏，一并补齐
+        ...(asNum(parsed.maxToolRounds) !== undefined ? { maxToolRounds: asNum(parsed.maxToolRounds) } : {}),
+        ...(asNum(parsed.runDeadlineMin) !== undefined ? { runDeadlineMin: asNum(parsed.runDeadlineMin) } : {}),
+        ...(typeof parsed.systemNotify === 'boolean' ? { systemNotify: parsed.systemNotify } : {}),
+        ...(asStr(parsed.sandboxDataDir) !== undefined ? { sandboxDataDir: asStr(parsed.sandboxDataDir) } : {}),
+        ...(typeof parsed.sandboxDataDirs === 'object' && parsed.sandboxDataDirs !== null
+          ? { sandboxDataDirs: parsed.sandboxDataDirs as Record<string, string> }
+          : {}),
       }
     }
   } catch {

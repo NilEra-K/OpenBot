@@ -474,7 +474,10 @@ export class TurnRunner {
           emitStream
             ? (delta) => emit({ type: 'chunk', stream: 'llm', text: delta })
             : undefined,
-          undefined,
+          // 预算 0 = 禁用工具（2026-11-02 三段值域）：请求不带任何工具定义——模型无从
+          // 调用（纯对话），而非调用即弹窗续期；模型无工具则不回 toolCalls，round 恒 0
+          // 永不触打穿分支，与收尾轮的 [] 禁用同构
+          maxRounds === 0 ? [] : undefined,
           (delta) => {
             thinkingText += delta // 无 emitStream 也聚合（持久化不依赖实况开关）
             if (emitStream) emit({ type: 'chunk', stream: 'llm', text: delta, think: true })
