@@ -85,7 +85,8 @@ export class AgentScheduler {
   readonly #now: () => number
   readonly #nextRunId: () => string
   readonly #execute: RunExecutor
-  readonly #policy: RunPolicy
+  /** 策略基线（热更新可变——updatePolicy；entry 入队时拷贝故在途 run 不受影响） */
+  #policy: RunPolicy
   readonly #bus: EventBus | undefined
   readonly #lanes: Record<Lane, QueueEntry[]>
   #active: ActiveSlot | null = null
@@ -153,9 +154,15 @@ export class AgentScheduler {
     return true
   }
 
+  /** 策略热更新（2026-11-01 执行预算保存即生效）：合并进本调度器的策略基线——
+   *  只影响**此后入队**的 run（entry 构造时拷贝基线），在途 run 保持入队时策略
+   *  （一个 run 内预算一致，中途改上限不回溯） */
+  updatePolicy(partial: Partial<RunPolicy>): void {
+    this.#policy = { ...this.#policy, ...definedEntries(partial) }
+  }
+
   /** watchdog/期限心跳：由装配方驱动（真实=定时器，测试=手动推进） */
-  tick(): void {
-    const active = this.#active
+  tick(): void {    const active = this.#active
     if (!active) return
     // grace 判据 = 无进展时长（touch 刷新）；deadline 判据 = 总时长（失控循环硬限，不从进展豁免）
     const idleMs = this.#now() - active.lastProgressAt

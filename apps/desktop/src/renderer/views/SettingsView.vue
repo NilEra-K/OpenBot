@@ -610,6 +610,33 @@ const toggleAutoLaunch = async (): Promise<void> => {
   toast.push(next ? '已开启开机自启动' : '已关闭开机自启动', 'success')
 }
 
+// ---- 执行预算（2026-11-01 可配置化）：草稿 + 显式保存（显式保存语汇与数据目录/自动化
+//      表单一致；NumStepper 手输清空不回写——保存端 clamp 双保险兜底同 cron 范式） ----
+const maxRoundsDraft = ref(kernel.maxToolRounds)
+watch(() => kernel.maxToolRounds, (v) => (maxRoundsDraft.value = v))
+const saveMaxRounds = async (): Promise<void> => {
+  const rounds = Math.max(0, Math.min(9999, Math.round(maxRoundsDraft.value) || 0))
+  try {
+    await kernel.setMaxToolRounds(rounds)
+    maxRoundsDraft.value = rounds
+    toast.push(rounds === 0 ? '工具轮预算已设为无限制——新任务立即生效' : `工具轮预算已更新为 ${rounds}——新任务立即生效（进行中的任务保持原预算）`, 'success')
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
+  }
+}
+const deadlineDraft = ref(kernel.runDeadlineMin)
+watch(() => kernel.runDeadlineMin, (v) => (deadlineDraft.value = v))
+const saveDeadline = async (): Promise<void> => {
+  const minutes = Math.max(0, Math.min(1440, Math.round(deadlineDraft.value) || 0))
+  try {
+    await kernel.setRunDeadline(minutes)
+    deadlineDraft.value = minutes
+    toast.push(minutes === 0 ? '总时长上限已设为无限制——新任务立即生效' : `总时长上限已更新为 ${minutes} 分钟——新任务立即生效（进行中的任务保持原时长）`, 'success')
+  } catch (err) {
+    toast.push(err instanceof Error ? err.message : String(err), 'danger')
+  }
+}
+
 onMounted(() => {
   void window.openbot?.app
     ?.version()
@@ -2184,6 +2211,36 @@ const wslRelevant = computed(
             <div class="appearance-desc">Agent 在 Box 内自由执行；触碰宿主机文件或出网时逐条请求批准，挂起期间计入执行时限；应用重启后未决审批自动重发（账本持久真相）。策略分级开关属后续版本。</div>
           </div>
           <span class="chip" :class="kernel.approvalMode === 'manual' ? 'chip-accent' : ''">{{ kernel.approvalMode === 'manual' ? '手工审批' : '自动批准' }}</span>
+        </div>
+      </div>
+
+      <!-- 执行预算（2026-11-01 可配置化，原硬编码 16 轮 + 15 分钟）：保存即热生效（新任务立即用新值） -->
+      <div class="set-sec-row">
+        <div class="set-sec">执行预算</div>
+        <HelpTip text="单次任务（run）的执行护栏。工具轮预算 = 工具循环轮数上限，0 = 无限制——到达非零上限时 Agent 不会无声失败：先经审批闸门弹窗问您（批准=再给一轮额度原地继续；拒绝=结束并由 Agent 交代进展）。总时长上限 = 单次任务的总运行时长，0 = 无限制（缺省）——无进展超过 5 分钟仍会自动转后台并告知（这是卡死检测，不是时长限制）。保存后新任务立即生效；进行中的任务保持开始时的预算。" />
+      </div>
+      <div class="settings-card">
+        <div class="appearance-row">
+          <div class="appearance-main">
+            <div class="appearance-name">工具轮预算</div>
+            <div class="appearance-desc">每次任务的工具循环轮数上限（0 = 无限制，最大 9999）；到达非零上限时先问您是否续期，拒绝则由 Agent 交代进展后结束。保存后新任务立即生效。</div>
+          </div>
+          <div class="budget-edit">
+            <NumStepper v-model="maxRoundsDraft" :min="0" :max="9999" num-class="budget-num" aria-label="工具轮预算" />
+            <span v-if="maxRoundsDraft === 0" class="chip budget-unlimited">无限制</span>
+            <button class="btn btn-primary btn-sm" :disabled="maxRoundsDraft === kernel.maxToolRounds" @click="saveMaxRounds">保存</button>
+          </div>
+        </div>
+        <div class="appearance-row">
+          <div class="appearance-main">
+            <div class="appearance-name">总时长上限</div>
+            <div class="appearance-desc">单次任务的总运行时长上限（分钟，0 = 无限制——缺省，最大 1440）；无进展超过 5 分钟的卡死检测不受此影响。保存后新任务立即生效。</div>
+          </div>
+          <div class="budget-edit">
+            <NumStepper v-model="deadlineDraft" :min="0" :max="1440" num-class="budget-num" aria-label="总时长上限（分钟）" />
+            <span v-if="deadlineDraft === 0" class="chip budget-unlimited">无限制</span>
+            <button class="btn btn-primary btn-sm" :disabled="deadlineDraft === kernel.runDeadlineMin" @click="saveDeadline">保存</button>
+          </div>
         </div>
       </div>
 

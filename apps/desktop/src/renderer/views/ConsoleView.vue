@@ -449,12 +449,29 @@ watch(
 )
 watch(() => ui.activeAgentId, (id) => { if (id !== null) void kernel.refreshContextUsage(id) }, { immediate: true })
 let gaugeTimer: number | undefined
+// 内容高度锚定（2026-11-01 收编塌缩报障根治）：高度是**过程**——思考卡折叠过渡
+// （240ms grid-rows）、图片加载、markdown 迟滞渲染都让 scrollHeight 持续变化，任何
+// 时刻式置底（scrollToBottom 的双 rAF）都会被后续变化甩掉（收编塌缩时视口悬在半空、
+// 终答正文不在视野——真机实录实证）。声明式兜底：贴底意图（isNearBottom）下内容根
+// 一变尺寸即随动置底——覆盖一切现在与未来的高度变化源，零时长猜测。上翻阅读
+// （isNearBottom false）不受打扰；置底不改内容尺寸，无回流环。
+let streamResizeObserver: ResizeObserver | undefined
 onMounted(() => {
   gaugeTimer = window.setInterval(() => {
     if (ui.activeAgentId !== null) void kernel.refreshContextUsage(ui.activeAgentId)
   }, 30_000)
+  const inner = streamInnerEl.value
+  if (inner === null) return
+  streamResizeObserver = new ResizeObserver(() => {
+    const el = streamEl.value
+    if (el !== null && isNearBottom()) el.scrollTop = el.scrollHeight
+  })
+  streamResizeObserver.observe(inner)
 })
-onBeforeUnmount(() => { if (gaugeTimer !== undefined) window.clearInterval(gaugeTimer) })
+onBeforeUnmount(() => {
+  if (gaugeTimer !== undefined) window.clearInterval(gaugeTimer)
+  streamResizeObserver?.disconnect()
+})
 
 const endedOutcomeLabel = computed(() => {
   // 群轮 run 不在此交代（其终态归群流注记）——只看该 agent 的私聊/协作 run。
@@ -1603,10 +1620,6 @@ const retry = (index: number): void => {
   void kernel.sendUserMessage(m.to, m.text, nonce).catch(() => {})
 }
 
-const resolveGate = (nonce: string, decision: 'approved' | 'denied'): void => {
-  void kernel.resolveApproval(nonce, decision).catch(() => {})
-}
-
 /** ctx 收起开关图标（原型 ICONS.panelcol/panelexp 同款 path） */
 const PANELCOL = '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M14.5 5v14"/><path d="M11 10.5L8.5 12l2.5 1.5"/>'
 const PANELEXP = '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M14.5 5v14"/><path d="M8 10.5L10.5 12 8 13.5"/>'
@@ -1886,9 +1899,11 @@ const GROUP_ICON =
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"></path></svg>
                       </span>
                     </button>
-                    <div v-if="isThinkOpen(part.block)" class="think-body-wrap">
-                      <span class="think-body mono">{{ part.block.stdout }}</span>
-                      <span v-if="part.block.state === 'live'" class="think-caret"></span>
+                    <div class="think-body-wrap" :class="{ collapsed: !isThinkOpen(part.block) }">
+                      <div class="think-body-clip">
+                        <span class="think-body mono">{{ part.block.stdout }}</span>
+                        <span v-if="part.block.state === 'live'" class="think-caret"></span>
+                      </div>
                     </div>
                   </div>
 
@@ -1951,19 +1966,10 @@ const GROUP_ICON =
             </div>
           </template>
 
-          <!-- 审批 gate 卡：全局挂起（不按会话过滤——出 Box 操作影响整个系统） -->
-          <div v-for="approval in kernel.pendingApprovals" :key="approval.nonce" class="gate">
-            <div class="gate-head">⚠ 出 Box 操作待批准：{{ approval.tool }}</div>
-            <div class="gate-body">
-              Agent <b>{{ approval.agentId }}</b> 请求执行
-              <b class="mono">{{ approval.tool }}</b>
-              <span v-if="approval.reason">——{{ approval.reason }}</span>
-            </div>
-            <div class="gate-actions">
-              <button class="btn btn-primary btn-sm" @click="resolveGate(approval.nonce, 'approved')">批准</button>
-              <button class="btn btn-danger-ghost btn-sm" @click="resolveGate(approval.nonce, 'denied')">拒绝</button>
-            </div>
-          </div>
+          <!-- 审批 gate 卡已退役（2026-11-01 用户裁定）：审批交互面就是全局 ApprovalModal
+               （pendingApprovals 非空即弹），流内卡被模态覆盖永远点不到；且每次增删 ±143px
+               抽走消息流高度，是流式滚动跳动的最大扰动源（25s 内 8 次增删实测）。等待中=
+               模态弹出；被「稍后处理」暂收=侧栏 console 角标计数提示 -->
 
           <!-- 编辑消息模态（「会话掌控」· v0.1.47 重设计）：轻量专用卡——不再复向导骨架；
                舒适 textarea（正文非代码不 mono）+ 分行动作说明 + 三键明确层次 -->

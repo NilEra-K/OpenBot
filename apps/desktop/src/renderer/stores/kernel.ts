@@ -443,6 +443,10 @@ export const useKernelStore = defineStore('kernel', {
     /** 群终答 runId 集合（群轮过程私聊隔离的判据）：群流装载（group-agent 记录）与
      *  v1.group.message 实况收集——识别「成员档案里的遗留群轮过程记录」（新数据已落群流） */
     groupRunIds: [] as string[],
+    /** 已终答 runId 集合（v0.1.122 迟到碎片根治）：终答事件（含回放）到达即记录——WS 流与
+     *  事件总线是两条独立通道，终答可先于流式尾部 chunk 到达（真机实证：碎片晚 9.5s），
+     *  此后晚到的该 run chunk 一律不建块（内容已由终答消息完整承载，碎片只会残留） */
+    finalizedRunIds: [] as string[],
     messages: [] as ChatMessage[],
     pendingApprovals: [] as PendingApproval[],
     execs: [] as ExecCard[],
@@ -460,6 +464,10 @@ export const useKernelStore = defineStore('kernel', {
     defaultProvider: null as string | null,
     /** 默认模型 id（v2 供应商 1:N 模型：defaultProvider 下的生效模型；null = 缺省取首个） */
     defaultModel: null as string | null,
+    /** 工具轮预算（2026-11-01 可配置化）：run 单次工具循环轮数上限——装配期决策，设置后重启生效 */
+    maxToolRounds: 16,
+    /** run 总时长上限（分钟；2026-11-01 用户裁定去硬兜底）：0 = 无限制——装配期决策，重启生效 */
+    runDeadlineMin: 0,
     /** 回退端点档案名（P4 Step 11；null = 未设置） */
     fallbackProvider: null as string | null,
     /** LLM 生效事实（状态栏投影；activeLane = 最近一轮成功响应实际走的通道） */
@@ -851,12 +859,24 @@ export const useKernelStore = defineStore('kernel', {
     },
     /** 刷新 provider 配置（boot 与 settings 视图操作后调用） */
     async refreshSettings(): Promise<void> {
-      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null; defaultModel: string | null; fallbackProvider: string | null }>('v1.settings.list')
+      const state = await this.call<{ providers: ProviderView[]; defaultProvider: string | null; defaultModel: string | null; fallbackProvider: string | null; maxToolRounds: number; runDeadlineMin: number }>('v1.settings.list')
       this.providers = state.providers
       this.defaultProvider = state.defaultProvider
       this.defaultModel = state.defaultModel
       this.fallbackProvider = state.fallbackProvider
       this.providerConfigured = state.defaultProvider !== null
+      this.maxToolRounds = state.maxToolRounds
+      this.runDeadlineMin = state.runDeadlineMin
+    },
+    /** 工具轮预算落盘（2026-11-01 设置页策略区）：装配期决策——重启生效（与沙箱偏好同语义） */
+    async setMaxToolRounds(rounds: number): Promise<void> {
+      await this.call('v1.settings.setMaxToolRounds', { rounds })
+      this.maxToolRounds = rounds
+    },
+    /** run 总时长上限落盘（分钟；0 = 无限制）：同预算语义——重启生效 */
+    async setRunDeadline(minutes: number): Promise<void> {
+      await this.call('v1.settings.setRunDeadline', { minutes })
+      this.runDeadlineMin = minutes
     },
     /** 新增/更新 provider（同名替换；apiKey 省略=保留原密文），成功后刷新配置态 */
     async upsertProvider(input: ProviderInput): Promise<void> {
@@ -1202,6 +1222,11 @@ export const useKernelStore = defineStore('kernel', {
         // ---- 领域消息映射（user/agent/a2a + 群 kinds——P5 Step 4；agentId 参数即会话键，群传 groupId） ----
         const msg = p as { messageId?: string; text?: string; from?: string; to?: string }
         if (typeof msg.messageId !== 'string' || typeof msg.text !== 'string') continue
+        // 终答 runId 收集（v0.1.122）：回放路径与事件路径幂等合流（事件先到已记档）——
+        // 重启回放后同 run 的晚到碎片同样掐断（私聊 agent 与群 group-agent 两键统一）
+        if ((record.kind === 'agent' || record.kind === 'group-agent') && typeof p['runId'] === 'string' && !this.finalizedRunIds.includes(p['runId'])) {
+          this.finalizedRunIds.push(p['runId'])
+        }
         if (this.messages.some((m) => m.messageId === msg.messageId)) continue // 事件流已覆盖
         const msgAtts = (p as { attachments?: AttachmentMeta[] }).attachments // user 与 agent（v0.1.118 附图）同构
         if (msgAtts !== undefined) for (const a of msgAtts) void this.attachmentUri(a.id, a.mime).catch(() => {})
@@ -1339,7 +1364,13 @@ export const useKernelStore = defineStore('kernel', {
             ...(event.payload.attachments !== undefined ? { attachments: event.payload.attachments } : {}),
           })
           // 正文预览块让位真消息（v0.1.43）：终答事件可先于流 end 到达（事件时序）——不看 state
-          // 直接删（live/end 都删；流 end 随后到达时块已除名，onStreamEnd 无操作）；思考块保留
+          // 直接删（live/end 都删；流 end 随后到达时块已除名，onStreamEnd 无操作）；思考块保留。
+          // v0.1.122 补漏：事件也可能先于流式**尾部 chunk**到达——删除只扫得到当时在场的块，
+          // 晚到的碎片会另建新块（真机实证「图片？」碎片晚终答 9.5s 残留）——runId 记档，
+          // onStreamChunk 据此掐死「终答后再建块」
+          if (typeof event.payload.runId === 'string' && !this.finalizedRunIds.includes(event.payload.runId)) {
+            this.finalizedRunIds.push(event.payload.runId)
+          }
           this.streams = this.streams.filter(
             (b) => !(b.agentId === event.payload.agentId && b.stream === 'llm' && b.think !== true),
           )
@@ -1423,8 +1454,12 @@ export const useKernelStore = defineStore('kernel', {
             : {}),
           })
           // 正文预览块让位（同 v1.message.agent 语义）：成员群终答到达即清其正文 live 块——
-          // 群轮正文的家在群流（此前缺失致同一句话在成员私聊呈现两遍：预览气泡 + relay 行）
+          // 群轮正文的家在群流（此前缺失致同一句话在成员私聊呈现两遍：预览气泡 + relay 行）。
+          // runId 记档（v0.1.122 同 v1.message.agent：掐死终答后晚到碎片另建块）
           if (p.kind === 'agent') {
+            if (typeof p.runId === 'string' && !this.finalizedRunIds.includes(p.runId)) {
+              this.finalizedRunIds.push(p.runId)
+            }
             this.streams = this.streams.filter(
               (b) => !(b.agentId === p.from && b.stream === 'llm' && b.think !== true),
             )
@@ -1637,6 +1672,11 @@ export const useKernelStore = defineStore('kernel', {
       chunk: { t: string; ch?: 'stdout' | 'stderr'; th?: boolean },
     ): void {
       if (record.stream === 'llm') {
+        // 终答后晚到**正文**碎片掐断（v0.1.122）：终答事件先于流式尾部 chunk 到达时（两通道
+        // 独立竞速，真机实证碎片晚 9.5s），正文已由终答消息完整承载——晚到正文 chunk 不建块
+        // （建了就是无主残留：「图片？」半段气泡报障实锤）。思考通道不掐：终答后到达的思考
+        // 卡是过程事实（v0.1.43「思考块保留」语义——E2E 思考双通道用例实证此路径常态存在）
+        if (chunk.th !== true && this.finalizedRunIds.includes(record.runId)) return
         // llm 双通道（v0.1.43）：th=true → 思考块 / 缺省 → 正文块（live 预览气泡）。
         // open 不预开——首 chunk 惰性建，th 交替时各自续写已有通道块。
         // 身份配对（v0.1.121）：find 以流代际 seq 为准——断线吞 end 后旧块即使滞留 live，

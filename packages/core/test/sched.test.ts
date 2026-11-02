@@ -176,6 +176,33 @@ describe('AgentScheduler watchdog 与期限', () => {
     expect(o1.code).toBe('RUN_DEADLINE')
   })
 
+  it('updatePolicy 热更新（2026-11-01 执行预算保存即生效）：在途 run 保持入队时策略，新入队用新值', async () => {
+    const harness = makeHarness()
+    // run-1 以基线 deadline 2_000 入队后，热更新收紧到 100——在途不受影响（entry 已拷贝）
+    const r1 = harness.scheduler.enqueue({
+      lane: 'background',
+      kind: 'task',
+      policy: { graceMs: 60_000, deadlineMs: 2_000 },
+    })
+    harness.scheduler.updatePolicy({ deadlineMs: 100 })
+    harness.advance(101)
+    expect(harness.scheduler.activeRunId).toBe('run-1') // 未超入队时的 2_000——仍在跑
+    harness.gates[0]?.resolve()
+    const o1 = await r1.settled
+    expect(o1.state).not.toBe('failed') // 正常完成（热更新未回溯）
+    // run-2 在热更新后入队：新基线 100 生效
+    await new Promise<void>((resolve) => setTimeout(resolve, 0)) // 冲刷 drain → #start(run-2)
+    const r2 = harness.scheduler.enqueue({
+      lane: 'background',
+      kind: 'task',
+      policy: { graceMs: 60_000 }, // deadline 走热更新后的基线
+    })
+    harness.advance(101)
+    const o2 = await r2.settled
+    expect(o2.state).toBe('failed')
+    expect(o2.code).toBe('RUN_DEADLINE')
+  })
+
   it('先逃逸后到期：只结算一次，结局保持 escaped', async () => {
     const harness = makeHarness()
     const r1 = harness.scheduler.enqueue({

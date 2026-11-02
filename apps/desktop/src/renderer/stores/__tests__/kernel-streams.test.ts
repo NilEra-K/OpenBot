@@ -82,4 +82,36 @@ describe('onStreamsDisconnected（断线封块）', () => {
     const k = useKernelStore()
     expect(() => k.onStreamsDisconnected()).not.toThrow()
   })
+
+  it('终答后晚到**正文**碎片不建块（v0.1.122 迟到残留根治：「图片？」报障场景）', () => {
+    const k = useKernelStore()
+    // 终答事件先到（WS 流与事件总线两通道独立竞速——碎片可晚终答数秒）
+    k.onEvent({ type: 'v1.message.agent', seq: 1, at: 1000, payload: { messageId: 'm1', agentId: 'a1', text: 'Everything 已打开……图片？', runId: 'run-x' } as never })
+    expect(k.finalizedRunIds).toContain('run-x')
+    // 9.5 秒后尾部正文碎片 chunk 才到达——掐断不建块
+    k.onStreamChunk({ agentId: 'a1', runId: 'run-x', stream: 'llm', seq: 4 }, { t: '图片？' })
+    expect(k.streams.filter((s) => s.runId === 'run-x' && s.think !== true)).toHaveLength(0)
+    // 思考通道不掐（v0.1.43「思考块保留」——终答后到达的思考卡是过程事实）
+    k.onStreamChunk({ agentId: 'a1', runId: 'run-x', stream: 'llm', seq: 4 }, { t: '事后思考', th: true })
+    expect(k.streams.filter((s) => s.runId === 'run-x' && s.think === true)).toHaveLength(1)
+  })
+
+  it('终答事件同时清除当时在场的正文块（既有语义保持）+ runId 幂等不重复记档', () => {
+    const k = useKernelStore()
+    k.streams.push(
+      { key: 'b1', agentId: 'a1', runId: 'run-x', stream: 'llm', seq: 1, stdout: '正文预览', stderr: '', state: 'live', at: 900 },
+      { key: 'b2', agentId: 'a1', runId: 'run-x', stream: 'llm', seq: 1, stdout: '思考', stderr: '', state: 'live', at: 900, think: true },
+    )
+    k.onEvent({ type: 'v1.message.agent', seq: 2, at: 1000, payload: { messageId: 'm1', agentId: 'a1', text: '终答', runId: 'run-x' } as never })
+    expect(k.streams.some((s) => s.think !== true)).toBe(false) // 正文块被清
+    expect(k.streams.some((s) => s.think === true)).toBe(true) // 思考块保留（v0.1.43 语义）
+    k.onEvent({ type: 'v1.message.agent', seq: 3, at: 1100, payload: { messageId: 'm2', agentId: 'a1', text: '终答2', runId: 'run-x' } as never })
+    expect(k.finalizedRunIds.filter((r) => r === 'run-x')).toHaveLength(1) // 幂等
+  })
+
+  it('无终答的 run（预算耗尽/中止）正文照常保留（既有「最后事实」语义不回归）', () => {
+    const k = useKernelStore()
+    k.onStreamChunk({ agentId: 'a1', runId: 'run-y', stream: 'llm', seq: 1 }, { t: '预算耗尽前的交代' })
+    expect(k.streams.filter((s) => s.runId === 'run-y' && s.think !== true)).toHaveLength(1)
+  })
 })

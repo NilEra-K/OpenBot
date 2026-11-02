@@ -315,6 +315,36 @@ describe('已安装插件（2026-10-19 插件视图一期：安装态管理）',
   })
 })
 
+describe('工具轮预算（2026-11-01 可配置化：硬编码 16 → 设置项）', () => {
+  it('缺省 16（旧文件无字段=缺席语义）；set 后读取；0（无限制）合法存取', async () => {
+    const { store } = makeStore()
+    expect(await store.getMaxToolRounds()).toBe(16)
+    await store.setMaxToolRounds(32)
+    expect(await store.getMaxToolRounds()).toBe(32)
+    await store.setMaxToolRounds(0)
+    expect(await store.getMaxToolRounds()).toBe(0)
+  })
+
+  it('覆盖写入不动其他字段（providers 等）', async () => {
+    const { store } = makeStore()
+    await store.upsert({ name: 'p1', baseUrl: 'https://x', models: [{ id: 'm1' }] })
+    await store.setMaxToolRounds(24)
+    expect((await store.list()).map((p) => p.name)).toEqual(['p1'])
+    expect(await store.getMaxToolRounds()).toBe(24)
+  })
+})
+
+describe('run 总时长上限（2026-11-01 用户裁定去硬兜底：配置化，0=无限制）', () => {
+  it('缺省 0 = 无限制（旧文件无字段=缺席语义）；set 后读取', async () => {
+    const { store } = makeStore()
+    expect(await store.getRunDeadlineMin()).toBe(0)
+    await store.setRunDeadlineMin(30)
+    expect(await store.getRunDeadlineMin()).toBe(30)
+    await store.setRunDeadlineMin(0)
+    expect(await store.getRunDeadlineMin()).toBe(0)
+  })
+})
+
 describe('沙箱数据目录（2026-10-20 v0.2.0 Box 位置参数化）', () => {
   it('缺省 null；set 后读取；清除回 null（旧文件无字段=缺席语义）', async () => {
     const { store } = makeStore()

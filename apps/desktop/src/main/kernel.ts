@@ -1052,6 +1052,9 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   let computerEnabled = process.env.OPENBOT_COMPUTER === '1'
   /** 工具族已注册标记（ensureComputerTools 幂等判据——与使能判据分离，v0.1.38 回归修复） */
   let computerRegistered = false
+  // 执行预算（2026-11-01 设置页策略区）：装配期读一次（改动重启生效——与沙箱偏好同语义）
+  const maxToolRoundsCfg = await settings.getMaxToolRounds()
+  const runDeadlineMin = await settings.getRunDeadlineMin()
   const kernel = assembleKernel({
     fs,
     root: dataRoot,
@@ -1130,12 +1133,16 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
     screen: screenRouter,
     // save/recall 工具 + 会话装配「此前记忆」注入（每轮同步读缓存；addAgent 预载）
     memory: memoryStore,
-    // run 策略上调（2026-09-06 进展驱动 grace 语义）：无进展 5 分钟才逃逸（慢模型长思考/
-    // 多轮工具循环在动就不算停滞）、总时长 15 分钟硬限兜底失控——CLI/测试保持内核缺省
-    runPolicy: { graceMs: 300_000, deadlineMs: 900_000 },
-    // 工具轮预算上调（8→16）：复杂任务（装环境/多文件/调试）合法轮数多——配合收尾轮机制
-    // （预算打穿时模型仍会交代进展），不再无声失败
-    maxToolRounds: 16,
+    // run 策略（2026-09-06 进展驱动 grace 语义；2026-11-01 时长硬限配置化）：grace = 无进展
+    // 5 分钟才逃逸（慢模型长思考/多轮工具循环在动就不算停滞——保留，真卡死的检测）；
+    // deadline = 总时长硬限——用户裁定去兜底，settings 缺省 0 = 无限制（0 → Infinity：
+    // sched 的 deadline 判定是比较式非定时器，永假天然不触发，内核零改动）
+    runPolicy: { graceMs: 300_000, deadlineMs: runDeadlineMin === 0 ? Number.POSITIVE_INFINITY : runDeadlineMin * 60_000 },
+    // 工具轮预算（2026-11-01 可配置化：设置页策略区，缺省 16）：复杂任务（装环境/多文件/
+    // 调试）合法轮数多——配合收尾轮机制（预算打穿时模型仍会交代进展）+ 审批闸门续期
+    // （打穿先问用户），不再无声失败。0 = 无限制（round > Infinity 永假，内核零改动）。
+    // 装配期决策，改动重启生效
+    maxToolRounds: maxToolRoundsCfg === 0 ? Number.POSITIVE_INFINITY : maxToolRoundsCfg,
     // 真实时钟：确定性断言只存在于内核测试与 CLI（plan-p2 风险与地雷）
     approvalGateFactory: (deps) => {
       approvalGate = new ManualApprovalGate(deps)
@@ -1284,8 +1291,26 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
         defaultProvider: current.defaultProvider ?? null,
         defaultModel: current.defaultModel ?? null,
         fallbackProvider: current.fallbackProvider ?? null,
+        maxToolRounds: await settings.getMaxToolRounds(),
+        runDeadlineMin: await settings.getRunDeadlineMin(),
       }
     })
+    // 工具轮预算（2026-11-01 可配置化）：0~9999（0 = 无限制）；落盘即热应用（kernel.setRunBudget
+    // 突变 turn deps——新任务立即生效，在途任务保持原预算），重启由装配读 settings 幂等同值
+    .register('v1.settings.setMaxToolRounds', async (payload) => {
+      const { rounds } = z.object({ rounds: z.number().int().min(0).max(9999) }).parse(payload)
+      await settings.setMaxToolRounds(rounds)
+      kernel.setRunBudget({ maxToolRounds: rounds === 0 ? Number.POSITIVE_INFINITY : rounds })
+      return { ok: true, rounds }
+    }, z.object({ rounds: z.number().int().min(0).max(9999) }))
+    // run 总时长上限（2026-11-01 用户裁定去 15 分钟硬兜底）：分钟 0~1440；0 = 无限制。
+    // 落盘即热应用（调度器策略基线合并——新入队 run 生效，在途保持）
+    .register('v1.settings.setRunDeadline', async (payload) => {
+      const { minutes } = z.object({ minutes: z.number().int().min(0).max(1440) }).parse(payload)
+      await settings.setRunDeadlineMin(minutes)
+      kernel.setRunBudget({ deadlineMs: minutes === 0 ? Number.POSITIVE_INFINITY : minutes * 60_000 })
+      return { ok: true, minutes }
+    }, z.object({ minutes: z.number().int().min(0).max(1440) }))
     .register('v1.settings.upsertProvider', async (payload) => {
       const view = await settings.upsert(providerInputSchema.parse(payload))
       await applyProvider() // 同名=default 或无默认时也可能切换，统一重应用

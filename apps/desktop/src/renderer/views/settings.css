@@ -962,6 +962,19 @@
   min-width: 0;
 }
 
+/* 工具轮预算编辑位（2026-11-01 设置页策略区）：NumStepper + 保存钮行内组合 */
+.budget-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* 0 = 无限制徽记（2026-11-01 用户裁定语义）：chip 语汇轻标 */
+.budget-unlimited {
+  flex: none;
+}
+
 .appearance-name {
   font-size: 13px;
   font-weight: 650;

@@ -15,6 +15,9 @@ const props = defineProps<{
   min?: number
   max?: number
   ariaLabel?: string
+  /** input 语义类（2026-11-01）：缺省 cron-num（E2E fill 契约）——非 cron 场景传入专用类，
+   *  避免同页多枚步进器时 .cron-num 全局选择器 strict violation（policy 区预算步进实证） */
+  numClass?: string
 }>()
 const emit = defineEmits<{ 'update:modelValue': [number] }>()
 
@@ -90,7 +93,8 @@ function onKeyClick(dir: 1 | -1, e: MouseEvent): void {
       @click="onKeyClick(-1, $event)"
     ><i class="ns-i" aria-hidden="true"></i></button>
     <input
-      class="ns-input cron-num"
+      class="ns-input"
+      :class="numClass ?? 'cron-num'"
       type="number"
       :min="min"
       :max="max"

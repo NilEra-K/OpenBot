@@ -489,11 +489,19 @@
   color: var(--ink2);
 }
 
-/* 时长徽记（mono 时间戳气质）——历史回放块无 durationMs 不渲染 */
+/* 时长徽记（mono 时间戳气质）——历史回放块无 durationMs 不渲染；
+   淡入（2026-11-01 收编减噪）：终态化瞬间「· Ns」批量涌现不再瞬切 */
 .think-dur {
   flex: none;
   font-size: 11px;
   color: var(--ink3);
+  animation: think-dur-in 260ms var(--ease);
+}
+
+@keyframes think-dur-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .think-sum {
@@ -519,12 +527,33 @@
 }
 
 /* 展开正文（B 版）：纯缩进挂于头部之下（无线无框——用户裁定去引用线）；
-   限高滚动沿用（长思考不撑爆会话） */
+   限高滚动沿用（长思考不撑爆会话）。
+   高度过渡（2026-11-01 收编减噪）：终答收编瞬间思考卡从 live 默认展开批量切换为终态折叠——
+   原 v-if 硬切让多卡同时塌缩几百像素（「上方大搬家」观感主源）——改 grid-rows 0fr/1fr
+   高度形变 + 淡出 + visibility 延迟隐藏（过渡期间保持可读，结束才摘除可达性） */
 .think-body-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
   margin: 5px 0 0 18px;
-  padding: 0 0 6px;
   max-height: 200px;
   overflow-y: auto;
+  overflow-x: hidden;
+  transition:
+    grid-template-rows 240ms var(--ease),
+    opacity 200ms var(--ease),
+    visibility 240ms;
+}
+
+.think-body-wrap.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  overflow: hidden;
+}
+
+.think-body-clip {
+  min-height: 0;
+  margin: 0 0 6px;
 }
 
 .think-body {
@@ -585,33 +614,7 @@
   }
 }
 
-/* ---- 审批 gate 卡 ---- */
-.gate {
-  background: var(--warning-weak);
-  border: 1px solid rgba(var(--warning-rgb), 0.28);
-  border-radius: 12px;
-  margin: 8px 0 18px 38px;
-  padding: 12px 14px;
-}
-
-.gate-head {
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--warning);
-  margin-bottom: 6px;
-}
-
-.gate-body {
-  font-size: 12.5px;
-  color: var(--ink2);
-  line-height: 1.6;
-  margin-bottom: 10px;
-}
-
-.gate-actions {
-  display: flex;
-  gap: 8px;
-}
+/* ---- 审批 gate 卡已退役（2026-11-01 用户裁定：模态即交互面，流内卡死 UI 且抽流高度） ---- */
 
 /* ---- 通用小件 ---- */
 .chip {

@@ -14,6 +14,7 @@ import { BoxRegistry, BoxesErrorCodes, MockBoxBackend, X11ScreenControl } from '
 import type { BoxBackend, ScreenControl } from '@openbot/boxes'
 import { A2aService, BroadcastService, GroupService } from '@openbot/messaging'
 import { AutoApprovalGate, computerTools, execTool, gated, hostFetchTool, recallMemoryTool, saveMemoryTool, sendMessageTool, sendBroadcastTool, ToolRegistry, TurnRunner, ATTACHMENT_BUDGET_1M, ATTACHMENT_BUDGET_128K, compactSession } from '@openbot/runner'
+import type { TurnRunnerDeps } from '@openbot/runner'
 import type { GuiTakeoverLock, RunStreamEvent } from '@openbot/runner'
 import type { ApprovalGate } from '@openbot/runner'
 import { InProcessTransport } from '@openbot/transport'
@@ -165,6 +166,10 @@ export interface AssembledKernel {
   addAgent(registration: AgentRegistration): Promise<void>
   /** 更新人设（2026-10-18）：档案持久 + 身份元信息热更（提示词即时生效） */
   setPersona(agentId: string, persona: string | null): Promise<AgentProfile>
+  /** 执行预算热更新（2026-11-01 保存即生效）：turn 引擎 deps 突变（新 turn 读新值）+
+   *  调度器策略基线合并（新入队 run 生效）+ 装配 options 源同步（未来注册的 agent 构造
+   *  调度器用新值）。在途 run 一律保持原预算——一个 run 内一致，不回溯 */
+  setRunBudget(budget: { maxToolRounds?: number; deadlineMs?: number }): void
   /** watchdog 手动驱动（测试/确定性冒烟用；生产经 startWatchdog） */
   tick(): void
   /** 启动 watchdog 定时驱动（真实时钟场景） */
@@ -374,7 +379,9 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     nextRunId: () => `compact-${++runCounter}`,
   })
   const compacting = new Set<string>() // sessionKey 防重入（自动触发并发保护）
-  const runner = new TurnRunner({
+  /** turn 引擎依赖（具名持有——setRunBudget 热更新突变 maxToolRounds；TurnRunner 每 turn
+   *  读取 deps 属性，新 run 即用新值，在途 run 因 turn 内已固化不受影响） */
+  const turnDeps: TurnRunnerDeps = {
     bus,
     transcript,
     // 时钟（v0.1.113 顺序修复）：与 transcript envelope at 同源——thinking startedAt 量纲一致
@@ -420,7 +427,8 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     onStream,
     // 群轮转代际过期判定（P5 Step 4 修复）：supersede 后旧轮终答写入前拦截（GroupService 同判兜底）
     isGroupTurnStale: (p) => groups.isStale(p),
-  })
+  }
+  const runner = new TurnRunner(turnDeps)
   executeRef.current = runner.execute
 
   /** 休眠/唤醒门禁（P4 Step 8）：caps.suspendable=false 如实拒绝（协议层兜底——UI 按 caps 不渲染按钮） */
@@ -854,6 +862,16 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
         else delete meta.persona
       }
       return { ...profile }
+    },
+    setRunBudget(budget: { maxToolRounds?: number; deadlineMs?: number }) {
+      if (budget.maxToolRounds !== undefined) {
+        turnDeps.maxToolRounds = budget.maxToolRounds
+        options.maxToolRounds = budget.maxToolRounds // 未来注册 agent 的调度器构造同源
+      }
+      if (budget.deadlineMs !== undefined) {
+        options.runPolicy = { ...options.runPolicy, deadlineMs: budget.deadlineMs } // 同上
+        for (const scheduler of schedulers.values()) scheduler.updatePolicy({ deadlineMs: budget.deadlineMs })
+      }
     },
     tick() {
       for (const scheduler of schedulers.values()) scheduler.tick()
