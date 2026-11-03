@@ -463,7 +463,7 @@ export class TurnRunner {
           }
         }
       }
-      emit({ type: 'open', stream: 'llm', meta: { round: chatRound } })
+      emit({ type: 'open', stream: 'llm', meta: { round: chatRound, startedAt: roundStartedAt } })
       let response: Awaited<ReturnType<ChatProvider['chat']>>
       let thinkingText = '' // 本轮思考聚合（v0.1.48：真思考持久化——落 transcript thinking 记录）
       try {
@@ -683,7 +683,7 @@ export class TurnRunner {
         `（系统提示：工具调用预算 ${maxRounds} 轮已用完，用户选择结束任务，不能再执行任何工具。` +
         `请用一小段话向用户交代：已完成了什么、卡在哪里、建议用户如何继续。不要说抱歉套话，直接说事实。）`,
     })
-    emit({ type: 'open', stream: 'llm', meta: { round: nextChatRound } })
+    emit({ type: 'open', stream: 'llm', meta: { round: nextChatRound, startedAt: this.#deps.now?.() ?? Date.now() } })
     let wrapupText: string
     let wrapupThinking = '' // 收尾轮思考聚合（v0.1.48 同主轮；try 外声明供落盘）
     try {

@@ -643,15 +643,18 @@ describe('TurnRunner A2A 链路（chat → send_message → 对端 turn → box 
 // ---------------------------------------------------------------------------
 
 describe('TurnRunner 流事件（onStream）', () => {
-  /** 归一形状（省 agentId/runId，断言关注序列与载荷） */
-  const shape = (e: RunStreamEvent) => ({
-    type: e.type,
-    stream: e.stream,
-    ...(e.meta ?? {}),
-    ...(e.text !== undefined ? { text: e.text } : {}),
-    ...(e.channel !== undefined ? { channel: e.channel } : {}),
-    ...(e.exitCode !== undefined ? { exitCode: e.exitCode } : {}),
-  })
+  /** 归一形状（省 agentId/runId/startedAt——标识与时刻数据，断言关注序列与载荷） */
+  const shape = (e: RunStreamEvent) => {
+    const { startedAt: _startedAt, ...meta } = e.meta ?? {}
+    return {
+      type: e.type,
+      stream: e.stream,
+      ...meta,
+      ...(e.text !== undefined ? { text: e.text } : {}),
+      ...(e.channel !== undefined ? { channel: e.channel } : {}),
+      ...(e.exitCode !== undefined ? { exitCode: e.exitCode } : {}),
+    }
+  }
 
   it('全序列：llm 轮1(工具调用,零 chunk) → exec open/chunk/end → llm 轮2 增量 → end', async () => {
     const events: RunStreamEvent[] = []

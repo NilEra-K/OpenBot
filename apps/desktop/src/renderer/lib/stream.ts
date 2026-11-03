@@ -34,6 +34,8 @@ export interface RunStreamOpenMeta {
     boxId?: string
     /** llm 流：轮次序号 */
     round?: number
+    /** 流的领域起点时刻（llm=轮开始/exec=命令开始；建块 at 来源——到达时刻在归档竞速下失真） */
+    startedAt?: number
     /** pty 流：会话标识（kind:'pty' 时存在；键入走命令面 shellWrite） */
     shellId?: string
     /** gui 流：所属 Box（kind:'gui' 时存在） */

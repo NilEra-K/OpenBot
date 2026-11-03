@@ -141,6 +141,8 @@ export interface BoxToolDeps {
   onStream?: (event: RunStreamEvent) => void
   /** 过程事实持久（可选注入——exec 完成点聚合落 transcript，重启后对话流可恢复） */
   transcript?: TranscriptStore
+  /** 时钟注入（exec 流 open 的 startedAt 领域时刻——与 transcript/bus 同源；缺席回退 Date.now） */
+  now?: () => number
 }
 
 /** exec：Box 内执行命令（Box 内自由，不过闸）。输出增量经 onStream 实况上报（stdout/stderr 通道）。
@@ -194,7 +196,8 @@ export function execTool(deps: BoxToolDeps): Tool {
         agentId: ctx.agentId,
         runId: ctx.runId,
         stream: 'exec',
-        meta: { command, ...(boxId !== null ? { boxId } : {}) },
+        // startedAt = 命令开始的领域时刻（建块 at 来源——到达时刻在归档竞速下失真）
+        meta: { command, ...(boxId !== null ? { boxId } : {}), startedAt: deps.now?.() ?? Date.now() },
       })
       deps.bus.emit('v1.box.exec', { boxId, runId: ctx.runId, phase: 'started', command })
       try {

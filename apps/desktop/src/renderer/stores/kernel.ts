@@ -390,9 +390,11 @@ function sealBlock(block: LiveStreamBlock): void {
   if (block.think === true && block.durationMs === undefined) block.durationMs = Date.now() - block.at
 }
 
-/** llm 流轮次登记（open meta 携带 round，惰性建块时取——回放判重 loadHistory 按
- *  runId+round 匹配实况块，块缺 round 判重永假：「renderer 刷新而内核还活」同轮思考双卡） */
-const llmRounds = new Map<string, number>()
+/** llm 流 open meta 登记（惰性建块时取）：round——回放判重 loadHistory 按 runId+round
+ *  匹配实况块，块缺 round 判重永假（「renderer 刷新而内核还活」同轮思考双卡）；startedAt
+ *  ——流的领域起点（建块 at 来源，与回放投影同源：到达时刻作 at 在「终答先到+归档落定」
+ *  竞速下晚于终答事件，思考卡被排序甩到终答之后——整卡错位报障） */
+const llmOpenMeta = new Map<string, { round?: number; startedAt?: number }>()
 
 /** 合帧缓冲条目：同块增量聚合（stdout/stderr 分槽） */
 interface PendingChunk {
@@ -1730,10 +1732,15 @@ export const useKernelStore = defineStore('kernel', {
       const key = `${meta.runId}:${meta.stream}:${meta.seq}`
       if (this.streams.some((s) => s.key === key)) return // 防重（重连竞态）
       // llm 流不预开块（v0.1.43）：一个 open 对应 think/text 双通道——首 chunk 按 th 开对应块。
-      // round 先登记（2026-11-02）：惰性建块时取——回放判重（loadHistory thinking 投影）按
-      // runId+round 匹配，块缺 round 则判重永假（renderer 刷新而内核还活 → 同轮思考双卡）
+      // round/startedAt 先登记（2026-11-02）：惰性建块时取（回放判重按 runId+round；at 取领域
+      // 起点防归档竞速下排序错位——见 llmOpenMeta 注释）
       if (meta.stream === 'llm') {
-        if (meta.round !== undefined) llmRounds.set(`${meta.runId}:${meta.seq}`, meta.round)
+        if (meta.round !== undefined || meta.startedAt !== undefined) {
+          llmOpenMeta.set(`${meta.runId}:${meta.seq}`, {
+            ...(meta.round !== undefined ? { round: meta.round } : {}),
+            ...(meta.startedAt !== undefined ? { startedAt: meta.startedAt } : {}),
+          })
+        }
         return
       }
       this.streams.push({
@@ -1748,7 +1755,8 @@ export const useKernelStore = defineStore('kernel', {
         stdout: '',
         stderr: '',
         state: 'live',
-        at: Date.now(),
+        // 领域起点（命令开始时刻）——到达时刻在归档竞速下会晚于终答事件致排序错位
+        at: meta.startedAt ?? Date.now(),
       })
       this.trimStreamsLocal()
     },
@@ -1802,9 +1810,10 @@ export const useKernelStore = defineStore('kernel', {
             (s.think === true) === (opts.think === true),
         )
         if (block === undefined) {
-          const round = llmRounds.get(`${record.runId}:${record.seq}`)
+          const open = llmOpenMeta.get(`${record.runId}:${record.seq}`)
           // 终结 run 的晚到思考卡直接以 end 态落定（过程事实补全，不冒充进行中——
-          // 不转盲文不显「思考中」；durationMs 缺席即头部不显时长，诚实降级）
+          // 不转盲文不显「思考中」）；at = 流的领域起点（open 登记）——归档落定虽晚于
+          // 终答事件，at 仍指回轮开始，排序/收编自然归位（终答上方），durationMs 起点同准
           const finalized = this.finalizedRunIds.includes(record.runId)
           block = {
             key: `${record.runId}:llm${opts.think === true ? ':think' : ':text'}:${Date.now()}`,
@@ -1812,11 +1821,11 @@ export const useKernelStore = defineStore('kernel', {
             runId: record.runId,
             stream: 'llm',
             seq: record.seq,
-            ...(round !== undefined ? { round } : {}),
+            ...(open?.round !== undefined ? { round: open.round } : {}),
             stdout: '',
             stderr: '',
             state: finalized ? 'end' : 'live',
-            at: Date.now(),
+            at: open?.startedAt ?? Date.now(),
             ...(opts.think === true ? { think: true } : {}),
           }
           this.streams.push(block)
@@ -1832,18 +1841,29 @@ export const useKernelStore = defineStore('kernel', {
       else block.stdout += text
     },
 
-    /** 合帧缓冲批量应用（定时批量；end/断线/run 终结前由对应路径强制调用保内容完整） */
-    flushStreamBuffers(): void {
-      if (pendingChunks.size === 0) return
-      const entries = [...pendingChunks.values()]
-      pendingChunks.clear()
-      for (const e of entries) {
+    /**
+     * 缓冲排水核心：skipFinalized=true 时已终结 run 的条目**留在缓冲**——投递节奏与
+     * 生命状态一致（2026-11-02 投递规则补完）：活 run 的增量走全局合帧节拍（实况——
+     * 正在发生）；已终结 run 的增量不跟别人的节拍逐批放行（给结束的过程播放进行中
+     * 的动画=「旧块持续刷新」报障根因），等该流**自己的** end/abort 帧或断线一次性
+     * 落定（归档——历史到达，一步到位）
+     */
+    drainPendingBuffers(skipFinalized: boolean): void {
+      for (const [key, e] of [...pendingChunks]) {
+        if (skipFinalized && this.finalizedRunIds.includes(e.record.runId)) continue
+        pendingChunks.delete(key)
         if (e.stdout !== '') this.applyStreamChunk(e.record, e.stdout, e.think ? { think: true } : {})
         if (e.stderr !== '') this.applyStreamChunk(e.record, e.stderr, { channel: 'stderr' })
       }
     },
 
-    /** 指定 run 的缓冲强制落块（终结路径专用：封存/关块前保证已收内容完整落块） */
+    /** 合帧缓冲批量应用（定时批量）：全局节拍入口——隔离已终结 run 的归档增量 */
+    flushStreamBuffers(): void {
+      this.drainPendingBuffers(true)
+    },
+
+    /** 指定 run 的缓冲强制落块（终结投递时机：end/abort 帧与 run 语义终结共用——
+     *  归档增量在此一次性落定；onStreamEnd 开头调用保证关块内容完整） */
     flushRunPending(runId: string): void {
       for (const [key, e] of [...pendingChunks]) {
         if (e.record.runId !== runId) continue
@@ -1910,7 +1930,9 @@ export const useKernelStore = defineStore('kernel', {
      *  本封存退居呈现语义：让假活态立即消失。置 end 而非 abort：断线不等于失败，已收内容
      *  如实保留（丢尾前缀由 isPreviewDup 让位收尾） */
     onStreamsDisconnected(): void {
-      this.flushStreamBuffers() // 断线前缓冲全量落块（已收内容如实保留）
+      // 断线 = 归档投递时机：缓冲**全量**落定（含已终结 run 的隔离增量——断线后旧流的
+      // end 帧不再补发，此处是它们唯一的落定入口），再全量封存
+      this.drainPendingBuffers(false)
       for (const block of this.streams) {
         if (block.state !== 'live') continue
         sealBlock(block)

@@ -190,6 +190,24 @@ test('chat → A2A → box exec + 审批弹窗（全链路）', async () => {
     await expect(page.locator('.think .think-tag', { hasText: '已思考' }).first()).toBeVisible()
     await expect(page.locator('.task .bt-line', { hasText: '$ ls /work' })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.task .bt-line', { hasText: 'mock: ls /work' })).toBeVisible()
+    // 实况位置锚定（2026-11-02「思考卡挂在终答下方」报障，多轮工具场景）：全部思考卡与
+    // task 卡必须在终答气泡**上方**——块 at 取流领域起点（open meta startedAt），终答事件
+    // 先于流尾部到达的竞速下排序/收编仍归位
+    {
+      const finalBox = await page.locator('.m-text', { hasText: '目录是空的' }).boundingBox()
+      expect(finalBox, '终答气泡坐标').toBeDefined()
+      const thinkYs: number[] = []
+      for (const h of await page.locator('.think').elementHandles()) {
+        const b = await h.boundingBox()
+        if (b !== null) thinkYs.push(b.y)
+      }
+      expect(thinkYs.length, '思考卡在场').toBeGreaterThan(0)
+      for (const y of thinkYs) expect(y, '思考卡应在终答上方').toBeLessThan(finalBox!.y)
+      for (const h of await page.locator('.task').elementHandles()) {
+        const b = await h.boundingBox()
+        if (b !== null) expect(b.y, 'task 卡应在终答上方').toBeLessThan(finalBox!.y)
+      }
+    }
     const screen = page.locator('.ctx-screen')
     await expect(screen.filter({ hasText: '$ ls /work' })).toBeVisible()
     await expect(screen.filter({ hasText: 'mock: ls /work' })).toBeVisible()
@@ -2274,6 +2292,14 @@ test('思考双通道（v0.1.43）：reasoning 流进思考卡、正文流为 li
     await expect(page.locator('.m-text', { hasText: '正文回答：双通道验证通过。' })).toBeVisible({ timeout: 15_000 })
     // 终答到达后正文预览让位（无双份正文——live 预览块被去重删除）
     await expect(page.locator('[data-livemsg]')).toHaveCount(0, { timeout: 5_000 })
+    // 实况位置锚定（2026-11-02「思考卡挂在终答下方」报障）：思考卡必须在终答气泡**上方**
+    // ——终答事件先于流增量到达（ws.send 排队/SSE 直写竞速常态）时，归档落定虽晚于终答，
+    // 块 at 仍取流领域起点（open meta startedAt），排序/收编自然归位（勿以到达时刻作 at）
+    const finalBox = await page.locator('.m-text', { hasText: '正文回答：双通道验证通过。' }).boundingBox()
+    const thinkBox = await page.locator('.think').first().boundingBox()
+    expect(finalBox, '终答气泡坐标').toBeDefined()
+    expect(thinkBox, '思考卡坐标').toBeDefined()
+    expect(thinkBox!.y, '思考卡应在终答上方（at=流领域起点）').toBeLessThan(finalBox!.y)
     // —— /clear 清空回归（2026-10-13 用户报障：思考块残屏）——过程事实（思考卡/exec 卡）
     // 随边界与消息一并移除，屏幕只剩占位文案（transcript 留证不受影响） ——
     await page.locator('.composer-box input').fill('/clear')

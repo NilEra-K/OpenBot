@@ -314,7 +314,7 @@ export function assembleKernel(options: AssembleOptions = {}): AssembledKernel {
     schedulers.get(event.agentId)?.touch(event.runId)
   }
   const tools = new ToolRegistry()
-    .register(execTool({ backend, bus, onStream, transcript }))
+    .register(execTool({ backend, bus, onStream, transcript, now }))
     .register(sendMessageTool(messaging))
     .register(sendBroadcastTool(broadcast))
     .register(gated(hostFetchTool(), { gate }))

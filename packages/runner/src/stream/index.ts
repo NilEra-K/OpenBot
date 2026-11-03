@@ -13,8 +13,11 @@ export interface RunStreamEvent {
   agentId: string
   runId: string
   stream: RunStreamKind
-  /** open 附带：exec 为命令与所属 Box；llm 为本轮 chat 序号（1 起） */
-  meta?: { command?: string[]; round?: number; boxId?: string }
+  /** open 附带：exec 为命令与所属 Box；llm 为本轮 chat 序号（1 起）；startedAt = 流的
+   *  领域起点时刻（2026-11-02：llm=轮开始 roundStartedAt、exec=命令开始——渲染端建块
+   *  的 at 来源，与回放投影同源；到达时刻作 at 会在「终答先到+归档落定」竞速下晚于
+   *  终答事件，思考卡被排序甩到终答之后——整卡错位报障） */
+  meta?: { command?: string[]; round?: number; boxId?: string; startedAt?: number }
   /** chunk 的文本增量 */
   text?: string
   /** llm chunk 的流类（v0.1.43 双通道）：think=思考增量（onThinking）/ text=正文增量（缺省

@@ -34,13 +34,14 @@ describe('流实况：合帧缓冲与 run 语义终结', () => {
     expect(k.streams.find((s) => s.think === true)?.stdout).toBe('增量')
   })
 
-  it('llm 轮次登记：open 携带 round → 惰性建块带 round（回放判重前提——刷新而内核还活不双卡）', () => {
+  it('llm open meta 登记：round + startedAt（回放判重前提与建块领域起点）', () => {
     const k = useKernelStore()
-    k.onStreamOpen({ agentId: 'a1', runId: 'r0', stream: 'llm', seq: 1, round: 3 })
+    k.onStreamOpen({ agentId: 'a1', runId: 'r0', stream: 'llm', seq: 1, round: 3, startedAt: 1_000 })
     k.onStreamChunk({ agentId: 'a1', runId: 'r0', stream: 'llm', seq: 1 }, { t: '想', th: true })
     k.flushStreamBuffers()
     const block = k.streams.find((s) => s.think === true)
     expect(block?.round).toBe(3)
+    expect(block?.at).toBe(1_000) // 领域起点（非到达时刻）
     // 回放判重命中（loadHistory thinking 投影按 runId+round 匹配实况块）
     expect(k.streams.some((s) => s.runId === 'r0' && s.stream === 'llm' && (s.round ?? undefined) === 3)).toBe(true)
   })
@@ -65,6 +66,18 @@ describe('流实况：合帧缓冲与 run 语义终结', () => {
     expect(block?.state).toBe('end')
     expect(block?.stdout).toBe('思考')
     expect(k.streams.every((s) => s.state === 'end')).toBe(true)
+  })
+
+  it('断线 = 归档投递时机：隔离中的已终结 run 增量全量落定（end 帧不再补发的唯一兜底）', () => {
+    const k = useKernelStore()
+    k.onEvent({ type: 'v1.message.agent', seq: 1, at: 1000, payload: { messageId: 'm1', agentId: 'a1', text: '终答', runId: 'r9' } as never })
+    k.onStreamChunk({ agentId: 'a1', runId: 'r9', stream: 'llm', seq: 1 }, { t: '隔离中的归档增量', th: true })
+    k.flushStreamBuffers()
+    expect(k.streams.filter((s) => s.runId === 'r9')).toHaveLength(0) // 隔离中
+    k.onStreamsDisconnected() // 断线：end 帧不会再来——全量落定
+    const think = k.streams.find((s) => s.runId === 'r9' && s.think === true)
+    expect(think?.stdout).toBe('隔离中的归档增量')
+    expect(think?.state).toBe('end')
   })
 
   it('封存后新轮 chunk 不再续写旧块（拼接根因断绝，v0.1.121 语义保持）', () => {
@@ -125,7 +138,7 @@ describe('流实况：合帧缓冲与 run 语义终结', () => {
     expect(() => k.onStreamsDisconnected()).not.toThrow()
   })
 
-  it('终答事件：思考块就地封存 + 正文块移除 + 晚到正文丢弃、晚到思考归档补全（不冒充进行中）', () => {
+  it('终答事件：思考块就地封存 + 正文块移除 + 晚到正文丢弃、晚到思考隔离归档（end 帧一次性落定）', () => {
     const k = useKernelStore()
     const at = Date.now() - 3_000
     k.streams.push(
@@ -140,25 +153,34 @@ describe('流实况：合帧缓冲与 run 语义终结', () => {
     expect(think?.state).toBe('end')
     expect(think?.stdout).toBe('已收思考') // 封存保留已收内容
     expect(think?.durationMs).not.toBeUndefined()
-    // 晚到正文碎片丢弃（v0.1.122：内容已由终答承载）；晚到思考归档续写 end 块（内容补全）
+    // 晚到正文碎片丢弃（v0.1.122：内容已由终答承载）；晚到思考入缓冲但被归档隔离——
+    // 全局节拍（他 run 活动/定时 flush）不冲刷：死块不做流式慢放重演（「旧块刷新」根因）
     k.onStreamChunk({ agentId: 'a1', runId: 'run-x', stream: 'llm', seq: 4 }, { t: '图片？' })
     k.onStreamChunk({ agentId: 'a1', runId: 'run-x', stream: 'llm', seq: 4 }, { t: '事后思考', th: true })
+    k.onStreamChunk({ agentId: 'a1', runId: 'run-other', stream: 'llm', seq: 1 }, { t: '别的活 run 在流式' })
     k.flushStreamBuffers()
     expect(k.streams.filter((s) => s.runId === 'run-x' && s.think !== true)).toHaveLength(0)
+    expect(k.streams.find((s) => s.runId === 'run-x' && s.think === true)?.stdout).toBe('已收思考') // 隔离：不落块
+    expect(k.streams.find((s) => s.runId === 'run-other')?.stdout).toBe('别的活 run 在流式') // 活 run 照常
+    // 该流 end 帧到达 = 归档投递时机：一次性落定（内容补全、不冒充进行中）
+    k.onStreamEnd({ agentId: 'a1', runId: 'run-x', stream: 'llm', seq: 4 })
     expect(k.streams.find((s) => s.runId === 'run-x' && s.think === true)?.stdout).toBe('已收思考事后思考')
     expect(k.streams.find((s) => s.runId === 'run-x' && s.think === true)?.state).toBe('end') // 补全不复活 live
   })
 
-  it('终答先于全部流增量到达（E2E 实证竞速）：晚到思考以 end 态落定——过程事实补全、实况期可见', () => {
+  it('终答先于全部流增量到达（E2E 实证竞速）：晚到思考隔离缓冲、end 帧整卡一次性落定', () => {
     const k = useKernelStore()
     k.onEvent({ type: 'v1.message.agent', seq: 1, at: 1000, payload: { messageId: 'm1', agentId: 'a1', text: '终答', runId: 'run-z' } as never })
-    k.onStreamOpen({ agentId: 'a1', runId: 'run-z', stream: 'llm', seq: 1, round: 1 })
+    k.onStreamOpen({ agentId: 'a1', runId: 'run-z', stream: 'llm', seq: 1, round: 1, startedAt: 400 })
     k.onStreamChunk({ agentId: 'a1', runId: 'run-z', stream: 'llm', seq: 1 }, { t: '整段思考都在终答后到达', th: true })
     k.flushStreamBuffers()
+    expect(k.streams.filter((s) => s.runId === 'run-z')).toHaveLength(0) // 隔离：不逐条落块
+    k.onStreamEnd({ agentId: 'a1', runId: 'run-z', stream: 'llm', seq: 1 })
     const think = k.streams.find((s) => s.runId === 'run-z' && s.think === true)
     expect(think).toBeDefined() // 不丢弃——丢弃会让整轮思考在实况期不可见
-    expect(think?.state).toBe('end') // 直接以完成态落定（不转盲文不显「思考中」）
+    expect(think?.state).toBe('end') // 一次性以完成态落定（不转盲文不显「思考中」）
     expect(think?.stdout).toBe('整段思考都在终答后到达')
+    expect(think?.at).toBe(400) // at = 流领域起点：早于终答事件（at=1000）——排序归位（思考在终答上方）
     // 正文增量仍丢弃（碎片气泡防线）
     k.onStreamChunk({ agentId: 'a1', runId: 'run-z', stream: 'llm', seq: 1 }, { t: '正文余波' })
     k.flushStreamBuffers()
@@ -202,10 +224,15 @@ describe('流实况：合帧缓冲与 run 语义终结', () => {
     k.onEvent({ type: 'v1.lifecycle.finished', seq: 2, at: 2000, payload: { runId: 'run-f', agentId: 'a1', state: 'failed', attempts: 1 } as never })
     expect(k.finalizedRunIds).toContain('run-f')
     expect(k.streams.filter((s) => s.runId === 'run-f').every((s) => s.state === 'end')).toBe(true)
-    // 失败轮正文留存为「最后事实」（封存≠删除）；晚到 exec 增量归档续写 end 块（内容补全）
+    // 失败轮正文留存为「最后事实」（封存≠删除；failed 无终答不记 answered——晚到正文续写）；
+    // 晚到 llm/exec 增量隔离归档，等各自流 end 帧一次性落定
     k.onStreamChunk({ agentId: 'a1', runId: 'run-f', stream: 'llm', seq: 1 }, { t: '余波' })
     k.onStreamChunk({ agentId: 'a1', runId: 'run-f', stream: 'exec', seq: 1 }, { t: '慢放输出' })
     k.flushStreamBuffers()
+    expect(k.streams.find((s) => s.runId === 'run-f' && s.think !== true)?.stdout).toBe('失败前的交代') // 隔离：不落块
+    expect(k.streams.find((s) => s.runId === 'run-f' && s.stream === 'exec')?.stdout).toBe('out')
+    k.onStreamEnd({ agentId: 'a1', runId: 'run-f', stream: 'llm', seq: 1 })
+    k.onStreamEnd({ agentId: 'a1', runId: 'run-f', stream: 'exec', seq: 1 })
     expect(k.streams.find((s) => s.runId === 'run-f' && s.think !== true)?.stdout).toBe('失败前的交代余波')
     expect(k.streams.find((s) => s.runId === 'run-f' && s.stream === 'exec')?.stdout).toBe('out慢放输出')
     expect(k.streams.filter((s) => s.runId === 'run-f').every((s) => s.state === 'end')).toBe(true) // 补全不复活 live

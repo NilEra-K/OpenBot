@@ -262,12 +262,14 @@ type UnitPart = { kind: 'think'; block: LiveStreamBlock } | { kind: 'exec'; inde
 interface StreamUnit {
   key: string
   at: number
-  kind: 'divider' | 'msg-user' | 'msg-remote' | 'relay' | 'agent' | 'pending' | 'ended' | 'note'
+  kind: 'divider' | 'msg-user' | 'msg-remote' | 'relay' | 'agent' | 'pending' | 'ended' | 'note' | 'live-msg' | 'progress'
   /** msg-user / msg-remote / relay / agent（最终消息；块组与进行中单元无） */
   msgIndex?: number
   parts: UnitPart[]
   /** note（compact 注记）：系统行文案 */
   noteText?: string
+  /** live-msg：正文预览块 */
+  block?: LiveStreamBlock
 }
 
 /** 组成部分的发生时间（flush/进行中单元的排序值） */
@@ -360,16 +362,33 @@ const streamUnits = computed<StreamUnit[]>(() => {
       // compact 注记：独立系统行（不进 pendingParts——不属任何轮）
       units.push({ key: row.key, at: row.at, kind: 'note', parts: [], noteText: kernel.sessionNotes.find((n) => `note-${n.at}` === row.key)?.text ?? '' })
     } else if (row.kind === 'live-msg') {
-      // 正文 live 预览：独立单元以 agent 气泡形态流式呈现。v0.1.113 收编改版：不再 flush
-      // 过程块（多轮工具场景每轮拆一个「署名+思考」空气泡——用户报障拆散观感）；终答行
-      // 到达时统一收编移除（见 msg-agent 分支）；无终答的 run（预算/失败/中止）保留为最后事实
+      // 过程块就地归位（2026-11-02 实况错位修复）：正文预览上屏前，已累积的过程块
+      // （思考/exec）按其时间位置 flush 成块组单元（progress——无署名/状态行，纯卡容器）。
+      // 此前过程块唯一显示出口是「末尾残余」push 到 units 末尾——实况中全部思考/exec 卡
+      // 沉在所有正文预览之下（「流式输出在思考上面」报障，v0.1.113 起就存在；终答到达后
+      // 统一收编才归位，故终态断言恒绿）。终答收编语义不变（收编移除 live-msg + 残余
+      // pendingParts 归终答单元——v0.1.113 拆散观感的修复保持：progress 组无署名无气泡）
+      if (pendingParts.length > 0) {
+        units.push({ key: `f-${row.key}`, at: partAt(pendingParts.at(-1)!), kind: 'progress', parts: pendingParts })
+        pendingParts = []
+      }
       units.push({ key: row.key, at: row.at, kind: 'live-msg', block: row.block!, parts: [] })
       liveBodySeen = true // 正文实况在场：空 pending 的 typing 让位（双 m-text 报障修复保持）
     } else if (row.kind === 'msg-agent') {
       // agent 终答：收编本轮全部正文实况（多轮中间叙述/断线前缀预览——过程由思考卡承载，
-      // 一次回复一个气泡；v0.1.43 起原为内容判据逐块让位，中间轮残留+flush 拆散是双气泡根因）
-      for (let k = units.length - 1; k >= 0; k--) if (units[k].kind === 'live-msg') units.splice(k, 1)
-      units.push({ key: row.key, at: row.at, kind: 'agent', msgIndex: row.msgIndex, parts: pendingParts })
+      // 一次回复一个气泡；v0.1.43 起原为内容判据逐块让位，中间轮残留+flush 拆散是双气泡根因）。
+      // 2026-11-02：实况期就地 flush 的 progress 块组一并合并回收——终态与回放投影形态
+      // 完全一致（思考/exec 聚合在终答单元 parts；刷新前后不变形）
+      const collected: UnitPart[] = []
+      for (let k = units.length - 1; k >= 0; k--) {
+        const u = units[k]!
+        if (u.kind === 'live-msg') units.splice(k, 1)
+        else if (u.kind === 'progress') {
+          collected.unshift(...u.parts)
+          units.splice(k, 1)
+        }
+      }
+      units.push({ key: row.key, at: row.at, kind: 'agent', msgIndex: row.msgIndex, parts: [...collected, ...pendingParts] })
       pendingParts = []
     } else if (row.kind === 'msg-user') {
       // user 消息前 flush 残余块（上一轮无最终消息也不能丢事实），新一轮重新累积
@@ -1543,6 +1562,16 @@ const send = async (): Promise<void> => {
   const text = ui.draft.trim()
   const atts = pendingAtts.value.length > 0 ? pendingAtts.value.map((a) => a.meta) : undefined
   if ((text === '' && atts === undefined) || sending.value) return
+  // 裸命令兜底拦截（2026-11-02）：联想菜单是常路径（Enter=选菜单项），但 fill/粘贴与
+  // 菜单打开存在竞速、Esc 关闭后回车等场景菜单不在场——命令文本会作为普通消息发给
+  // agent（真机间歇实证：/clear 发出去 → mock 耗尽 failed + 清空从未发生）。
+  // /clear /compact /resume 永不进消息流；/quote 与 # 前缀需要参数/随消息走，不拦
+  if (text === '/clear' || text === '/compact' || text === '/resume') {
+    ui.draft = ''
+    const cmd = text === '/clear' ? doSlashClear : text === '/compact' ? doSlashCompact : doSlashResume
+    void cmd().catch((err: unknown) => toast.push(String(err), 'danger'))
+    return
+  }
   // 输入历史入桶（敲字时所在的对话对象——广播/@跳转等跨对象发送也归此处，↑ 翻「我在这个
   // 对话框敲过的」；回车即记录，终端语义）。空文本不入（附件占位场景）
   if (text !== '') pushHistory(localStorage, histKeyOf(), text)
@@ -1874,10 +1903,11 @@ const GROUP_ICON =
               </div>
             </div>
 
-            <!-- agent 聚合单元（含进行中/纯块组）：m-name 之下——思考块（可折叠）与 task 卡，最终文本（或三个点占位）收尾 -->
+            <!-- agent 聚合单元（含进行中/纯块组）：m-name 之下——思考块（可折叠）与 task 卡，最终文本（或三个点占位）收尾。
+                 progress 块组（2026-11-02 实况归位）：正文预览之间的过程卡容器——无署名/状态行 -->
             <div v-else class="m">
               <div class="m-body">
-                <div class="m-meta">
+                <div v-if="unit.kind !== 'progress'" class="m-meta">
                   <span class="m-name" :style="{ color: kernel.colorOf(ui.activeAgentId) }">
                     {{ activeAgent?.name ?? ui.activeAgentId }}
                   </span>
