@@ -3,3 +3,9 @@ dist/
 *.tsbuildinfo
 test-results/
 release/
+
+# 本地文件不入库（规则强制）
+design-unlimited-badge.html
+# .ai 仅文档入库，会话二进制产物（审计截图/b64）保持本地
+.ai/**/*.png
+.ai/**/*.b64
