@@ -8,7 +8,7 @@
 - **架构单一事实源**：[ARCHITECTURE.md](ARCHITECTURE.md)（v1.4）——架构疑问先查它，冲突时以它为准；修改架构须经用户确认并同步更新该文档。
 - **视觉母版**：`prototype.html`（五视图高保真原型，P2 Vue 重建的底稿）。
 - **平台地雷**：[docs/platforms.md](docs/platforms.md)——实现 WSL2/Docker 相关功能前必须对照。
-- 当前阶段：桌面应用已演进至 P9（多载体沙箱：WSL/Docker/podman/宿主屏/Windows/Android），版本 v0.1.79（2026-10-18）——群聊身份体系（persona）+ 发言模式体系（#讨论/#汇总/#点名）刚落地；近期重心为真实使用反馈打磨（会话列表、群聊语义、输入体验）。
+- 当前阶段：桌面应用 v0.2.0（2026-11-09）——P9 多载体沙箱（WSL/Docker/podman/宿主屏/Windows/Android）+ 容器运行时一键安装真机验收闭账（Podman v6 MSI 装链 / DD 启动链 / 引擎看门狗，见 docs/acceptance.md）；群聊 persona + 发言模式体系（#讨论/#汇总/#点名）已落地；近期重心为真实使用反馈打磨（会话列表、群聊语义、输入体验）。
 
 ## 语言与角色
 
