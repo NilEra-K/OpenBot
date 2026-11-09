@@ -15,12 +15,18 @@ process.on('uncaughtException', (err) => {
   console.error('[openbot] uncaughtException:', err)
 })
 
-// AppUserModelID（2026-11-02 系统通知实装）：Windows 的 toast 通知必须绑定 AUMID——
-// 未设置时系统静默吞掉 Electron 通知（show 不报错、通知中心无痕——真机报障实证）。
-// 开发/打包统一固定 appId（com.openbot.desktop）——开发态的显示名/图标经注册表 AUMID
-// 元数据注册（HKCU AppUserModelId 键：DisplayName/IconUri——Windows 官方 toast 身份机制），
-// 打包态由安装器自带正确身份。mac/linux 无此概念，设置是无害幂等
-app.setAppUserModelId('com.openbot.desktop')
+// AppUserModelID（2026-11-02 系统通知实装；2026-11-03 任务栏图标回归定稿）：Windows 的
+// toast 通知必须绑定 AUMID——未设置时系统静默吞掉 Electron 通知（show 不报错、通知中心
+// 无痕——真机报障实证）。**仅打包态设置**：AUMID 一旦设置，任务栏按钮改走「AUMID 快捷方式
+// → Relaunch 属性 → exe 图标」解析链，窗口 icon（WM_SETICON）被绕过——开发态（electron.exe）
+// 无快捷方式可解析，任务栏/Alt+Tab 恒回退 electron.exe 的 Electron 图标（v0.1.125 给开发态
+// 引入 AUMID 后的回归根因，setAppDetails/清图标缓存/重启 explorer 三轮真机验证均不治——
+// 开发态无快捷方式是结构性缺口，绕不开）。开发态不设 AUMID 则任务栏走 WM_SETICON 路径
+// 显示窗口 icon（v0.1.124 前长期实证正常）。取舍记档：开发态系统通知退化为 v0.1.125 前
+// 行为（可能被系统吞）——systemNotify 缺省关，通知验收以打包态为准。打包态身份由 NSIS
+// 安装器快捷方式（electron-builder appId 同值）自带。mac/linux 无此概念。
+const AUMID = 'com.openbot.desktop'
+if (app.isPackaged) app.setAppUserModelId(AUMID)
 
 // 装配配置（E2E 用）：隔离 userData 到临时目录——测试数据绝不写进用户真实数据区
 const e2eUserData = process.env.OPENBOT_USER_DATA
@@ -34,7 +40,14 @@ const APP_ROOT = join(HERE, '..', '..') // apps/desktop
 const REPO_ROOT = join(APP_ROOT, '..', '..') // 仓库根
 const PROTOTYPE = join(REPO_ROOT, 'prototype.html') // Step 7 起替换为 renderer 产物
 const PRELOAD = join(APP_ROOT, 'dist', 'preload', 'index.cjs') // sandbox 下 preload 必须是 CJS（.cts 编译产物）
-const ICON = join(APP_ROOT, 'resources', 'icons', 'icon.png') // 图标集中维护（resources/icons/——src/ 为源套图，ico 由 scripts/make-ico.mjs 生成）
+const ICON = join(APP_ROOT, 'resources', 'icons', 'icon.png') // 托盘/非 win 窗口（Electron 自读——asar 虚拟路径可用）
+// win32 窗口/任务栏图标：打包态必须是 asar 外真实路径——setAppDetails 的 Relaunch 图标层
+// 由 explorer 读取，系统进程读不了 asar 虚拟路径会静默失效；extraResources 外置目录见
+// electron-builder.yml（dev 态源文件本就是真实路径）
+const ICON_ICO = app.isPackaged
+  ? join(process.resourcesPath, 'icons', 'icon.ico')
+  : join(APP_ROOT, 'resources', 'icons', 'icon.ico')
+const WIN_ICON = process.platform === 'win32' ? ICON_ICO : ICON // 窗口图标源：win 用 ico，其他平台 png
 console.log('[openbot] 路径就绪：APP_ROOT =', APP_ROOT, '；PRELOAD 存在性待装配时验证')
 
 let win: BrowserWindow | null = null
@@ -58,10 +71,19 @@ function createWindow(): void {
     backgroundColor: '#17181c',
     autoHideMenuBar: true,
     title: 'OpenBot',
-    icon: ICON, // 开发态任务栏/窗口图标（2026-10-14 接线；打包产物走 exe 资源——electron-builder icon）
+    icon: nativeImage.createFromPath(WIN_ICON), // 窗口图标（打包产物另有 exe 资源——electron-builder icon）；win 用多尺寸 ico
     frame: false, // 去掉原生标题栏——原型的 titlebar 即唯一 chrome（窗口控制经 preload 桥回真实操作）
     webPreferences: { sandbox: true, contextIsolation: true, preload: PRELOAD },
   })
+  // 任务栏按钮图标加固（仅打包态，win32）：设了 AUMID 的窗口任务栏走「快捷方式 →
+  // Relaunch 属性 → exe 图标」解析链，此层把 Relaunch 图标钉到 ico——portable 版
+  // （无安装器快捷方式）与正常机器由此兜底。真机实证记档：本机 explorer 对 AUMID 解析链
+  // 整体不采用（Electron 43 的 setAppDetails 也静默失效——窗口属性实测 RelaunchIcon 空），
+  // 但该层无害且对正常机器有效，保留。开发态不设 AUMID 也不设此层——设了反而给窗口
+  // 引入 AUMID（任务栏回归 Electron 图标）
+  if (app.isPackaged && process.platform === 'win32') {
+    win.setAppDetails({ appId: AUMID, appIconPath: ICON_ICO, appIconIndex: 0 })
+  }
   // 产品形态：托盘常驻——关窗只是驻留，退出走托盘菜单
   win.on('close', (e) => {
     if (!quitting) {
@@ -75,6 +97,18 @@ function createWindow(): void {
   win.webContents.on('before-input-event', (_e, input) => {
     if (input.type !== 'keyDown') return
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) toggleDevTools()
+  })
+  // DevTools 独立窗口图标（F12 detach 模式）：Electron 内建窗口从不带 icon——不补则
+  // 任务栏/Alt+Tab/窗口体恒为 electron 图标；非 detach 模式无独立窗口，反查为空即跳过。
+  // setIcon（WM_SETICON）开发态直接生效；打包态再补 setAppDetails（AUMID 链加固）
+  win.webContents.on('devtools-opened', () => {
+    const dwc = win?.webContents.devToolsWebContents
+    const devWin = dwc ? BrowserWindow.fromWebContents(dwc) : null
+    if (!devWin) return
+    devWin.setIcon(WIN_ICON)
+    if (app.isPackaged && process.platform === 'win32') {
+      devWin.setAppDetails({ appId: AUMID, appIconPath: ICON_ICO, appIconIndex: 0 })
+    }
   })
   // renderer 日志合并到主进程输出（桌面冒烟/报障定位——console-message 只在 verbose 级别以下也可用）
   win.webContents.on('console-message', (_e, _level, message) => {

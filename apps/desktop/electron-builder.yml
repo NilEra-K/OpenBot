@@ -14,6 +14,15 @@ files:
   - dist/**
   - resources/**
   - '!resources/icons/src/**'
+# 图标外置 asar（2026-11-03 任务栏图标修复）：setAppDetails 的 appIconPath 由 explorer
+# 读取（Relaunch 图标层）——asar 是 Electron 虚拟格式，系统进程读不了包内路径会静默失效；
+# extraResources 落到安装目录 resources/icons/icon.ico（asar 外真实文件），运行时经
+# process.resourcesPath 解析（src/main/index.ts 图标路径分流）
+extraResources:
+  - from: resources/icons/icon.ico
+    to: icons/icon.ico
+    filter:
+      - '**/*'
 win:
   target:
     - nsis
