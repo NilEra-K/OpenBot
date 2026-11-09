@@ -81,6 +81,20 @@ export async function resolveCli(
   return null
 }
 
+/** podman machine 在场预检（v0.1.130 vmnotfound 根治——B 层前置校验）：machine list 可解析
+ *  且为空 → 缺 machine（start 必败：上游 vmnotfound 原文直出，不如稳定码先行拒绝）；
+ *  通道异常（exit 非 0/输出不可解析）返回 false 不拦截——让 start 命令如实揭示真实原因（不过度代判） */
+async function podmanMachineMissing(run: ProcRunner, cli: string): Promise<boolean> {
+  try {
+    const r = await run({ command: [cli, 'machine', 'list', '--format', 'json'], timeoutMs: 10_000 })
+    if (r.exitCode !== 0) return false
+    const machines = parseMachineList(r.stdout)
+    return machines !== null && machines.length === 0
+  } catch {
+    return false
+  }
+}
+
 /** CLI 路径 → DD 安装根：官方布局 docker.exe 在 <root>\resources\bin\ —— bin 上两级即 root */
 export function deriveDesktopRoot(cliExePath: string): string {
   return resolve(dirname(cliExePath), '..', '..')
@@ -310,6 +324,12 @@ export async function runLaunch(
       const cli = await resolveCli(deps.run, launch.cli, launch.defaultCliPaths ?? [], exists)
       if (cli === null) {
         throw new Error(`RUNTIME_LAUNCH_FAILED：未找到 ${launch.cli} CLI——请确认已安装`)
+      }
+      // B 层前置校验（v0.1.130）：podman machine start 前确证 machine 在场（win/mac podman 同判据）
+      // ——行状态有「需初始化」分流但只挡 UI 入口，本层拦住一切调用面（模态/未来 CLI）；
+      // 错误带 init 指引（稳定码，文案归渲染层可再映射——detail 直出终端指引是可执行事实）
+      if (launch.readyCheck === 'podman-machine' && (await podmanMachineMissing(deps.run, cli))) {
+        throw new Error('RUNTIME_LAUNCH_MACHINE_MISSING：尚无 podman machine——请先在终端执行「podman machine init」初始化后再启动')
       }
       const label = `${cli} ${launch.startArgs.join(' ')}`
       const polkit = launch.elevation === 'polkit'

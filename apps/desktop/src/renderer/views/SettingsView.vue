@@ -1289,11 +1289,30 @@ const doLaunchRuntime = async (inst: typeof kernel.runtimeInstallers[number]): P
   }
 }
 
+/** done 模态的新鲜态查找（v0.1.130 vmnotfound 修复）：installModal.installer 是开模态时捕获的
+ *  旧对象（装前 absent 无 note）——按 id 从活探测列表取新态（装后已刷新）；列表缺席回退捕获对象（防御） */
+const freshInstaller = (): typeof kernel.runtimeInstallers[number] | null => {
+  const target = installModal.installer
+  if (target === null) return null
+  return kernel.runtimeInstallers.find((i) => i.id === target.id) ?? target
+}
+
+/** done 模态 machine-missing 分流（与行状态同源门——「需初始化」不给启动钮）：
+ *  全新安装 podman 无 machine 时 start 必败（vmnotfound），行状态有分流而模态曾漏（v0.1.129 真机实证） */
+const doneMachineMissing = computed(
+  () => installModal.stage === 'done' && freshInstaller()?.note === 'machine-missing',
+)
+
 /** done 模态「立即启动」（2026-10-27 启动引导）：免提权关模态转行内启动态；
  *  polkit 提权（v0.1.90）模态原位转启动确认段（提权告知先行） */
 const doLaunchFromDone = async (): Promise<void> => {
   const target = installModal.installer
   if (target === null) return
+  // 兜底同判（防列表刷新滞后竞速——按钮门之外的执行前最后一道）
+  if (freshInstaller()?.note === 'machine-missing') {
+    toast.push('尚无 podman machine——请先在终端执行 podman machine init 初始化，再回来启动', 'info')
+    return
+  }
   if (target.launchElevation === 'polkit') {
     installModal.stage = 'launchConfirm'
     return
@@ -1807,7 +1826,9 @@ const wslRelevant = computed(
             <!-- 阶段三：结果（完成/失败/取消——取消是用户主权不误报失败） -->
             <div v-else class="am-body">
               <p v-if="installModal.stage === 'done'" class="am-line am-ok">
-                {{ installModal.installer.launchSupported ? '✓ 安装完成——点「立即启动」即可就绪。' : '✓ 安装完成——状态已即时更新；用作沙箱后端需重启应用生效。' }}
+                {{ doneMachineMissing
+                  ? '✓ 安装完成——尚无 podman machine，需先在终端执行 podman machine init 初始化（状态已如实标注「需初始化」）。'
+                  : installModal.installer.launchSupported ? '✓ 安装完成——点「立即启动」即可就绪。' : '✓ 安装完成——状态已即时更新；用作沙箱后端需重启应用生效。' }}
               </p>
               <p v-else-if="installModal.stage === 'canceled'" class="am-line">已取消——未做任何更改（临时文件已清理）。</p>
               <p v-else class="am-line">✗ 安装失败：{{ installProgress?.detail ?? '未知原因' }}</p>
@@ -1817,8 +1838,10 @@ const wslRelevant = computed(
               <!-- launchConfirm 主钮（v0.1.90 linux docker——polkit 确认后执行，行转「启动中…」） -->
               <button v-if="installModal.stage === 'launchConfirm'" type="button" class="btn btn-primary" @click="doLaunchConfirmed">开始启动</button>
               <!-- done + 声明启动策略（2026-10-27 启动引导）：立即启动主钮——装完即启，
-                   DD 默认位解析免重启应用（行转「启动中…」行内态） -->
-              <button v-if="installModal.stage === 'done' && installModal.installer.launchSupported" type="button" class="btn btn-primary" @click="doLaunchFromDone">立即启动</button>
+                   DD 默认位解析免重启应用（行转「启动中…」行内态）。
+                   v0.1.130 machine-missing 分流：无 machine 不给启动钮（vmnotfound 根治——与行状态同源门） -->
+              <button v-if="installModal.stage === 'done' && installModal.installer.launchSupported && !doneMachineMissing" type="button" class="btn btn-primary" @click="doLaunchFromDone">立即启动</button>
+              <span v-else-if="doneMachineMissing" class="chip">需初始化</span>
               <!-- installing 双钮（2026-10-20 用户报障）：后台下载（关模态任务继续——行上
                    「安装中…」可点重开）+ 取消（流量敏感客户随时中止）。
                    2026-10-27 同一模态可回看启动实况——launch 相位下措辞如实切换 -->

@@ -10,8 +10,9 @@
  * - Box 数据目录 = OpenBot 自建 Box 发行版 VHDX 落盘哪（沙箱面行级 ⚙，与本表无关）
  * 只声明上游真实支持的旗标（不放假能力）；缺席 = 如实不可选。
  */
-/** 尾部 test 槽位：单测自造策略的类型出路（非注册表成员） */
-export type RuntimeId = 'wsl2' | 'docker-desktop' | 'podman' | 'docker' | 'colima' | 'mock-runtime' | 'test'
+/** 尾部 test 槽位：单测自造策略的类型出路（非注册表成员）；mock-runtime-mm = E2E 专用
+ *  machine-missing 形态（v0.1.130 vmnotfound 修复的 mock 对称演员——装完 installed + 无 machine） */
+export type RuntimeId = 'wsl2' | 'docker-desktop' | 'podman' | 'docker' | 'colima' | 'mock-runtime' | 'mock-runtime-mm' | 'test'
 
 export type InstallerSource =
   /** 内置系统组件（WSL2）——零下载，提权执行系统命令；env 供 mock 策略（ELECTRON_RUN_AS_NODE） */
@@ -257,6 +258,24 @@ export function mockStrategies(enabled: boolean): RuntimeStrategy[] {
       launch: { kind: 'mock' },
       locationNote: '安装位置可自选（E2E 演示链）；容器数据位置不可选',
       notes: ['仅 E2E 环境注册'],
+    },
+    {
+      // machine-missing 形态（v0.1.130 vmnotfound 修复）：装完 installed + 尚无 machine——
+      // done 模态/行状态均应分流「需初始化」（不给启动钮）；台账语义见 kernel.ts mm 分支
+      id: 'mock-runtime-mm',
+      // 显示名避开「Mock 运行时」前缀——既有 E2E 以该子串选行，严格模式不容两行命中
+      runtime: 'Mock MM（E2E）',
+      platform: process.platform,
+      source: {
+        kind: 'builtin',
+        command: [process.execPath, '-e', 'setTimeout(()=>process.exit(0),3000)'],
+        args: [],
+        env: { ELECTRON_RUN_AS_NODE: '1' },
+      },
+      elevation: 'none',
+      launch: { kind: 'mock' },
+      locationNote: 'E2E machine-missing 演示（无位置输入面）',
+      notes: ['仅 E2E 环境注册（vmnotfound 修复用例）'],
     },
   ]
 }

@@ -987,9 +987,12 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
   const runtimeLaunchBusy = new Set<string>()
   const runtimeLaunchAborts = new Map<string, AbortController>()
   /** mock-runtime 生命周期台账（E2E 对称，2026-10-27）：装完即 installed / launch ready 即 running
-   *  ——模拟 DD 完整生命周期；在事件回调内同步置位（早于渲染层刷新拉取，免竞态读到旧态） */
+   *  ——模拟 DD 完整生命周期；在事件回调内同步置位（早于渲染层刷新拉取，免竞态读到旧态）。
+   *  mock-runtime-mm（v0.1.130 vmnotfound 用例）：装完 installed + 恒 stopped + machine-missing
+   *  note——podman 全新安装形态的 mock 对称（done 模态/行状态的「需初始化」分流断言源） */
   let mockRuntimeInstalled = false
   let mockRuntimeEngineRunning = false
+  let mockRuntimeMmInstalled = false
   /** 引擎看门狗（2026-10-27 v0.1.90）：选定后端 docker/podman 时周期探测——外部掉线/恢复
    *  经 v1.runtime.engine 跃迁通知；随应用退出 stop（孤儿定时器不留） */
   let engineWatchdog: EngineWatchdogHandle | null = null
@@ -1805,6 +1808,11 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
             if (st.id === 'mock-runtime') {
               installState = mockRuntimeInstalled ? 'installed' : 'absent'
               engineState = mockRuntimeEngineRunning ? 'running' : 'stopped'
+            } else if (st.id === 'mock-runtime-mm') {
+              // v0.1.130：装完 installed + 恒 stopped + machine-missing（无 machine 的 start 必败形态）
+              installState = mockRuntimeMmInstalled ? 'installed' : 'absent'
+              engineState = 'stopped'
+              if (mockRuntimeMmInstalled) note = 'machine-missing'
             } else if (st.id === 'wsl2') {
               const p = probeOf('wsl')
               ;({ installState, engineState } = p)
@@ -1882,6 +1890,7 @@ export async function assembleDesktop(): Promise<DesktopKernel> {
             onEvent: (ev) => {
               // mock 台账在 done 事件回调内同步置位（早于渲染层刷新拉取——免竞态读到旧态）
               if (ev.phase === 'done' && strategy.id === 'mock-runtime') mockRuntimeInstalled = true
+              if (ev.phase === 'done' && strategy.id === 'mock-runtime-mm') mockRuntimeMmInstalled = true
               kernel.bus.emit('v1.runtime.progress', { runtimeId: strategy.id, ...ev })
             },
           }, {

@@ -445,6 +445,27 @@ describe('启动器（v0.1.89：路径解析 + 拉起 + 就绪轮询）', () => 
     ).rejects.toThrow(/RUNTIME_LAUNCH_FAILED.*VM does not exist/)
   })
 
+  it('runLaunch cli 前置校验（v0.1.130）：machine list 可解析且为空（全新安装）→ RUNTIME_LAUNCH_MACHINE_MISSING 先行拒绝（init 指引）——不走 start', async () => {
+    const pod = STRATEGIES.find((s) => s.platform === 'win32' && s.id === 'podman')!
+    // start 若被走到会以 vmnotfound 失败——正则不匹配即证明预检拦截在前（v0.1.129 真机实证形态）
+    await expect(
+      runLaunch(
+        pod,
+        { onEvent: () => {} },
+        {
+          run: reply({
+            'podman --version': R({ stdout: 'podman version 6.1.4' }),
+            'podman machine list --format json': R({ stdout: '[]' }),
+            'podman machine start': R({ exitCode: 125, stderr: 'vmnotfound: no VM found' }),
+          }),
+          exists: () => false,
+          pollIntervalMs: 10,
+          pollTimeoutMs: 200,
+        },
+      ),
+    ).rejects.toThrow(/RUNTIME_LAUNCH_MACHINE_MISSING.*podman machine init/)
+  })
+
   it('runLaunch cli（mac colima）：PATH 缺席走 brew 双位回退 → colima start → colima status 就绪', async () => {
     const colima = STRATEGIES.find((s) => s.platform === 'darwin' && s.id === 'colima')!
     const ok = await runLaunch(

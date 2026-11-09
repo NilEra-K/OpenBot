@@ -2860,6 +2860,51 @@ test('运行时状态分层与启动引导（v0.1.89）：mock-runtime 全生命
   }
 })
 
+test('done 模态 machine-missing 分流（v0.1.130）：mock-runtime-mm 装完无 machine——「立即启动」不现（需初始化 chip + init 指引），行状态同源', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'openbot-e2e-runtime-mm-'))
+  const app = await _electron.launch({
+    args: ['.'],
+    env: { ...process.env, OPENBOT_USER_DATA: userData, OPENBOT_SANDBOX: 'mock', OPENBOT_E2E: '1' },
+  })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+
+  try {
+    await expect(page.locator('.app')).toHaveAttribute('data-connected', 'true', { timeout: 30_000 })
+
+    // 设置 → 容器与镜像：Mock MM 行在场（E2E 门控注册；初始 absent 一键安装）
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.settings-nav-item', { hasText: '容器与镜像' }).click()
+    const row = page.locator('.rt-row', { hasText: 'Mock MM' })
+    await expect(row).toBeVisible()
+    await expect(row.getByRole('button', { name: '一键安装' })).toBeVisible()
+
+    // 一键安装（mm 无位置旗标——确认模态无目录输入直接开始）
+    await row.getByRole('button', { name: '一键安装' }).click()
+    const modal = page.locator('.approval-modal')
+    await expect(modal).toBeVisible()
+    await expect(modal.locator('#rtInstallDir')).toHaveCount(0)
+    await modal.getByRole('button', { name: '开始安装' }).click()
+    await expect(modal).toContainText('安装完成', { timeout: 15_000 })
+
+    // 分流断言（v0.1.129 真机 vmnotfound 的根治）：done 模态不现「立即启动」，
+    // 代之「需初始化」chip + init 指引文案（与行状态同源门）
+    await expect(modal.getByRole('button', { name: '立即启动' })).toHaveCount(0)
+    await expect(modal.locator('.chip', { hasText: '需初始化' })).toBeVisible()
+    await expect(modal).toContainText('podman machine init')
+    await modal.getByRole('button', { name: '关闭' }).click()
+    await expect(modal).toHaveCount(0)
+
+    // 行状态同源：installed + machine-missing → 「需初始化」chip（启动钮/一键安装均不在场）
+    await expect(row.locator('.chip', { hasText: '需初始化' })).toBeVisible({ timeout: 10_000 })
+    await expect(row.getByRole('button', { name: '启动', exact: true })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: '一键安装' })).toHaveCount(0)
+  } finally {
+    await app.close()
+    await rm(userData, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
 test('图片附件（v0.1.102 一期）：视觉模型 → 选择上传 → 待发条缩略图 → 全链发送 → mock 断言 image_url data URI 在场', async () => {
   const mock = await startMockOpenAi([
     { match: (l) => l.role === 'user' && l.content.includes('看看这张'), text: '看到了：图片已收到' },
